@@ -121,6 +121,11 @@ type TCAssignment struct {
 	SourceMAC      MACAddress
 	Path           uint8
 	SourceMACValid uint8
+	// SourceUID is bpf_get_socket_uid(skb) at assignment time, independent
+	// of process_tracker. See native/tc.bpf.c's sb_tc_assign_value.uid
+	// comment: a fallback for package_name-class route rules only, not a
+	// replacement for process_tracker's PID.
+	SourceUID uint32
 }
 
 type tcRuntime struct {

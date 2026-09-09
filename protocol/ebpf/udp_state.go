@@ -52,6 +52,7 @@ type udpClientState struct {
 	access          sync.RWMutex
 	sourceMAC       net.HardwareAddr
 	socketCookie    uint64
+	fallbackUID     uint32
 	bindings        map[netip.AddrPort]udpRedirectBinding
 	replyAliasCount uint16
 	closed          bool
@@ -88,6 +89,7 @@ func (t *udpClientTable) loadOrCreate(client netip.AddrPort) *udpClientState {
 		shard.clients = make(map[netip.AddrPort]*udpClientState)
 	}
 	state := &udpClientState{
+		fallbackUID:     noFallbackUID,
 		bindings:        make(map[netip.AddrPort]udpRedirectBinding),
 		cgroupOriginals: make(map[netip.Addr]commonEBPF.OriginalDestination),
 	}
@@ -211,6 +213,7 @@ func (t *udpClientTable) setDirectBinding(
 	destination netip.AddrPort,
 	sourceMAC net.HardwareAddr,
 	socketCookie uint64,
+	fallbackUID uint32,
 ) {
 	state := t.loadOrCreate(client)
 	state.access.Lock()
@@ -219,6 +222,7 @@ func (t *udpClientTable) setDirectBinding(
 		state.sourceMAC = append(state.sourceMAC[:0], sourceMAC...)
 	}
 	state.socketCookie = socketCookie
+	state.fallbackUID = fallbackUID
 	state.bindings[destination] = udpRedirectBinding{}
 }
 
@@ -556,4 +560,13 @@ func (s *udpClientState) processSocketCookie() uint64 {
 	s.access.RLock()
 	defer s.access.RUnlock()
 	return s.socketCookie
+}
+
+// processFallbackUID returns the TC-observed UID for this client's socket,
+// or noFallbackUID if none was recorded (e.g. the cgroup data plane path,
+// which does not carry one yet). See lookupProcessInfo.
+func (s *udpClientState) processFallbackUID() uint32 {
+	s.access.RLock()
+	defer s.access.RUnlock()
+	return s.fallbackUID
 }

@@ -51,7 +51,7 @@ func (i *Inbound) NewConnection(
 		metadata.InboundType = i.Type()
 		metadata.Source = M.SocksaddrFromNet(conn.RemoteAddr())
 		metadata.Destination = M.SocksaddrFromNetIP(original.Destination)
-		metadata.ProcessInfo = i.lookupProcessInfo(original.SocketCookie)
+		metadata.ProcessInfo = i.lookupProcessInfo(original.SocketCookie, noFallbackUID)
 		i.router.RouteConnectionEx(ctx, conn, metadata, onClose)
 		return
 	}
@@ -123,7 +123,7 @@ func (i *Inbound) NewPacketConnectionEx(
 	}
 	if clientState, loaded := i.udpClientTable.load(source.AddrPort()); loaded {
 		metadata.SourceMACAddress = clientState.sourceMACAddress()
-		metadata.ProcessInfo = i.lookupProcessInfo(clientState.processSocketCookie())
+		metadata.ProcessInfo = i.lookupProcessInfo(clientState.processSocketCookie(), clientState.processFallbackUID())
 		if binding, found := clientState.redirectBinding(destination.AddrPort()); found {
 			metadata.UDPConnect = binding.connected
 		}

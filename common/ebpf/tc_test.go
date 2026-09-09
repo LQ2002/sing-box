@@ -36,6 +36,9 @@ func TestTCABI(t *testing.T) {
 	if offset := unsafe.Offsetof(TCAssignment{}.InterfaceIndex); offset != 8 {
 		t.Fatalf("unexpected TC assignment interface index offset: %d", offset)
 	}
+	if offset := unsafe.Offsetof(TCAssignment{}.SourceUID); offset != 20 {
+		t.Fatalf("unexpected TC assignment source UID offset: %d", offset)
+	}
 }
 
 func TestTCIPv6PathFlags(t *testing.T) {

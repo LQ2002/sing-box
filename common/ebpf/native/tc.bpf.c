@@ -138,6 +138,18 @@ struct sb_tc_assign_value {
     __u8 source_mac[6];
     __u8 path;
     __u8 source_mac_valid;
+    // uid is bpf_get_socket_uid(skb) at assignment time, independent of
+    // whether process_tracker's cgroup hooks or tp_btf fallback attached or
+    // recorded anything for this socket. It fills what was previously 4
+    // bytes of trailing padding (the struct was already 8-byte aligned for
+    // socket_cookie), so this does not change sizeof(sb_tc_assign_value).
+    // See lookupProcessInfo in protocol/ebpf/tc_connection.go: it is a
+    // fallback for package_name-class route rules only (they resolve from
+    // UID alone, see common/process/searcher.go's completeProcessInfo), not
+    // a replacement for process_tracker's PID, which process_name/
+    // process_path rules still need and which is the only way to
+    // disambiguate apps that share a UID (e.g. android:sharedUserId).
+    __u32 uid;
 };
 
 _Static_assert(sizeof(struct sb_tc_control) == 72, "sb_tc_control ABI size");
@@ -153,6 +165,8 @@ _Static_assert(sizeof(struct sb_tc_assign_key) == 44, "sb_tc_assign_key ABI size
 _Static_assert(sizeof(struct sb_tc_assign_value) == 24, "sb_tc_assign_value ABI size");
 _Static_assert(__builtin_offsetof(struct sb_tc_assign_value, socket_cookie) == 0,
     "sb_tc_assign_value socket_cookie ABI offset");
+_Static_assert(__builtin_offsetof(struct sb_tc_assign_value, uid) == 20,
+    "sb_tc_assign_value uid ABI offset");
 
 struct ethernet_header {
     __u8 destination[6];
@@ -644,6 +658,7 @@ NOINLINE int assign_socket(struct __sk_buff *skb, const struct sb_tc_control *co
         .ifindex = skb->ifindex,
         .path = path,
         .source_mac_valid = source_mac_valid,
+        .uid = get_socket_uid(skb),
     };
     __builtin_memcpy(value.source_mac, source_mac, 6U);
     bool assignment_changed = existing == 0 || existing->socket_cookie != value.socket_cookie ||
@@ -680,6 +695,7 @@ NOINLINE int assign_socket_legacy(struct __sk_buff *skb, const struct sb_tc_cont
         .ifindex = skb->ifindex,
         .path = path,
         .source_mac_valid = source_mac_valid,
+        .uid = get_socket_uid(skb),
     };
     __builtin_memcpy(value.source_mac, source_mac, 6U);
     bool assignment_changed = existing == 0 || existing->socket_cookie != value.socket_cookie ||
@@ -713,6 +729,7 @@ NOINLINE int assign_udp_socket(struct __sk_buff *skb, const struct sb_tc_control
         .ifindex = skb->ifindex,
         .path = path,
         .source_mac_valid = source_mac_valid,
+        .uid = get_socket_uid(skb),
     };
     __builtin_memcpy(value.source_mac, source_mac, 6U);
     bool assignment_changed = existing == 0 || existing->socket_cookie != value.socket_cookie ||

@@ -42,7 +42,7 @@ func (i *Inbound) newTCConnection(
 	metadata.InboundType = i.Type()
 	metadata.Source = M.SocksaddrFromNetIP(source)
 	metadata.Destination = M.SocksaddrFromNetIP(destination)
-	metadata.ProcessInfo = i.lookupProcessInfo(assignment.SocketCookie)
+	metadata.ProcessInfo = i.lookupProcessInfo(assignment.SocketCookie, assignment.SourceUID)
 	if assignment.Path == commonEBPF.TCPathShared && assignment.SourceMACValid != 0 {
 		metadata.SourceMACAddress = net.HardwareAddr(assignment.SourceMAC[:])
 	}
@@ -78,24 +78,47 @@ func (i *Inbound) newTCPacket(
 	if assignment.Path == commonEBPF.TCPathShared && assignment.SourceMACValid != 0 {
 		sourceMAC = net.HardwareAddr(assignment.SourceMAC[:])
 	}
-	i.udpClientTable.setDirectBinding(client, destination, sourceMAC, assignment.SocketCookie)
+	i.udpClientTable.setDirectBinding(client, destination, sourceMAC, assignment.SocketCookie, assignment.SourceUID)
 	i.udpNat.NewPacket([][]byte{buffer.Bytes()}, source, M.SocksaddrFromNetIP(destination), nil)
 }
 
-func (i *Inbound) lookupProcessInfo(socketCookie uint64) *adapter.ConnectionOwner {
-	if socketCookie == 0 || i.processTracker == nil {
-		return nil
-	}
-	owner, err := i.processTracker.LookupOwner(socketCookie)
-	if err != nil {
+// noFallbackUID marks a lookupProcessInfo call with no TC-observed UID to
+// fall back to (the cgroup data plane does not carry one yet -- see
+// common/ebpf/native/tc.bpf.c's sb_tc_assign_value.uid comment). 0 is a
+// real, meaningful UID (root), so it cannot double as this sentinel.
+const noFallbackUID = ^uint32(0)
+
+// lookupProcessInfo resolves the process owning socketCookie. When
+// process_tracker has no PID for it (unavailable, or missed -- see the
+// tp_btf fallback's documented miss rate in common/ebpf/process_tracker_tpbtf.go),
+// fallbackUID (bpf_get_socket_uid(skb) observed independently at TC
+// assignment time, see TCAssignment.SourceUID) still resolves
+// package_name-class route rules: they only ever need the UID (see
+// completeProcessInfo in common/process/searcher.go), not the PID this
+// fallback is missing. It cannot resolve process_name/process_path (no PID
+// to read /proc/PID/exe from), and it cannot disambiguate apps that share a
+// UID (e.g. android:sharedUserId) -- process_tracker's PID is the only
+// source for both of those. Pass noFallbackUID when the caller has none.
+func (i *Inbound) lookupProcessInfo(socketCookie uint64, fallbackUID uint32) *adapter.ConnectionOwner {
+	if socketCookie != 0 && i.processTracker != nil {
+		owner, err := i.processTracker.LookupOwner(socketCookie)
+		if err == nil {
+			processInfo, pathErr := process.FindProcessInfoByPID(
+				owner.ProcessID,
+				owner.UserID,
+				i.networkManager.PackageManager(),
+			)
+			if pathErr != nil {
+				i.logger.Trace("resolve eBPF socket process path: ", pathErr)
+			}
+			return processInfo
+		}
 		i.logger.Trace("lookup eBPF socket process owner: ", err)
+	}
+	if fallbackUID == noFallbackUID {
 		return nil
 	}
-	processInfo, pathErr := process.FindProcessInfoByPID(
-		owner.ProcessID,
-		owner.UserID,
-		i.networkManager.PackageManager(),
-	)
+	processInfo, pathErr := process.FindProcessInfoByPID(0, fallbackUID, i.networkManager.PackageManager())
 	if pathErr != nil {
 		i.logger.Trace("resolve eBPF socket process path: ", pathErr)
 	}

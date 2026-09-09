@@ -16,7 +16,7 @@ func TestUDPDirectBinding(t *testing.T) {
 	client := netip.MustParseAddrPort("192.0.2.10:53000")
 	destination := netip.MustParseAddrPort("1.1.1.1:53")
 	sourceMAC := net.HardwareAddr{0x02, 0, 0, 0, 0, 1}
-	table.setDirectBinding(client, destination, sourceMAC, 42)
+	table.setDirectBinding(client, destination, sourceMAC, 42, 10086)
 	state, loaded := table.load(client)
 	if !loaded {
 		t.Fatal("client state was not created")
@@ -147,7 +147,7 @@ func TestUDPDirectReplyBindingChecksGeneration(t *testing.T) {
 	client := netip.MustParseAddrPort("192.0.2.10:53000")
 	base := netip.MustParseAddrPort("1.1.1.1:53")
 	reply := netip.MustParseAddrPort("8.8.8.8:53")
-	table.setDirectBinding(client, base, nil, 0)
+	table.setDirectBinding(client, base, nil, 0, noFallbackUID)
 	state, _ := table.load(client)
 	if !table.setDirectReplyBinding(client, state, reply) {
 		t.Fatal("reply binding was not installed")
