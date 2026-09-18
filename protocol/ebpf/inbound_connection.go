@@ -51,7 +51,7 @@ func (i *Inbound) NewConnection(
 		metadata.InboundType = i.Type()
 		metadata.Source = M.SocksaddrFromNet(conn.RemoteAddr())
 		metadata.Destination = M.SocksaddrFromNetIP(original.Destination)
-		metadata.ProcessInfo = i.lookupProcessInfo(original.SocketCookie)
+		metadata.ProcessInfo = i.lookupProcessInfo(ctx, original.SocketCookie)
 		i.router.RouteConnectionEx(ctx, conn, metadata, onClose)
 		return
 	}
@@ -149,7 +149,7 @@ func (i *Inbound) NewPacketConnectionEx(
 	key, keyLoaded := udpSessionKeyFromContext(ctx)
 	if clientState, loaded := i.udpClientTable.load(key); keyLoaded && loaded {
 		metadata.SourceMACAddress = clientState.sourceMACAddress()
-		metadata.ProcessInfo = i.lookupProcessInfo(clientState.processSocketCookie())
+		metadata.ProcessInfo = i.lookupProcessInfo(ctx, clientState.processSocketCookie())
 		if binding, found := clientState.redirectBinding(destination.AddrPort()); found {
 			metadata.UDPConnect = binding.connected
 		}
