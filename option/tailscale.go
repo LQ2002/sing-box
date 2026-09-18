@@ -37,6 +37,7 @@ type TailscaleEndpointOptions struct {
 	SSHServer                  *TailscaleSSHServerOptions `json:"ssh_server,omitempty"`
 	TaildropDirectory          string                     `json:"taildrop_directory,omitempty"`
 	OnDemand                   bool                       `json:"on_demand,omitempty"`
+	KeepDirectPeers            badoption.Listable[string] `json:"keep_direct_peers,omitempty"`
 }
 
 func (o *TailscaleEndpointOptions) TakeInnerDomainResolverOptions() *DomainResolveOptions {
