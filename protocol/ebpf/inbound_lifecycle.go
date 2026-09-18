@@ -348,13 +348,25 @@ func (i *Inbound) startProcessTracker() error {
 	})
 	if err != nil {
 		if tracker != nil {
-			i.processTrackerRollback = tracker
+			i.processTrackerRollback = cgroupSocketOwnerSource{tracker}
 			return E.Cause(err, "rollback partial eBPF process tracker")
 		}
-		i.logger.Debug("eBPF cgroup process tracking unavailable; using userspace process search: ", err)
+		// 软失败：内核里没有留下半挂载的资源，可以安全地换一个归属来源。
+		// 部分厂商内核（已确认的有小米的 GKI 构建）禁止挂载 cgroup/sock 钩子，
+		// 此时唯一可行的来源是外部内核模块，见 socket_owner.go。
+		fallback, fallbackErr := attachSocketOwnerFallback(err)
+		if fallback != nil {
+			// cgroup 的失败原因必须一并记下：只看最终用了哪个来源，看不出
+			// cgroup 为什么没挂上，而那恰恰是排查的起点——"内核禁止挂载"和
+			// "进程所在 cgroup 里有其他进程"是完全不同的结论。
+			i.logger.Debug("eBPF cgroup process tracking unavailable; using ", fallback.TrackingMode(), ": ", err)
+			i.processTracker = fallback
+			return nil
+		}
+		i.logger.Debug("eBPF socket owner tracking unavailable; using userspace process search: ", fallbackErr)
 		return nil
 	}
-	i.processTracker = tracker
+	i.processTracker = cgroupSocketOwnerSource{tracker}
 	return nil
 }
 
@@ -366,10 +378,8 @@ func (i *Inbound) processTrackingMode() string {
 		return "off"
 	}
 	if i.processTracker != nil {
-		if i.processTracker.ReleaseCleanup() {
-			return "cgroup_socket_release"
-		}
-		return "cgroup_socket_lru"
+		// 来源自己报告模式，调用方不再硬编码某一种实现的名字。
+		return i.processTracker.TrackingMode()
 	}
 	return "userspace"
 }
