@@ -45,11 +45,11 @@ type retryProcessTrackerOwner struct {
 	attempts int
 }
 
-func (t *retryProcessTrackerOwner) LookupOwner(uint64) (commonEBPF.ProcessSocketOwner, error) {
-	return commonEBPF.ProcessSocketOwner{}, nil
+func (t *retryProcessTrackerOwner) LookupSocketOwner(uint64) (SocketOwner, error) {
+	return SocketOwner{}, nil
 }
 
-func (t *retryProcessTrackerOwner) ReleaseCleanup() bool { return false }
+func (t *retryProcessTrackerOwner) TrackingMode() string { return "test" }
 func (t *retryProcessTrackerOwner) IsClosed() bool       { return t.closed }
 func (t *retryProcessTrackerOwner) Close() error {
 	t.attempts++

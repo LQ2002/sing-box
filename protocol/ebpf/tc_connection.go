@@ -12,7 +12,6 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/listener"
-	"github.com/sagernet/sing-box/common/process"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/control"
@@ -44,7 +43,7 @@ func (i *Inbound) newTCConnection(
 	metadata.InboundType = i.Type()
 	metadata.Source = M.SocksaddrFromNetIP(source)
 	metadata.Destination = M.SocksaddrFromNetIP(destination)
-	metadata.ProcessInfo = i.lookupProcessInfo(assignment.SocketCookie)
+	metadata.ProcessInfo = i.lookupProcessInfo(ctx, assignment.SocketCookie)
 	if assignment.Path == commonEBPF.TCPathShared && assignment.SourceMACValid != 0 {
 		metadata.SourceMACAddress = net.HardwareAddr(assignment.SourceMAC[:])
 	}
@@ -100,27 +99,26 @@ func (i *Inbound) newTCPacket(
 	return false
 }
 
-func (i *Inbound) lookupProcessInfo(socketCookie uint64) *adapter.ConnectionOwner {
+// lookupProcessInfo 把 socket cookie 解析成路由规则可用的归属信息。
+//
+// 这里不走上游的 i.processInfoCache，解析改由 socket_owner_resolve.go 承担，
+// 原因有两条，都在那个文件里有详述：
+//
+//   - 上游的缓存键是 (PID, UID)。PID 会回绕复用，只有把创建者进程的
+//     start_boottime 一起纳入键才能唯一确定一个进程实例；内核模块来源正好能
+//     提供这个字段。
+//   - 上游最终调用 process.FindProcessInfoByPID()，它按 UID 无条件填一整组
+//     共享 UID 的包名，在 Android 上会让 package_name 规则误匹配到守护进程。
+func (i *Inbound) lookupProcessInfo(ctx context.Context, socketCookie uint64) *adapter.ConnectionOwner {
 	if socketCookie == 0 || i.processTracker == nil {
 		return nil
 	}
-	owner, err := i.processTracker.LookupOwner(socketCookie)
+	owner, err := i.processTracker.LookupSocketOwner(socketCookie)
 	if err != nil {
 		i.logger.Trace("lookup eBPF socket process owner: ", err)
 		return nil
 	}
-	cacheKey := processInfoCacheKey{processID: owner.ProcessID, userID: owner.UserID}
-	processInfo, pathErr, resolved := i.processInfoCache.loadOrResolve(cacheKey, func() (*adapter.ConnectionOwner, error) {
-		return process.FindProcessInfoByPID(
-			owner.ProcessID,
-			owner.UserID,
-			i.networkManager.PackageManager(),
-		)
-	})
-	if resolved && pathErr != nil {
-		i.logger.Trace("resolve eBPF socket process path: ", pathErr)
-	}
-	return processInfo
+	return i.resolveSocketOwner(ctx, owner)
 }
 
 func (i *Inbound) prepareTCPacketConnection(
