@@ -1,0 +1,6 @@
+id=sb_sockowner_probe
+name=sb_sockowner_probe
+version=v1-PLACEHOLDER
+versionCode=1
+author=local
+description=socket cookie 到进程归属的诊断模块，供 sing-box eBPF 数据面查询。仅在内核版本与构建时一致时加载。

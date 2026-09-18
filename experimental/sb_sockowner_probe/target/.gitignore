@@ -1,0 +1,22 @@
+# 本目录只保存"证据"和可复现的说明，大体积产物一律不入库。
+# 所有被忽略的东西都能从真机 boot 镜像或网络重新取得，见上级目录 README.md。
+
+# 从 boot 镜像解出的内核载荷与 BTF（合计约 55 MB）
+boot-analysis/kernel.bin
+boot-analysis/vmlinux.btf
+boot-analysis/embedded.config
+vmlinux.btf
+!boot-analysis/report.json
+!boot-analysis/btf-summary.json
+
+# 由 refresh-kernel-abi.py 从上面那份镜像生成的权威符号表。
+# 刻意不入库：它绑定某一个内核构建，OTA 后即失效，留着只会诱使别人用陈旧的版本。
+Module.symvers.device
+
+# 内核源码树与下载的 CI 包
+common-6.12.69/
+common-6.12.69-out/
+mi17-source/
+ci-artifact/
+ci-central/
+ipset-release/
