@@ -1,0 +1,146 @@
+{
+  "type_count": 168388,
+  "selected_types": [
+    {
+      "id": 257,
+      "name": "module",
+      "kind": 4,
+      "size_or_type": 1600,
+      "selected_members": []
+    },
+    {
+      "id": 433,
+      "name": "task_struct",
+      "kind": 4,
+      "size_or_type": 5184,
+      "selected_members": [
+        {
+          "name": "pid",
+          "type_id": 985,
+          "bit_offset": 14400
+        },
+        {
+          "name": "tgid",
+          "type_id": 985,
+          "bit_offset": 14432
+        },
+        {
+          "name": "group_leader",
+          "type_id": 429,
+          "bit_offset": 14912
+        },
+        {
+          "name": "start_time",
+          "type_id": 82,
+          "bit_offset": 16832
+        },
+        {
+          "name": "start_boottime",
+          "type_id": 82,
+          "bit_offset": 16896
+        }
+      ]
+    },
+    {
+      "id": 2884,
+      "name": "sock",
+      "kind": 4,
+      "size_or_type": 840,
+      "selected_members": [
+        {
+          "name": "__sk_common",
+          "type_id": 2895,
+          "bit_offset": 0
+        },
+        {
+          "name": "sk_kern_sock",
+          "type_id": 74,
+          "bit_offset": 4497
+        }
+      ]
+    },
+    {
+      "id": 2957,
+      "name": "socket",
+      "kind": 4,
+      "size_or_type": 128,
+      "selected_members": []
+    },
+    {
+      "id": 30345,
+      "name": "module",
+      "kind": 4,
+      "size_or_type": 1600,
+      "selected_members": []
+    },
+    {
+      "id": 30428,
+      "name": "task_struct",
+      "kind": 4,
+      "size_or_type": 5184,
+      "selected_members": [
+        {
+          "name": "pid",
+          "type_id": 985,
+          "bit_offset": 14400
+        },
+        {
+          "name": "tgid",
+          "type_id": 985,
+          "bit_offset": 14432
+        },
+        {
+          "name": "group_leader",
+          "type_id": 30429,
+          "bit_offset": 14912
+        },
+        {
+          "name": "start_time",
+          "type_id": 82,
+          "bit_offset": 16832
+        },
+        {
+          "name": "start_boottime",
+          "type_id": 82,
+          "bit_offset": 16896
+        }
+      ]
+    },
+    {
+      "id": 140947,
+      "name": "proc_remove",
+      "kind": 12,
+      "size_or_type": 140776
+    },
+    {
+      "id": 152161,
+      "name": "sock_diag_save_cookie",
+      "kind": 12,
+      "size_or_type": 152160
+    },
+    {
+      "id": 153773,
+      "name": "synchronize_rcu",
+      "kind": 12,
+      "size_or_type": 29
+    },
+    {
+      "id": 153778,
+      "name": "synchronize_srcu",
+      "kind": 12,
+      "size_or_type": 99305
+    },
+    {
+      "id": 158715,
+      "name": "tracepoint_probe_register",
+      "kind": 12,
+      "size_or_type": 91639
+    },
+    {
+      "id": 158719,
+      "name": "tracepoint_probe_unregister",
+      "kind": 12,
+      "size_or_type": 91639
+    }
+  ]
+}

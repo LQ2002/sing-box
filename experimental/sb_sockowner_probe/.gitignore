@@ -1,0 +1,21 @@
+# 内核外部模块的构建产物。
+# 注意 .mod / .mod.c 必须锚定到本目录根部：不加前导斜杠的 *.mod 会把
+# cookietest/go.mod 一起误伤。
+*.o
+*.ko
+/*.mod
+/*.mod.c
+.*.cmd
+modules.order
+Module.symvers
+
+# 由 refresh-kernel-abi.py 从真机 BTF 生成，随内核而变，不入库
+layout_probe.c
+sbo_bitfields.h
+
+# 交叉编译出的测试二进制
+cookietest/sbo-cookietest
+stresstest/sbo-stresstest
+
+# pack.sh 的产物
+sb_sockowner_probe-magisk.zip
