@@ -1,5 +1,5 @@
 {
-  "type_count": 168388,
+  "type_count": 168480,
   "selected_types": [
     {
       "id": 257,
@@ -9,19 +9,19 @@
       "selected_members": []
     },
     {
-      "id": 433,
+      "id": 435,
       "name": "task_struct",
       "kind": 4,
       "size_or_type": 5184,
       "selected_members": [
         {
           "name": "pid",
-          "type_id": 985,
+          "type_id": 987,
           "bit_offset": 14400
         },
         {
           "name": "tgid",
-          "type_id": 985,
+          "type_id": 987,
           "bit_offset": 14432
         },
         {
@@ -42,14 +42,14 @@
       ]
     },
     {
-      "id": 2884,
+      "id": 2886,
       "name": "sock",
       "kind": 4,
       "size_or_type": 840,
       "selected_members": [
         {
           "name": "__sk_common",
-          "type_id": 2895,
+          "type_id": 2897,
           "bit_offset": 0
         },
         {
@@ -60,38 +60,38 @@
       ]
     },
     {
-      "id": 2957,
+      "id": 2959,
       "name": "socket",
       "kind": 4,
       "size_or_type": 128,
       "selected_members": []
     },
     {
-      "id": 30345,
+      "id": 30355,
       "name": "module",
       "kind": 4,
       "size_or_type": 1600,
       "selected_members": []
     },
     {
-      "id": 30428,
+      "id": 30438,
       "name": "task_struct",
       "kind": 4,
       "size_or_type": 5184,
       "selected_members": [
         {
           "name": "pid",
-          "type_id": 985,
+          "type_id": 987,
           "bit_offset": 14400
         },
         {
           "name": "tgid",
-          "type_id": 985,
+          "type_id": 987,
           "bit_offset": 14432
         },
         {
           "name": "group_leader",
-          "type_id": 30429,
+          "type_id": 30439,
           "bit_offset": 14912
         },
         {
@@ -107,40 +107,40 @@
       ]
     },
     {
-      "id": 140947,
+      "id": 141032,
       "name": "proc_remove",
       "kind": 12,
-      "size_or_type": 140776
+      "size_or_type": 140861
     },
     {
-      "id": 152161,
+      "id": 152253,
       "name": "sock_diag_save_cookie",
       "kind": 12,
-      "size_or_type": 152160
+      "size_or_type": 152252
     },
     {
-      "id": 153773,
+      "id": 153864,
       "name": "synchronize_rcu",
       "kind": 12,
       "size_or_type": 29
     },
     {
-      "id": 153778,
+      "id": 153869,
       "name": "synchronize_srcu",
       "kind": 12,
-      "size_or_type": 99305
+      "size_or_type": 99394
     },
     {
-      "id": 158715,
+      "id": 158807,
       "name": "tracepoint_probe_register",
       "kind": 12,
-      "size_or_type": 91639
+      "size_or_type": 91724
     },
     {
-      "id": 158719,
+      "id": 158811,
       "name": "tracepoint_probe_unregister",
       "kind": 12,
-      "size_or_type": 91639
+      "size_or_type": 91724
     }
   ]
 }
