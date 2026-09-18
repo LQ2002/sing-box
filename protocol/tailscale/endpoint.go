@@ -43,11 +43,13 @@ import (
 	_ "github.com/sagernet/tailscale/feature/relayserver"
 	"github.com/sagernet/tailscale/ipn"
 	"github.com/sagernet/tailscale/ipn/ipnlocal"
+	"github.com/sagernet/tailscale/ipn/ipnstate"
 	tsDNS "github.com/sagernet/tailscale/net/dns"
 	"github.com/sagernet/tailscale/net/tsaddr"
 	tsTUN "github.com/sagernet/tailscale/net/tstun"
 	"github.com/sagernet/tailscale/tailcfg"
 	"github.com/sagernet/tailscale/tsnet"
+	"github.com/sagernet/tailscale/types/key"
 	"github.com/sagernet/tailscale/version"
 	"github.com/sagernet/tailscale/wgengine"
 	"github.com/sagernet/tailscale/wgengine/router"
@@ -107,6 +109,7 @@ type Endpoint struct {
 	advertiseTags              []string
 	relayServerPort            *uint16
 	relayServerStaticEndpoints []netip.AddrPort
+	keepDirectPeers            []string
 
 	sshServerInstance *tailssh.Server
 	sshServerOptions  *option.TailscaleSSHServerOptions
@@ -238,6 +241,7 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 		advertiseTags:              options.AdvertiseTags,
 		relayServerPort:            options.RelayServerPort,
 		relayServerStaticEndpoints: options.RelayServerStaticEndpoints,
+		keepDirectPeers:            options.KeepDirectPeers,
 		sshServerOptions:           options.SSHServer,
 		taildrop:                   newTaildropManager(ctx, logger, tag, taildropDirectory, platformInterface),
 		systemInterface:            options.SystemInterface,
@@ -420,6 +424,9 @@ func (t *Endpoint) watchState() {
 			if running && exitNodePending && len(roNotify.PeersChanged) > 0 {
 				tryApplyExitNode()
 			}
+			if running && len(t.keepDirectPeers) > 0 && len(roNotify.PeersChanged) > 0 {
+				t.applyKeepDirectPeers()
+			}
 			if roNotify.State == nil && roNotify.BrowseToURL == nil {
 				return true
 			}
@@ -453,6 +460,9 @@ func (t *Endpoint) watchState() {
 				reportedAuthURL = ""
 				if exitNodePending {
 					tryApplyExitNode()
+				}
+				if len(t.keepDirectPeers) > 0 {
+					t.applyKeepDirectPeers()
 				}
 				t.suspendIfRequested()
 			}
@@ -522,6 +532,58 @@ func (t *Endpoint) applyExitNode() error {
 	}
 	_, err = t.server.ExportLocalBackend().EditPrefs(perfs)
 	return err
+}
+
+// applyKeepDirectPeers resolves t.keepDirectPeers (hostnames, DNS names, or
+// stable node IDs) against the current peer list and tells magicsock to keep
+// the direct UDP path's heartbeat warm at a reduced rate for those peers even
+// once the session goes idle, instead of letting it stop and the underlying
+// NAT mapping age out. This is a purely local override; it does not depend on
+// any control-plane-granted node capability.
+//
+// SetIdleKeepalivePeers does not exist in sagernet/tailscale; it comes from the
+// LQ2002/tailscale fork that go.mod redirects to. Bumping the tailscale
+// dependency therefore means rebasing that fork, not just editing go.mod.
+func (t *Endpoint) applyKeepDirectPeers() {
+	magicConn, loaded := t.server.Sys().MagicSock.GetOK()
+	if !loaded || magicConn == nil {
+		return
+	}
+	status, err := common.Must1(t.server.LocalClient()).Status(t.ctx)
+	if err != nil {
+		t.logger.Warn(E.Cause(err, "keep_direct_peers: get tailscale status"))
+		return
+	}
+	peers := make(map[key.NodePublic]bool)
+	var matchedNames []string
+	for _, peerStatus := range status.Peer {
+		if matchesKeepDirectPeer(peerStatus, t.keepDirectPeers) {
+			peers[peerStatus.PublicKey] = true
+			matchedNames = append(matchedNames, peerStatus.HostName)
+		}
+	}
+	t.logger.Debug("keep_direct_peers: matched ", len(peers), " of ", len(t.keepDirectPeers), " configured peer(s): [", strings.Join(matchedNames, ", "), "]")
+	magicConn.SetIdleKeepalivePeers(peers)
+}
+
+func matchesKeepDirectPeer(peer *ipnstate.PeerStatus, names []string) bool {
+	dnsName := strings.TrimSuffix(peer.DNSName, ".")
+	// machineName is the admin console's "Machine name" (the MagicDNS label),
+	// which may differ from the OS-reported HostName if it was renamed.
+	machineName, _, _ := strings.Cut(dnsName, ".")
+	for _, name := range names {
+		switch {
+		case strings.EqualFold(peer.HostName, name):
+			return true
+		case dnsName != "" && strings.EqualFold(dnsName, name):
+			return true
+		case machineName != "" && strings.EqualFold(machineName, name):
+			return true
+		case string(peer.ID) == name:
+			return true
+		}
+	}
+	return false
 }
 
 func (t *Endpoint) SetTailscaleExitNode(ctx context.Context, stableID string) error {
