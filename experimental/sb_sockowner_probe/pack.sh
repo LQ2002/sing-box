@@ -49,21 +49,21 @@ echo "== 3. 组装 =="
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 
-# 文本文件一律剥掉  再放进包里，不要用 cp。
+# 文本文件一律剥掉 \r 再放进包里，不要用 cp。
 #
 # 这一步是必须的，不是洁癖：Windows 检出（core.autocrlf）下这些脚本在工作区里
-# 是 CRLF，原样打进包后装到机器上，sh 会把行尾的  当成命令的一部分，报出来是
+# 是 CRLF，原样打进包后装到机器上，sh 会把行尾的 \r 当成命令的一部分，报出来是
 # ": not found" 和 "syntax error: unexpected elif"，安装直接失败，而错误信息完全
 # 指不到真正的原因。仓库里的 .gitattributes 已经强制 LF 检出，这里再剥一次是因为
 # 别人的检出不一定生效。
 for f in service.sh customize.sh uninstall.sh module.prop; do
-    tr -d '' < "$HERE/magisk/$f" > "$STAGE/$f"
+    tr -d '\r' < "$HERE/magisk/$f" > "$STAGE/$f"
 done
 cp "$KO" "$STAGE/"
-tr -d '' < "$RELEASE_FILE" > "$STAGE/kernel-release"
+tr -d '\r' < "$RELEASE_FILE" > "$STAGE/kernel-release"
 
-# 剥干净了才放行。漏一个  的代价是装到机器上才发现。
-CR=$(printf '')
+# 剥干净了才放行。漏一个 \r 的代价是装到机器上才发现。
+CR=$(printf '\r')
 for f in service.sh customize.sh uninstall.sh module.prop kernel-release; do
     if LC_ALL=C grep -q "$CR" "$STAGE/$f"; then
         echo "   拒绝出包：$f 里仍有 CR，剥离失败"
