@@ -1,0 +1,5 @@
+/kernel.bin
+/vmlinux.btf
+/embedded.config
+!/report.json
+!/btf-summary.json
