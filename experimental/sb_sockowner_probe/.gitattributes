@@ -1,0 +1,17 @@
+# 本目录的产物全部在 Linux 或 Android 上执行，CRLF 会直接让它们失效，而且
+# 失效方式很隐蔽：sh 把行尾的 \r 当成命令的一部分，报出来的是
+# ": not found" 和 "syntax error: unexpected elif"，看不出真正原因。
+#
+# 这不是假想。Windows 检出（core.autocrlf）曾把 CRLF 的 magisk/*.sh 打进
+# Magisk 包，装到机器上 customize.sh 每一行都报错、安装中止；同样的 \r 也让
+# pack.sh 自己因 shebang 变成 "/bin/sh\r" 而无法执行。
+#
+# 所以这里强制 LF 检出。pack.sh 在打包时还会再剥一次 \r 并校验，两道都要，
+# 因为别人的检出不一定带着这份 .gitattributes 生效后的工作区。
+* text=auto eol=lf
+
+*.ko      binary
+*.bin     binary
+*.btf     binary
+*.zip     binary
+*.img     binary
