@@ -1,0 +1,19 @@
+{
+  "boot_sha256": "b752ce64344608ad325fdf67804e0ff15c023b7b7c7a12d4a859d576354959b1",
+  "kernel_sha256": "574006dc475adc70dac65ec8cf8fcbbf0b18b0c31584a84702257788964c8ec2",
+  "header_version": 4,
+  "kernel_size": 41507328,
+  "ramdisk_size": 0,
+  "kernel_magic": "4d5a40fa19808214000000000000000000008502000000000a0000000000000000000000000000000000000000000000000000000000000041524d6440000000",
+  "config_matches_supplied": true,
+  "btf_candidates": [
+    {
+      "offset": 27084740,
+      "length": 7074100,
+      "type_len": 4282348,
+      "string_len": 2791728,
+      "sha256": "81df90ddbe969303fe7e528e8b634309f32fff1478e08cf99af1817254b890cb"
+    }
+  ],
+  "kernel_release": "6.12.69-android16-6-gb1493ec68d4a-abogki514973465-4k"
+}
