@@ -46,12 +46,11 @@ type fakeIPRangeProvider interface {
 	FakeIPRanges() (netip.Prefix, netip.Prefix)
 }
 
-type processTrackerOwner interface {
-	LookupOwner(socketCookie uint64) (commonEBPF.ProcessSocketOwner, error)
-	ReleaseCleanup() bool
-	IsClosed() bool
-	Close() error
-}
+// 归属来源的契约集中定义在 socket_owner.go（SocketOwnerSource）：除了 cgroup
+// 钩子，本机还需要一个内核模块来源，两者能提供的字段并不相同，返回 8 字节的
+// commonEBPF.ProcessSocketOwner 装不下。保留这个别名，是为了让下面的字段声明
+// 和 closeProcessTrackerOwner() 的签名与上游逐字一致，把变基成本压到最低。
+type processTrackerOwner = SocketOwnerSource
 
 func RegisterInbound(registry *inbound.Registry) {
 	inbound.Register[option.EBPFInboundOptions](registry, C.TypeEBPF, NewInbound)
