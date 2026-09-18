@@ -1,0 +1,41 @@
+{
+  "log": {
+    "level": "debug",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "ebpf",
+      "tag": "ebpf-in",
+      "local": {
+        "enabled": true,
+        "data_plane": "tc",
+        "bypass_private_address": true
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "package_name": [
+          "com.android.settings",
+          "com.android.chrome",
+          "com.android.vending"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "process_name": ["netd", "minetd", "dnsmasq"],
+        "outbound": "direct"
+      }
+    ],
+    "final": "direct",
+    "auto_detect_interface": true
+  }
+}
