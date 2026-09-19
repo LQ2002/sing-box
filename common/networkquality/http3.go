@@ -10,6 +10,7 @@ import (
 
 	"github.com/sagernet/quic-go"
 	"github.com/sagernet/quic-go/http3"
+	"github.com/sagernet/quic-go/qlog"
 	qtls "github.com/sagernet/sing-quic"
 	sBufio "github.com/sagernet/sing/common/bufio"
 	M "github.com/sagernet/sing/common/metadata"
@@ -43,6 +44,15 @@ func NewHTTP3MeasurementClientFactory(dialer N.Dialer) (MeasurementClientFactory
 					wrappedConn = sBufio.NewCounterConn(udpConn, readCounters, writeCounters)
 					qtls.SetDesiredBufferSizes(udpConn)
 				}
+				// qlog is opt-in through QLOGDIR: DefaultConnectionTracer returns nil
+				// when that variable is unset, so an ordinary run pays nothing and
+				// behaves identically. It is attached here rather than in a shared
+				// helper because this built-in measurement owns the only quic.Config
+				// sing-box passes to DialEarlyConn; the data plane is untouched.
+				if cfg == nil {
+					cfg = &quic.Config{}
+				}
+				cfg.Tracer = qlog.DefaultConnectionTracer
 				quicConn, dialErr := quic.DialEarlyConn(ctx, wrappedConn, tlsCfg, cfg)
 				if dialErr != nil {
 					udpConn.Close()
