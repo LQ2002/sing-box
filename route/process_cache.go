@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/process"
+	"github.com/sagernet/sing-box/log"
 )
 
 type processCacheKey struct {
@@ -51,27 +53,37 @@ func (r *Router) searchProcessInfo(ctx context.Context, metadata *adapter.Inboun
 		return
 	}
 	metadata.ProcessInfo = processInfo
-	if len(processInfo.ProcessPaths) > 0 {
-		processPath := strings.Join(processInfo.ProcessPaths, ", ")
-		if processInfo.UserName != "" {
-			r.logger.InfoContext(ctx, "found process path: ", processPath, ", user: ", processInfo.UserName)
-		} else if processInfo.UserId != -1 {
-			r.logger.InfoContext(ctx, "found process path: ", processPath, ", user id: ", processInfo.UserId)
-		} else {
-			r.logger.InfoContext(ctx, "found process path: ", processPath)
-		}
+	logConnectionOwner(ctx, r.logger, processInfo)
+}
+
+// logConnectionOwner prints every identifier that resolved, rather than the
+// first one that happened to.
+//
+// Reporting only the process path and returning, as this did, loses the useful
+// half on Android: every app is forked from zygote, so the path is always
+// /system/bin/app_process64 and two different apps log identically. The package
+// name is what tells them apart -- and package_name routing rules are matching
+// on it in the very next line of the log -- yet it never got printed, because a
+// path had already been found. On Linux the reverse holds and the path is the
+// identifying one. Printing both costs nothing and is right on either platform.
+func logConnectionOwner(ctx context.Context, logger log.ContextLogger, processInfo *adapter.ConnectionOwner) {
+	if processInfo == nil {
 		return
 	}
+	var attribution []string
 	if len(processInfo.PackageNames) > 0 {
-		r.logger.InfoContext(ctx, "found package name: ", strings.Join(processInfo.PackageNames, ", "))
-		return
+		attribution = append(attribution, "package name: "+strings.Join(processInfo.PackageNames, ", "))
 	}
-	if processInfo.UserId != -1 {
-		if processInfo.UserName != "" {
-			r.logger.InfoContext(ctx, "found user: ", processInfo.UserName)
-		} else {
-			r.logger.InfoContext(ctx, "found user id: ", processInfo.UserId)
-		}
+	if len(processInfo.ProcessPaths) > 0 {
+		attribution = append(attribution, "process path: "+strings.Join(processInfo.ProcessPaths, ", "))
+	}
+	if processInfo.UserName != "" {
+		attribution = append(attribution, "user: "+processInfo.UserName)
+	} else if processInfo.UserId != -1 {
+		attribution = append(attribution, "user id: "+strconv.Itoa(int(processInfo.UserId)))
+	}
+	if len(attribution) > 0 {
+		logger.InfoContext(ctx, "found ", strings.Join(attribution, ", "))
 	}
 }
 
