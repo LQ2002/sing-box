@@ -11,6 +11,7 @@ import (
 	"github.com/sagernet/quic-go"
 	"github.com/sagernet/quic-go/http3"
 	qtls "github.com/sagernet/sing-quic"
+	congestion_meta2 "github.com/sagernet/sing-quic/congestion_meta2"
 	sBufio "github.com/sagernet/sing/common/bufio"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -48,6 +49,24 @@ func NewHTTP3MeasurementClientFactory(dialer N.Dialer) (MeasurementClientFactory
 					udpConn.Close()
 					return nil, dialErr
 				}
+				// quic-go defaults to the loss-based controller RFC 9002 uses as its
+				// reference, which makes this measurement report a number no real
+				// traffic would ever see. On a path with 0.28% loss and 40ms of RTT it
+				// settled at 25 Mbps of upload, while Google Photos uploading through
+				// the very same Shadowsocks tunnel at the same moment sustained 139
+				// Mbps on a single QUIC connection -- because its sender uses BBR,
+				// which does not halve its window over a loss rate that low. A test
+				// whose figure is five times under what the link actually delivers is
+				// not measuring the link, so it uses the same controller the traffic
+				// it stands in for uses.
+				//
+				// Only the upload figure moves. Downloads are sent by the far end, so
+				// its controller governs them and this changes nothing there.
+				//
+				// The call mirrors tuic/congestion.go in sing-quic, which already does
+				// this on the data plane; ProfileStandard is what "bbr" selects there.
+				quicConn.SetCongestionControl(congestion_meta2.NewBbrSenderWithProfile(
+					quicConn.InitialPacketSize(), congestion_meta2.ProfileStandard))
 				go func() {
 					<-quicConn.Context().Done()
 					udpConn.Close()
