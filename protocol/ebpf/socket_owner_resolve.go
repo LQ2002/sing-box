@@ -110,26 +110,30 @@ func (i *Inbound) resolveSocketOwner(ctx context.Context, owner SocketOwner) *ad
 	return processInfo
 }
 
-// logResolvedOwner 复刻 route/process_cache.go 的输出格式与优先级，使
-// eBPF 路径提供归属时的日志与回退路径保持一致。
+// logResolvedOwner 沿用 route/process_cache.go 里 logConnectionOwner 的输出
+// 格式，使 eBPF 路径提供归属时的日志与回退路径长得一样。
+//
+// 这里是刻意重复实现而不是调用那边的函数：protocol/ebpf 反过来依赖 route 会
+// 引入成环风险，而为了二十行格式化代码把它提到 adapter 里又要多改一个上游文
+// 件。代价是两处必须同时改——否则同一份日志里会出现两种写法，排查时更费劲。
 func logResolvedOwner(ctx context.Context, logger log.ContextLogger, info *adapter.ConnectionOwner) {
 	if info == nil {
 		return
 	}
-	if len(info.ProcessPaths) > 0 {
-		processPath := strings.Join(info.ProcessPaths, ", ")
-		switch {
-		case info.UserName != "":
-			logger.InfoContext(ctx, "found process path: ", processPath, ", user: ", info.UserName)
-		case info.UserId != -1:
-			logger.InfoContext(ctx, "found process path: ", processPath, ", user id: ", info.UserId)
-		default:
-			logger.InfoContext(ctx, "found process path: ", processPath)
-		}
-		return
-	}
+	var attribution []string
 	if len(info.PackageNames) > 0 {
-		logger.InfoContext(ctx, "found package name: ", strings.Join(info.PackageNames, ", "))
+		attribution = append(attribution, "package name: "+strings.Join(info.PackageNames, ", "))
+	}
+	if len(info.ProcessPaths) > 0 {
+		attribution = append(attribution, "process path: "+strings.Join(info.ProcessPaths, ", "))
+	}
+	if info.UserName != "" {
+		attribution = append(attribution, "user: "+info.UserName)
+	} else if info.UserId != -1 {
+		attribution = append(attribution, "user id: "+strconv.Itoa(int(info.UserId)))
+	}
+	if len(attribution) > 0 {
+		logger.InfoContext(ctx, "found ", strings.Join(attribution, ", "))
 	}
 }
 
