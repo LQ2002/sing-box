@@ -21,7 +21,7 @@ jobs:
           - goarch: "386"
             compiler: i686-linux-android35-clang
     env:
-      BASE_TAGS: with_quic,with_dhcp,with_utls,with_clash_api,with_ebpf,badlinkname,tfogo_checklinkname0
+      BASE_TAGS: with_quic,with_utls,with_clash_api,with_ebpf,badlinkname,tfogo_checklinkname0
     steps:
       - name: Checkout
         uses: actions/checkout@v6
