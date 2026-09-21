@@ -179,20 +179,39 @@ NDK="$HOME/android-ndk-r29"
 export CGO_ENABLED=1 GOOS=android GOARCH=arm64
 export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang"
 
-VERSION=$(CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go run ./cmd/internal/read_tag)
-go build \
-  -tags "with_gvisor,with_quic,with_dhcp,with_utls,with_clash_api,with_ebpf,badlinkname,tfogo_checklinkname0" \
-  -trimpath \
-  -ldflags "-s -w -buildid= \
-    -X runtime.godebugDefault=multipathtcp=0,tlssha1=1,tlsunsafeekm=1 \
-    -X github.com/sagernet/sing-box/constant.Version=${VERSION} \
-    -checklinkname=0" \
+# 三个值都从仓库里读出来，不要抄进这份文档。抄过一次就漂过一次：这段原先写着
+# with_gvisor 和 tlsunsafeekm=1，而 BASE_TAGS 和 release/LDFLAGS 里早就都没有
+# 了，照着编出来的二进制和 CI 的产物对不上。
+#
+# 每个值都要过 tr -d '\r'：这个 checkout 是 CRLF 工作区，不去掉的话最后一个 tag
+# 会变成 tfogo_checklinkname0\r —— 那不是真 tag，Go 静默丢弃它而链接照样成功。
+# -checklinkname=0\r 同理。出于同一个原因也不能直接 `make build`：根 Makefile 的
+# LDFLAGS_SHARED 是 $(shell cat release/LDFLAGS)，而 $(shell) 只去结尾换行、不去回车。
+TAGS=$(grep -m1 'BASE_TAGS:' .github/workflows/android-ebpf.yml | sed 's/.*BASE_TAGS: *//' | tr -d '\r')
+LDFLAGS=$(tr -d '\r' < release/LDFLAGS)
+VERSION=$(CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go run ./cmd/internal/read_tag | tr -d '\r')
+
+go build -trimpath \
+  -tags "$TAGS" \
+  -ldflags "-s -w -buildid= $LDFLAGS -X github.com/sagernet/sing-box/constant.Version=${VERSION}" \
   -o sing-box ./cmd/sing-box
 ```
 
 `badlinkname`、`tfogo_checklinkname0` 这两个 tag 和 `-checklinkname=0` 必须同时
 给：它们是让指向 runtime / net 内部符号的 `//go:linkname` 在新版 Go 上能通过
 链接的前提，缺了要么链接失败，要么行为悄悄变化。
+
+`BASE_TAGS` 里**没有** `with_gvisor`，这在 Android 上是对的：它只影响 TUN 入站的
+gvisor / mixed 协议栈，而这台设备走 eBPF 入站加 Shadowsocks 出站，不碰 TUN。非
+Android 的目标（比如服务器）应当带上它，那份配方在别处，别从这里抄。
+
+构建完务必把 tag 从成品里读回来核对。Go 遇到不认识的 build tag 不报错，一个笔误或
+一个残留回车换来的就是功能静默缺失：
+
+```sh
+go version -m ./sing-box | grep tags
+go version -m ./sing-box | grep -P '\r'   # 应当没有任何输出
+```
 
 产物应当是 `for Android 35, built by NDK r29`，并链接 `libc.so` / `libdl.so` /
 `liblog.so`——没有这些动态依赖说明 CGO 没生效。
