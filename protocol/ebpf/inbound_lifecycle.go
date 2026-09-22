@@ -328,6 +328,15 @@ func (i *Inbound) startProcessTracker() error {
 		i.processTracker != nil || i.processTrackerRollback != nil {
 		return nil
 	}
+	// 外部内核模块优先：它是唯一能给出进程启动时间的来源，而归属缓存和 PID
+	// 复用判别都依赖它。理由与这个顺序的来历都写在 socket_owner.go 的
+	// preferSocketOwnerModule 上。
+	module, moduleErr := preferSocketOwnerModule()
+	if module != nil {
+		i.logger.Debug("eBPF socket owner tracking using ", module.TrackingMode())
+		i.processTracker = module
+		return nil
+	}
 	uidDecisions, defaultAction := i.compileProcessUIDPolicy()
 	tracker, err := commonEBPF.AttachProcessTracker(commonEBPF.ProcessTrackerConfig{
 		EnableTCP:    i.enableTCP,
@@ -342,21 +351,14 @@ func (i *Inbound) startProcessTracker() error {
 			i.processTrackerRollback = cgroupSocketOwnerSource{tracker}
 			return E.Cause(err, "rollback partial eBPF process tracker")
 		}
-		// 软失败：内核里没有留下半挂载的资源，可以安全地换一个归属来源。
-		// 部分厂商内核（已确认的有小米的 GKI 构建）禁止挂载 cgroup/sock 钩子，
-		// 此时唯一可行的来源是外部内核模块，见 socket_owner.go。
-		fallback, fallbackErr := attachSocketOwnerFallback(err)
-		if fallback != nil {
-			// cgroup 的失败原因必须一并记下：只看最终用了哪个来源，看不出
-			// cgroup 为什么没挂上，而那恰恰是排查的起点——"内核禁止挂载"和
-			// "进程所在 cgroup 里有其他进程"是完全不同的结论。
-			i.logger.Debug("eBPF cgroup process tracking unavailable; using ", fallback.TrackingMode(), ": ", err)
-			i.processTracker = fallback
-			return nil
-		}
-		i.logger.Debug("eBPF socket owner tracking unavailable; using userspace process search: ", fallbackErr)
+		// 软失败：内核里没有留下半挂载的资源。模块刚才已经试过且失败了，
+		// 再试一次没有意义，所以两个原因一起记下，落回用户态搜索。
+		i.logger.Debug("eBPF socket owner tracking unavailable; using userspace process search: ",
+			E.Errors(err, moduleErr))
 		return nil
 	}
+	// 模块没用上时把原因记下：没装模块和装了但打不开，后果一样但处置不同。
+	i.logger.Debug("eBPF socket owner module unavailable; using cgroup process tracking: ", moduleErr)
 	i.processTracker = cgroupSocketOwnerSource{tracker}
 	return nil
 }
