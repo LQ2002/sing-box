@@ -4,7 +4,6 @@ package ebpf
 
 import (
 	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
-	E "github.com/sagernet/sing/common/exceptions"
 )
 
 // 本文件是 socket 归属来源的抽象层。数据面拿到 socket cookie 之后，需要知道
@@ -123,21 +122,32 @@ func (s cgroupSocketOwnerSource) Close() error {
 	return s.tracker.Close()
 }
 
-// attachSocketOwnerFallback 在 cgroup 钩子挂不上时挑选替代的归属来源。
+// preferSocketOwnerModule 先于 cgroup 尝试外部内核模块。
 //
-// 只在**软失败**时调用，即 AttachProcessTracker 返回 (nil, err)：那种情况下
-// 内核里没有留下任何半挂载的资源，回退是安全的。硬失败（返回了非 nil 的半成品
-// 追踪器）仍由上游的 rollback 路径处理，本函数不介入——那条路径的语义属于上游，
-// 在这里复刻一份只会平白增加耦合。
+// 顺序按来源的**能力**排，不按"谁更轻"排。两者查一次的成本本就相当——一次
+// ioctl 对一次 BPF map 查找，模块那边反而少了 map 这层中转——但能力差一截：
+// cgroup 钩子只拿得到 PID 和 UID，模块还带回创建时的 start_boottime。少了启动
+// 时间有两个后果，都不是小事：
 //
-// 把"用哪个替代来源"的取舍收在这里而不是散在生命周期代码里，是为了让数据面
-// 只认 SocketOwnerSource 一个契约：以后增删归属来源都不必改动调用点。
-func attachSocketOwnerFallback(cgroupErr error) (SocketOwnerSource, error) {
+//   - socket_owner_resolve.go 的归属缓存以 (PID, 启动时间) 为键，拿不到启动
+//     时间就整个停用，于是每条新连接都要去读一次 /proc，而不是每个进程一次。
+//   - PID 会回绕复用。没有启动时间就无从判别，一个新进程拿到刚退出的 App 的
+//     PID 时，归属会安静地张冠李戴，而 package_name 路由规则正是按它匹配的。
+//
+// 历史上这个顺序是反的，原因是模块最初就是为"厂商内核禁止挂载 cgroup/sock
+// 钩子"这一种情况写的后备（已确认的有小米的旧 GKI 构建）。在那些内核上 cgroup
+// 必然失败，模块每次都顶班，于是"cgroup 优先"这条分支从来没有真正被执行过，
+// 它缺启动时间这件事也就一直没暴露。内核升级放行 cgroup 之后，优先级的问题才
+// 显出来：顶班的那个比正式的更能干。
+//
+// 设备节点不存在时这里什么也不做，调用方原样落回 cgroup，所以没装模块的机器
+// 行为与改动前完全一致。
+func preferSocketOwnerModule() (SocketOwnerSource, error) {
 	module, moduleErr := OpenSocketOwnerModule()
 	if moduleErr == nil && module != nil {
 		return module, nil
 	}
 	// 这里必须返回无类型的 nil：返回带类型的 nil 指针会被装箱成非 nil 接口，
 	// 调用方的判空会静默失效。
-	return nil, E.Errors(cgroupErr, moduleErr)
+	return nil, moduleErr
 }
