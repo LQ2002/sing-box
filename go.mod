@@ -3,7 +3,7 @@ module github.com/sagernet/sing-box
 go 1.25.5
 
 replace github.com/sagernet/tailscale => github.com/LQ2002/tailscale v0.0.0-20260918084915-8f35b78440d7
-replace github.com/CHIZI-0618/sing-ebpf => github.com/LQ2002/sing-ebpf v0.1.0-alpha.9.0.20260922072950-44dab22e542b
+replace github.com/CHIZI-0618/sing-ebpf => github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20260930034217-3420ee21d978
 
 require (
 	filippo.io/age v1.3.1
