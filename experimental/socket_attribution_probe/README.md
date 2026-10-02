@@ -1,0 +1,68 @@
+# socket 归属与包名识别的真机验证
+
+这个目录存放 2026-10-02 在真机上做的一组诊断，目的是回答两个问题：
+
+1. 现有的 `sb_sockowner_probe` 内核模块为什么会查不到 socket；
+2. 在不猜包名的前提下，能不能把流量准确归到包，尤其是共享 UID 1000 下的系统应用。
+
+这里的程序全部是一次性的诊断工具，**不参与 sing-box 的构建，也不改变路由**。每个子目录都是独立的 Go module，交叉编译后用 adb 推到手机上以 root 运行。
+
+## 设备
+
+- 小米，Android 17 / SDK 37
+- 内核 `6.12.69-android16-6-g586bfab1b9c5-abogki536749445-4k`
+- KernelSU（adb shell 已授权 root）、ZygiskNext、LSPosed
+- 当时加载的是 48 字节 ABI 的 `sb_sockowner_probe`，`OWNER_MAX` = 16384
+
+## 结论汇总
+
+| # | 结论 | 证据等级 | 依据 |
+|---|---|---|---|
+| 1 | 模块的淘汰策略会丢掉**仍存活**的 socket 条目 | 已证实 | `evict/`：12 个存活且未再查询的 UDP socket，14 分钟内全部能查到；14～16 分钟间全机 2 分钟新建约 5.3 万个 socket，`evicted` 从 253 涨到 14717，之后这些 socket 全部查不到 |
+| 2 | 第一次扫描里 48 个未命中的 socket 是否都由淘汰造成 | **不能确定** | cookie 按 CPU 分批分配，数值交错不能说明创建时间交错，也排除不了模块加载前就存在的 socket。只能确定其中只有 1 个像 accept() 产生的 |
+| 3 | 主线程 comm 是进程名的**后** 15 个字符，`:xxx` 子进程的 comm 里几乎没有包名 | 已证实 | `results/comm-vs-cmdline.txt` |
+| 4 | Manifest 里的 `android:process` 能把 (UID, 进程名) 唯一映射到包，UID 1000 下 86 个进程名中 84 个唯一 | 已证实 | `procmap/`。AMS 用同一个键：`ProcessList.mProcessNames.get(processName, uid)` |
+| 5 | Android 给每个进程单独建 cgroup v2，路径里带 UID 和 PID | 已证实 | `/proc/<pid>/cgroup` → `0::/system/uid_1000/pid_23500`，App 进程在 `/apps/uid_X/pid_Y` |
+| 6 | SOCK_DIAG 的 `INET_DIAG_CGROUP_ID` 给出的进程，和模块记录的 PID 一致 | 已证实 | `cgscan/`：两边都有值的 45 个 socket 全部一致；另有 50 个模块查不到的 socket 能通过 cgroup 找到进程 |
+| 7 | TC 程序可以逐包调用 `bpf_skb_cgroup_id()`，值和 SOCK_DIAG 相同 | 已证实 | `tccg/`：verifier 接受；两边都有值的 51 个 socket 全部相同 |
+| 8 | 进程退出时 cgroup 目录同时被删除 | 已证实 | `scripts/cgdeath.sh`：强制停止 99ms、kill -9 44ms，进程消失与目录删除在 10ms 精度内同时发生 |
+| 9 | WebView 沙箱（UID 99xxx）进程没有网络 socket | 当次样本证实 | `cgscan` 的 175 个 socket 里 `uid_99` 为 0 |
+| 10 | KernelSU 脚本启动的 root 进程（包括 sing-box）在根 cgroup，cgroup ID = 1 | 已证实 | `cgscan`、`tccg` |
+| 11 | netd 的 `cookie_tag_map` 只包含被显式打过标签的 socket | 已证实 | 当次只有 4 条（GMS `0x407`、网络栈 `0xfffffe01`） |
+
+## 各工具
+
+| 目录 | 做什么 | 怎么读结果 |
+|---|---|---|
+| `missscan/` | 用 SOCK_DIAG 枚举全部 inet socket，逐个向模块查询；查不到的打印协议状态、UID、inode 对应的进程，以及 cookie | `MISS` 行的 `accepted_like=true` 表示本地端口和某个监听端口相同 |
+| `evict/` | 新建 12 个 UDP socket 并各查一次，之后在第 1、2、4……24 分钟各查其中**一个**（每个只查一次，不会互相刷新 LRU），同时记录 `/proc/sb_sockowner_probe` | `hit=false` 且 `evicted` 跳涨，说明存活条目被淘汰 |
+| `procmap/` | 解析 `pm list packages -f -U` 列出的每个 base.apk 的 Manifest，建立 (appId, 进程名) → 包集合，再对照正在运行的 zygote 子进程 | `SINGLE` 唯一、`MULTI` 多包、`NONE` 查不到；`TABLE1000` 是 UID 1000 的完整表 |
+| `cgscan/` | 读出每个 socket 的 `INET_DIAG_CGROUP_ID`，用 cgroupfs 的 inode 反查路径，和模块对照 | `DISAGREE` 且 `cg=` 为空的，都是根 cgroup 里的 root 进程，不是真正的矛盾 |
+| `tccg/` | 在指定网卡的 TCX egress 最前面挂一个只记录 cookie → cgroup ID、返回 `TCX_NEXT` 的程序，20 秒后卸载，再和 SOCK_DIAG 对照 | `diag=0` 的不一致是对照时 socket 已进入 TIME_WAIT 等状态 |
+| `scripts/cgdeath.sh` | 启动计算器，分别用强制停止和 kill -9 结束它，以 10ms 间隔测进程和 cgroup 目录各自何时消失 | — |
+| `scripts/proctree.sh` | 按父进程把全部进程分为 zygote 子进程、webview_zygote 子进程、init 子进程等 | — |
+
+## 构建与运行
+
+所有 Go 构建都在 WSL 里以 `likayo` 用户执行（见仓库的构建约定），例如：
+
+```sh
+cd experimental/socket_attribution_probe/cgscan
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o cgscan .
+```
+
+在 Windows 的 Git Bash 里调用 adb 时，必须先 `export MSYS_NO_PATHCONV=1`，否则 `/data/local/tmp/...` 会被改写成 Windows 路径。
+
+```sh
+adb push cgscan /data/local/tmp/sbo-cgscan
+adb shell "su -c 'chmod 755 /data/local/tmp/sbo-cgscan; /data/local/tmp/sbo-cgscan; rm /data/local/tmp/sbo-cgscan'"
+```
+
+`evict` 要跑 24 分钟，应当用 `nohup` 在手机上后台运行、把输出写到手机上的文件，结束后再取回；中途手机最好保持连接，否则深度休眠会让计时暂停。`tccg` 需要传入网卡名（例如 `wlan0`），会在该网卡出口临时挂载程序约 20 秒。
+
+## 已知不足
+
+- `results/evict-poll-output.txt` **不是完整的原始日志**：手机上的原始文件已经删除，本地只保留了轮询输出，其中 t=0 时 12 个 socket 的 cookie 行被过滤掉了。要引用这项结论，应当重跑并完整保存。
+- `procmap` 只解析 base.apk。GMS 的部分组件声明在 split APK 里，所以 `com.google.android.gms.unstable` 等进程显示为 `NONE`；Chrome、WebView、Quetta 的 Manifest 含有解析不了的资源引用，被计为失败。正式实现时这两处都要补上。
+- `missscan` 是在 `experimental/process_identity_probe/owner_scan.go`（另一个会话写的探针，未入库）的基础上改的。
+- `results/` 里有设备上已安装应用的包名、UID 和 PID，按仓库里其他探针的惯例不入库，只保存在本地。
