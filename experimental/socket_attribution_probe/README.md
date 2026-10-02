@@ -48,6 +48,9 @@
 | 29 | sing-box 的 TC 出口程序 `sb_tc_local_l2` 平均每个包约 **2.45 µs**；同期系统 netd 的流量统计约 3.0～3.6 µs/包，另有挂在收发包路径上的 kprobe（`miui_tcp_rcv_est` 两个、`__dev_queue_xmit`、`ip_queue_xmit`）合计约 2～5 µs/包 | 已证实（单次 30 秒采样，流量较少） | 临时打开 `kernel.bpf_stats_enabled`，前后各读一次 `bpftool -j prog show`，按 `run_time_ns / run_cnt` 计算（`results/bpf-prog-stats-30s.json.txt`）。统计本身也有少量开销。这几个 kprobe 的加载者未确认 |
 | 30 | sing-ebpf 的按 socket 分流缓存（`tc_local_verdict`）**只对 TCP 生效**，UDP（包括 QUIC）每个包都要跑完整条判断链，其中有容量 65536 的 LPM 前缀树查询；进程追踪开启时，每个被选中的包还要多查一次 `tc_assignment` | 源码证实 | `sing-ebpf/native/tc.bpf.c` 的 `local_selected_cached()` 注释："只对 TCP 缓存。未连接的 UDP socket 每个包的目的地址都可能不同"；`record_local_socket_cookie()`。但已 `connect()` 的 UDP socket（QUIC 客户端的常见用法）目的地是固定的，可以缓存 |
 | 31 | 小米自己的网络 eBPF 也只按 UID 工作 | 已证实 | `/system/etc/bpf/miui/HyperWifiWmm.o`（按 UID 设置 WMM 优先级）、`tclimiter.o`（按 UID 限速，系统 UID 直接放行），都调用 `bpf_get_socket_uid()` |
+| 32 | sing-box 进程已在 `top-app` 的 cpuset 和 cpu 控制组里，可用全部 8 个核（后台组只有 0～3 号核），调度策略 `SCHED_OTHER`、nice 0 | 已证实 | `/proc/<pid>/cgroup`、`/dev/cpuset/*/cpus` |
+| 33 | 用 `BPF_PROG_TEST_RUN` 对**正在运行的** `sb_tc_local_l2`（1795 条指令，JIT 后 9324 字节）各跑 20 万次构造包：UDP 443 走代理 148 ns、走绕行 154～173 ns；TCP 443 走代理 81 ns、走绕行 27 ns；DNS 80 ns；局域网 23 ns | 已证实 | `tcbench/`（`results/tcbench.txt`）。测试包上没有 socket，所以 cookie、socket 存储、进程追踪这几步查表都被跳过，而 UID 是溢出值；缓存全是热的。它说明判断链本身在热缓存下很便宜，第 29 条在低流量下测到的 2.45 µs 主要应来自缓存未命中，**大流量下的真实单包开销还需要实测**。这台机器的 `bpftool` 不支持 `prog profile`，读不了硬件计数器 |
+| 34 | 事件日志缓冲区为 2 MiB，当前覆盖约 4.2 小时（52221 条） | 已证实 | `logcat -g -b events` 以及最早一条的时间戳。实时读取 `am_proc_start` 不会因为缓冲区轮转而丢事件；sing-box 重启后，也能用缓冲区里的这几个小时补回已经在运行的进程 |
 | 24 | `sock_send_length` 对所有 socket 类型都触发，包括 unix 和 netlink，而且是**每次发送都触发** | 已证实 | 4753 个里只有 160 个是对照时仍打开的网络 socket。正式使用时应在程序开头过滤：只处理根 cgroup（ID 为 1）的发送，Android 启动的进程直接用 socket 自带的 cgroup，这样对 App 流量几乎没有额外开销 |
 
 ## 各工具
