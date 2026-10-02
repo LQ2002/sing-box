@@ -29,6 +29,9 @@
 | 9 | WebView 沙箱（UID 99xxx）进程没有网络 socket | 当次样本证实 | `cgscan` 的 175 个 socket 里 `uid_99` 为 0 |
 | 10 | KernelSU 脚本启动的 root 进程（包括 sing-box）在根 cgroup，cgroup ID = 1 | 已证实 | `cgscan`、`tccg` |
 | 11 | netd 的 `cookie_tag_map` 只包含被显式打过标签的 socket | 已证实 | 当次只有 4 条（GMS `0x407`、网络栈 `0xfffffe01`） |
+| 12 | App 进程在运行任何 Java 代码之前就已进入自己的 cgroup，所以 App 的每个 socket 都带着自己的 cgroup | 源码证实 | `frameworks/base/core/jni/com_android_internal_os_Zygote.cpp` 的 `SpecializeCommon`：`createProcessGroup(uid, getpid())` 在 `setresuid`、SELinux 上下文设置和 Java 回调之前 |
+| 13 | AMS 的事件日志 `am_proc_start`（tag 30014）在进程启动时给出 `[用户, PID, UID, 进程名, 启动原因, {触发启动的组件}]`，组件里的包名来自 AMS 本身 | 源码 + 真机证实 | `services/core/java/com/android/server/am/EventLogTags.logtags`；真机事件缓冲区里 470 次启动，到 `am_proc_bound` 的间隔最短 1ms、P10 22ms、中位数 43ms、最长 1393ms（`results/am-proc-events.txt`） |
+| 14 | `AttributionSource` 只用于受权限保护的数据访问归属，和网络、socket、流量统计无关 | 源码证实 | `core/java/android/content/AttributionSource.java`。`system_server` 内部的网络流量在进程外没有可读的包级归属 |
 
 ## 各工具
 
