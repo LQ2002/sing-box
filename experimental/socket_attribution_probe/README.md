@@ -35,6 +35,9 @@
 | 15 | 这台厂商内核允许 BPF kprobe 挂在 `__sock_create`、`inet_create` 上；`tp_btf`（`sched_process_fork`）和 `sock/inet_sock_set_state` tracepoint 也可以用；LSM 和 fentry 不可用（`not supported`，内核没开 `CONFIG_FUNCTION_TRACER`）；没有 syscalls 类 tracepoint | 已证实 | `attachtest/`：每个点挂一个返回 0 的空程序，1 秒后卸载（`results/attachtest.txt`）。这推翻了"socket 归属只能靠内核模块"的旧结论，但 kprobe 拿不到 socket cookie（cookie 是按需生成的），要和 TC 侧关联还需要另外设计键 |
 | 16 | Android 16 起有官方系统服务 `DynamicInstrumentationManager`，可以查询某个进程里某个 Java 方法编译后的文件和偏移，供 uprobe 只读观察 | 源码证实，设备上已在使用 | `packages/modules/UprobeStats/src/DynamicInstrumentationManager.cpp`（`ADynamicInstrumentationManager_getExecutableMethodFileOffsets`）；设备上有 `com.android.uprobestats` APEX 和 `/sys/fs/bpf/uprobestats/` 下的 map |
 | 17 | 这个 ROM 不输出组件级事件日志（`am_create_service` 等） | 已证实 | 事件缓冲区里一条都没有，所以多包进程内部哪个组件在活动，靠事件日志看不到 |
+| 18 | 创建 socket 的线程名不能作为可靠的身份信号 | 当次样本 | `threadscan/`：60 秒内系统 UID 只采到互联服务的 2 个 socket，线程名是自动生成的 `Thread-17`；`system_server` 和电话进程在这段时间里没有新建 socket（`results/threadscan.tsv`） |
+| 19 | `ApplicationStartInfo`（`dumpsys activity start-info`）会持久化每个包的启动记录，里面明确有 package、process、pid，但**不完整** | 已证实 | 2899 条记录里 2285 条 pid 为 0；正在运行的安全中心、互联服务进程找不到对应记录，只有电话进程能找到（`results/start-info.txt`）。只适合作为 sing-box 重启后的补充来源 |
+| 20 | `dynamic_instrumentation`（`IDynamicInstrumentationManager`）和 `uprobestats_bridge` 两个系统服务都已注册 | 已证实 | `service list`。root 能不能直接调用、需要什么权限，**未验证** |
 
 ## 各工具
 
