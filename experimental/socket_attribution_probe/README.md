@@ -32,6 +32,9 @@
 | 12 | App 进程在运行任何 Java 代码之前就已进入自己的 cgroup，所以 App 的每个 socket 都带着自己的 cgroup | 源码证实 | `frameworks/base/core/jni/com_android_internal_os_Zygote.cpp` 的 `SpecializeCommon`：`createProcessGroup(uid, getpid())` 在 `setresuid`、SELinux 上下文设置和 Java 回调之前 |
 | 13 | AMS 的事件日志 `am_proc_start`（tag 30014）在进程启动时给出 `[用户, PID, UID, 进程名, 启动原因, {触发启动的组件}]`，组件里的包名来自 AMS 本身 | 源码 + 真机证实 | `services/core/java/com/android/server/am/EventLogTags.logtags`；真机事件缓冲区里 470 次启动，到 `am_proc_bound` 的间隔最短 1ms、P10 22ms、中位数 43ms、最长 1393ms（`results/am-proc-events.txt`） |
 | 14 | `AttributionSource` 只用于受权限保护的数据访问归属，和网络、socket、流量统计无关 | 源码证实 | `core/java/android/content/AttributionSource.java`。`system_server` 内部的网络流量在进程外没有可读的包级归属 |
+| 15 | 这台厂商内核允许 BPF kprobe 挂在 `__sock_create`、`inet_create` 上；`tp_btf`（`sched_process_fork`）和 `sock/inet_sock_set_state` tracepoint 也可以用；LSM 和 fentry 不可用（`not supported`，内核没开 `CONFIG_FUNCTION_TRACER`）；没有 syscalls 类 tracepoint | 已证实 | `attachtest/`：每个点挂一个返回 0 的空程序，1 秒后卸载（`results/attachtest.txt`）。这推翻了"socket 归属只能靠内核模块"的旧结论，但 kprobe 拿不到 socket cookie（cookie 是按需生成的），要和 TC 侧关联还需要另外设计键 |
+| 16 | Android 16 起有官方系统服务 `DynamicInstrumentationManager`，可以查询某个进程里某个 Java 方法编译后的文件和偏移，供 uprobe 只读观察 | 源码证实，设备上已在使用 | `packages/modules/UprobeStats/src/DynamicInstrumentationManager.cpp`（`ADynamicInstrumentationManager_getExecutableMethodFileOffsets`）；设备上有 `com.android.uprobestats` APEX 和 `/sys/fs/bpf/uprobestats/` 下的 map |
+| 17 | 这个 ROM 不输出组件级事件日志（`am_create_service` 等） | 已证实 | 事件缓冲区里一条都没有，所以多包进程内部哪个组件在活动，靠事件日志看不到 |
 
 ## 各工具
 
