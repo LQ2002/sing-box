@@ -3,203 +3,221 @@
 package ebpf
 
 import (
+	"context"
+	"os"
 	"slices"
 	"strconv"
 	"testing"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
 )
 
-func TestParsePackageName(t *testing.T) {
-	t.Parallel()
-
-	for _, testCase := range []struct {
-		name string
-		raw  string
-		want string
+func TestUniqueApplicationPackage(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		uid      uint32
+		packages []string
+		shared   string
+		reverse  uint32
+		want     string
 	}{
-		{
-			// zygote 用 NUL 把 argv 区填满，整块读会把填充一起带进来。
-			name: "应用进程带 NUL 填充",
-			raw:  "com.android.settings\x00\x00\x00\x00\x00\x00\x00\x00",
-			want: "com.android.settings",
-		},
-		{
-			// 同一个应用的子进程，必须截断到包名，否则
-			// package_name: [com.android.settings] 匹配不到它。
-			name: "应用子进程",
-			raw:  "com.android.settings:provider\x00\x00\x00",
-			want: "com.android.settings",
-		},
-		{
-			// 原生二进制不该走到这里，但真读到时不能把路径当包名。
-			name: "原生二进制路径",
-			raw:  "/system/bin/netd\x00",
-			want: "",
-		},
-		{
-			name: "带参数的命令行",
-			raw:  "/system/bin/sh\x00-c\x00echo hi\x00",
-			want: "",
-		},
-		{
-			name: "空 cmdline",
-			raw:  "",
-			want: "",
-		},
-		{
-			name: "无 NUL 结尾",
-			raw:  "com.example.app",
-			want: "com.example.app",
-		},
+		{"ordinary", 10100, []string{"real.package"}, "", 10100, "real.package"},
+		{"secondary_user", 1010100, []string{"real.package"}, "", 10100, "real.package"},
+		{"multiple_packages", 10100, []string{"package.a", "package.b"}, "", 10100, ""},
+		{"declared_shared_even_with_one_package", 10100, []string{"package.a"}, "shared.user", 10100, ""},
+		{"system_uid", 1000, []string{"android"}, "", 1000, ""},
+		{"isolated_uid", 99000, []string{"guessed.parent"}, "", 99000, ""},
+		{"sdk_sandbox_uid", 20100, []string{"guessed.parent"}, "", 20100, ""},
+		{"unknown", 10100, nil, "", 10100, ""},
+		{"empty_package", 10100, []string{""}, "", 10100, ""},
+		{"reverse_mismatch", 10100, []string{"real.package"}, "", 10101, ""},
 	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			if got := parsePackageName([]byte(testCase.raw)); got != testCase.want {
-				t.Errorf("parsePackageName(%q) = %q, want %q", testCase.raw, got, testCase.want)
+		t.Run(tc.name, func(t *testing.T) {
+			pm := &testPackageManager{
+				packagesByID:    map[uint32][]string{tc.uid % 100000: tc.packages},
+				idByPackage:     make(map[string]uint32),
+				sharedPackageID: make(map[uint32]string),
+			}
+			for _, name := range tc.packages {
+				pm.idByPackage[name] = tc.reverse
+			}
+			if tc.shared != "" {
+				pm.sharedPackageID[tc.uid%100000] = tc.shared
+			}
+			if got := uniqueApplicationPackage(pm, tc.uid); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if got := uniqueApplicationPackage(nil, 10100); got != "" {
+		t.Fatal(got)
+	}
+}
+
+func TestRefineConnectionOwnerDoesNotGuessPackages(t *testing.T) {
+	pm := &testPackageManager{
+		packagesByID: map[uint32][]string{10100: {"real.package"}, 10101: {"package.a", "package.b"}},
+		idByPackage:  map[string]uint32{"real.package": 10100, "package.a": 10101, "package.b": 10101},
+	}
+	for _, tc := range []struct {
+		name, executable, comm  string
+		uid                     uint32
+		wantPaths, wantPackages []string
+	}{
+		{"native", "/system/bin/netd", "fake.package", 1000, []string{"/system/bin/netd"}, nil},
+		{"unique_64bit", "/system/bin/app_process64", "unrelated.name", 10100, nil, []string{"real.package"}},
+		{"unique_32bit", "/system/bin/app_process32", "unrelated.name", 10100, nil, []string{"real.package"}},
+		{"shared_uid", "/system/bin/app_process64", "package.a", 10101, nil, nil},
+		{"missing_membership", "/system/bin/app_process64", "fake.package", 10102, nil, nil},
+		{"missing_exe", "", "fake.package", 10100, []string{"fake.package"}, nil},
+		{"similar_native_name", "/data/local/tmp/app_process64-other", "", 10100, []string{"/data/local/tmp/app_process64-other"}, nil},
+		{"deleted_native", "/data/local/tmp/probe (deleted)", "", 10100, []string{"/data/local/tmp/probe"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := &adapter.ConnectionOwner{UserId: int32(tc.uid), PackageNames: []string{"stale.guess"}}
+			if tc.executable != "" {
+				info.ProcessPaths = []string{tc.executable}
+			}
+			refineConnectionOwner(info, SocketOwner{UserID: tc.uid, Comm: tc.comm}, pm)
+			if !slices.Equal(info.ProcessPaths, tc.wantPaths) || !slices.Equal(info.PackageNames, tc.wantPackages) {
+				t.Fatalf("paths=%v packages=%v", info.ProcessPaths, info.PackageNames)
+			}
+		})
+	}
+	refineConnectionOwner(nil, SocketOwner{}, nil)
+}
+
+func TestSocketOwnerCacheDoesNotFreezePackageMembership(t *testing.T) {
+	cache := socketOwnerCache()
+	if cache == nil {
+		t.Fatal("cache unavailable")
+	}
+	owner := SocketOwner{ProcessID: 4000000000, UserID: 10100, StartTimeNs: 1234567890}
+	key := socketOwnerCacheKey{ProcessID: owner.ProcessID, UserID: owner.UserID, StartTimeNs: owner.StartTimeNs}
+	cache.Add(key, &adapter.ConnectionOwner{ProcessID: owner.ProcessID, UserId: 10100, ProcessPaths: []string{"/system/bin/app_process64"}})
+	defer cache.Remove(key)
+	pm := &testPackageManager{packagesByID: map[uint32][]string{10100: {"package.a"}}, idByPackage: map[string]uint32{"package.a": 10100, "package.b": 10100}}
+	inbound := &Inbound{logger: log.NewNOPFactory().Logger(), networkManager: &testNetworkManager{packageManager: pm}}
+	first := inbound.resolveSocketOwner(context.Background(), owner)
+	if !slices.Equal(first.PackageNames, []string{"package.a"}) {
+		t.Fatal(first)
+	}
+	pm.packagesByID[10100] = []string{"package.a", "package.b"}
+	next := inbound.resolveSocketOwner(context.Background(), owner)
+	if len(next.PackageNames) != 0 {
+		t.Fatalf("cached an earlier single package: %+v", next)
+	}
+	if !slices.Equal(first.PackageNames, []string{"package.a"}) {
+		t.Fatal("mutated previously returned metadata")
+	}
+	raw, _ := cache.Get(key)
+	if len(raw.PackageNames) != 0 || !slices.Equal(raw.ProcessPaths, []string{"/system/bin/app_process64"}) {
+		t.Fatalf("cache was refined in place: %+v", raw)
+	}
+}
+
+func TestSocketOwnerWithoutStartTimeKeepsPackageUnknown(t *testing.T) {
+	inbound := &Inbound{logger: log.NewNOPFactory().Logger(), networkManager: &testNetworkManager{
+		packageManager: &testPackageManager{packagesByID: map[uint32][]string{10100: {"real.package"}}, idByPackage: map[string]uint32{"real.package": 10100}},
+	}}
+	info := inbound.resolveSocketOwner(context.Background(), SocketOwner{ProcessID: 1, UserID: 10100, Comm: "/app_process64"})
+	if len(info.PackageNames) != 0 || info.UserId != 10100 {
+		t.Fatalf("comm was treated as verified exe: %+v", info)
+	}
+}
+
+func TestSocketOwnerIncompleteReadIsNotCached(t *testing.T) {
+	inbound := &Inbound{logger: log.NewNOPFactory().Logger()}
+	owner := SocketOwner{ProcessID: 4000000001, UserID: 10100, StartTimeNs: 1234567890, Comm: "package.guess"}
+	info := inbound.resolveSocketOwner(context.Background(), owner)
+	if len(info.PackageNames) != 0 || info.UserId != 10100 {
+		t.Fatal(info)
+	}
+	key := socketOwnerCacheKey{ProcessID: owner.ProcessID, UserID: owner.UserID, StartTimeNs: owner.StartTimeNs}
+	if _, loaded := socketOwnerCache().Get(key); loaded {
+		t.Fatal("incomplete metadata was cached")
+	}
+}
+
+func TestSocketOwnerProcValidationChecksUIDAndStart(t *testing.T) {
+	raw, err := os.ReadFile("/proc/self/stat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticks, ok := parseStartTicks(raw)
+	if !ok {
+		t.Fatal("could not parse own start time")
+	}
+	inbound := &Inbound{logger: log.NewNOPFactory().Logger()}
+	owner := SocketOwner{ProcessID: uint32(os.Getpid()), UserID: uint32(os.Getuid()), StartTimeNs: ticks * 10000000}
+	if _, verified := inbound.resolveThroughProcDir(owner); !verified {
+		t.Fatal("own process did not verify")
+	}
+	owner.UserID++
+	if _, verified := inbound.resolveThroughProcDir(owner); verified {
+		t.Fatal("accepted a different creator UID")
+	}
+	owner.UserID--
+	owner.StartTimeNs += 10000000
+	if _, verified := inbound.resolveThroughProcDir(owner); verified {
+		t.Fatal("accepted an adjacent start tick")
+	}
+}
+
+type missingSocketOwnerSource struct{}
+
+func (missingSocketOwnerSource) LookupSocketOwner(uint64) (SocketOwner, error) {
+	return SocketOwner{}, os.ErrNotExist
+}
+func (missingSocketOwnerSource) TrackingMode() string { return "test" }
+func (missingSocketOwnerSource) IsClosed() bool       { return false }
+func (missingSocketOwnerSource) Close() error         { return nil }
+
+func TestUnknownSocketOwnerStopsGenericPackageFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		cookie uint64
+		source SocketOwnerSource
+	}{
+		{"no_cookie", 0, missingSocketOwnerSource{}},
+		{"no_source", 1, nil},
+		{"lookup_miss", 1, missingSocketOwnerSource{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inbound := &Inbound{logger: log.NewNOPFactory().Logger(), processTracker: tc.source}
+			info := inbound.lookupProcessInfo(context.Background(), tc.cookie)
+			if info == nil || info.UserId != -1 || info.ProcessID != 0 || len(info.PackageNames) != 0 {
+				t.Fatalf("unknown result permits fallback or asserts identity: %+v", info)
 			}
 		})
 	}
 }
 
-func TestRefineConnectionOwner(t *testing.T) {
-	t.Parallel()
-
-	// 模拟 MIUI 上 android.uid.system 共享 UID 的结果：
-	// FindProcessInfoByPID 会按 UID 填进一整组包名。
-	sharedUIDPackages := []string{"com.xiaomi.joyose", "com.xiaomi.misettings", "com.android.settings"}
-
-	for _, testCase := range []struct {
-		name         string
-		info         *adapter.ConnectionOwner
-		owner        SocketOwner
-		lookup       func(uint32) string
-		wantPaths    []string
-		wantPackages []string
-	}{
-		{
-			// 核心正确性用例：以系统 UID 运行的原生守护进程，绝不能带着一组
-			// 包名出去，否则写给某个应用的 package_name 规则会把它的流量分流走。
-			name: "原生守护进程清空包名",
-			info: &adapter.ConnectionOwner{
-				ProcessPaths: []string{"/system/bin/netd"},
-				PackageNames: sharedUIDPackages,
-			},
-			owner:        SocketOwner{ProcessID: 2068},
-			lookup:       func(uint32) string { return "" },
-			wantPaths:    []string{"/system/bin/netd"},
-			wantPackages: nil,
-		},
-		{
-			name: "厂商守护进程同样清空",
-			info: &adapter.ConnectionOwner{
-				ProcessPaths: []string{"/vendor/bin/minetd"},
-				PackageNames: sharedUIDPackages,
-			},
-			owner:        SocketOwner{ProcessID: 3130},
-			lookup:       func(uint32) string { return "" },
-			wantPaths:    []string{"/vendor/bin/minetd"},
-			wantPackages: nil,
-		},
-		{
-			// 精度用例：共享 UID 下从一组包名收敛到确切的那一个。
-			name: "应用进程收敛为单个包名",
-			info: &adapter.ConnectionOwner{
-				ProcessPaths: []string{"/system/bin/app_process64"},
-				PackageNames: sharedUIDPackages,
-			},
-			owner:  SocketOwner{ProcessID: 27693},
-			lookup: func(uint32) string { return "com.android.settings" },
-			// 应用刻意不填 ProcessPaths：app_process64 是 zygote 的路径而非
-			// 这个应用的，填了会在"路径优先"的展示与日志逻辑里挤掉包名。
-			wantPaths:    nil,
-			wantPackages: []string{"com.android.settings"},
-		},
-		{
-			name: "32 位应用进程",
-			info: &adapter.ConnectionOwner{
-				ProcessPaths: []string{"/system/bin/app_process32"},
-			},
-			owner:        SocketOwner{ProcessID: 100},
-			lookup:       func(uint32) string { return "com.example.app" },
-			wantPaths:    nil,
-			wantPackages: []string{"com.example.app"},
-		},
-		{
-			// cmdline 读不到但按 UID 已有结果时保留它：多个包名也好过没有。
-			name: "cmdline 不可读则保留 UID 推断",
-			info: &adapter.ConnectionOwner{
-				ProcessPaths: []string{"/system/bin/app_process64"},
-				PackageNames: sharedUIDPackages,
-			},
-			owner:        SocketOwner{ProcessID: 200, Comm: "settings"},
-			lookup:       func(uint32) string { return "" },
-			wantPaths:    nil,
-			wantPackages: sharedUIDPackages,
-		},
-		{
-			name: "cmdline 与 UID 都没有则退回 comm",
-			info: &adapter.ConnectionOwner{
-				ProcessPaths: []string{"/system/bin/app_process64"},
-			},
-			owner:        SocketOwner{ProcessID: 201, Comm: "com.example.ap"},
-			lookup:       func(uint32) string { return "" },
-			wantPaths:    nil,
-			wantPackages: []string{"com.example.ap"},
-		},
-		{
-			// 短命进程：连接建立时 procfs 已经消失，模块在 socket() 时抓的
-			// comm 是唯一幸存的线索。
-			name: "进程已退出时用 comm 兜底",
-			info: &adapter.ConnectionOwner{
-				PackageNames: sharedUIDPackages,
-			},
-			owner:        SocketOwner{ProcessID: 300, Comm: "curl"},
-			lookup:       func(uint32) string { return "" },
-			wantPaths:    []string{"curl"},
-			wantPackages: nil,
-		},
-		{
-			name:         "进程已退出且无 comm",
-			info:         &adapter.ConnectionOwner{PackageNames: sharedUIDPackages},
-			owner:        SocketOwner{ProcessID: 301},
-			lookup:       func(uint32) string { return "" },
-			wantPaths:    nil,
-			wantPackages: nil,
-		},
-		{
-			// readlink 对已删除的二进制会追加后缀，不剥掉则 process_path
-			// 规则匹配不上。
-			name: "剥掉已删除后缀",
-			info: &adapter.ConnectionOwner{
-				ProcessPaths: []string{"/data/local/tmp/probe (deleted)"},
-			},
-			owner:        SocketOwner{ProcessID: 400},
-			lookup:       func(uint32) string { return "" },
-			wantPaths:    []string{"/data/local/tmp/probe"},
-			wantPackages: nil,
-		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			refineConnectionOwner(testCase.info, testCase.owner, testCase.lookup)
-			if !slices.Equal(testCase.info.ProcessPaths, testCase.wantPaths) {
-				t.Errorf("ProcessPaths = %q, want %q", testCase.info.ProcessPaths, testCase.wantPaths)
-			}
-			if !slices.Equal(testCase.info.PackageNames, testCase.wantPackages) {
-				t.Errorf("PackageNames = %q, want %q", testCase.info.PackageNames, testCase.wantPackages)
-			}
-		})
+func TestStartTicksMatchRequiresExactTick(t *testing.T) {
+	if !startTicksMatch(123, 1239999999) || startTicksMatch(122, 1239999999) || startTicksMatch(124, 1239999999) {
+		t.Fatal("adjacent ticks accepted, or exact conversion rejected")
 	}
 }
 
-// TestRefineConnectionOwnerNil 确认 FindProcessInfoByPID 返回 nil 时不 panic。
-func TestRefineConnectionOwnerNil(t *testing.T) {
-	t.Parallel()
-	refineConnectionOwner(nil, SocketOwner{ProcessID: 1, Comm: "x"},
-		func(uint32) string { return "pkg" })
+func TestParseProcessUID(t *testing.T) {
+	for _, tc := range []struct {
+		raw string
+		uid uint32
+		ok  bool
+	}{
+		{"Name:\ttest\nUid:\t10100\t10100\t10100\t10100\n", 10100, true},
+		{"Uid:\t1000\t0\t0\t0\n", 1000, true},
+		{"Uid:\tinvalid\t0\t0\t0\n", 0, false},
+		{"Uid:\t1000\n", 0, false},
+		{"", 0, false},
+	} {
+		uid, ok := parseProcessUID([]byte(tc.raw))
+		if uid != tc.uid || ok != tc.ok {
+			t.Fatalf("%q: %d %v", tc.raw, uid, ok)
+		}
+	}
 }
-
 func TestParseStartTicks(t *testing.T) {
 	t.Parallel()
 

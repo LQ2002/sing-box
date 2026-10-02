@@ -240,6 +240,21 @@ raw-IP、PPP/PPPoE 和受支持的隧道链路应使用 `socket_assign`。local 
 已启用路径，路径级规则集策略仍彼此独立。shared 的 CIDR 与 MAC include 为或关系，
 任一 exclude 命中都优先绕过。
 
+## Android 连接归属
+
+本机连接按 socket cookie 查询创建者的 PID、UID 和进程启动时间。只有 procfs 中的
+启动时间、UID、可执行文件均通过核对，且包管理器把普通应用 UID 唯一映射到一个
+未声明共享 UID 的包时，才填写用于路由的 `package_name`。
+
+`cmdline`、`comm` 和进程启动时报告的包名不作为单次连接的包名证据。共享 UID、
+隔离 UID、SDK sandbox、系统 UID，以及记录缺失或验证失败的连接，包名保持未知，
+不会命中包名规则；查不到 socket 记录时也不会回退到按 UID 罗列候选包名的查询。
+已有的 UID 信息仍可用于 `user_id` 规则，原生进程保留经核对的可执行文件路径。
+
+这里的连接归属不同于 `local.include_package` / `local.exclude_package`：这两个
+接管选项仍将包名解析成 UID，并作用于该 UID 的全部流量。下游设备流量不具有本机
+Android 包归属。
+
 ## 诊断
 
 - `sing-box tools ebpf status` 对所选数据面执行不挂载的内核能力和对象加载预检。

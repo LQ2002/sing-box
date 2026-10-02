@@ -256,6 +256,25 @@ private-address, and the path-specific rule-set bypass. Path-specific rule-set
 policies remain independent. Shared CIDR and MAC includes are OR'ed;
 any matching exclude selector takes precedence.
 
+## Android connection attribution
+
+Local connections use the socket cookie to look up the creator's PID, UID, and
+process start time. A routing `package_name` is populated only when procfs
+start time, UID, and executable checks pass and the package manager maps an
+ordinary application UID to exactly one package without a declared shared UID.
+
+Neither `cmdline`, `comm`, nor a process-start package establishes the package
+behind each connection. Package identity stays unknown for shared, isolated,
+SDK-sandbox, and system UIDs, or when records are missing or validation fails.
+Those connections do not match package rules. A socket lookup miss also does
+not fall back to a generic lookup that lists candidate packages by UID.
+Available UID metadata still supports `user_id` rules; native processes retain
+their verified executable paths.
+
+This differs from `local.include_package` / `local.exclude_package`, which
+still resolve packages to UIDs and apply interception policy to all traffic
+with those UIDs. Downstream device traffic has no local Android package owner.
+
 ## Diagnostics
 
 - `sing-box tools ebpf status` performs a non-attaching kernel and object-load
