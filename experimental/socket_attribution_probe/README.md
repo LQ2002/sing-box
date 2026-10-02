@@ -38,6 +38,10 @@
 | 18 | 创建 socket 的线程名不能作为可靠的身份信号 | 当次样本 | `threadscan/`：60 秒内系统 UID 只采到互联服务的 2 个 socket，线程名是自动生成的 `Thread-17`；`system_server` 和电话进程在这段时间里没有新建 socket（`results/threadscan.tsv`） |
 | 19 | `ApplicationStartInfo`（`dumpsys activity start-info`）会持久化每个包的启动记录，里面明确有 package、process、pid，但**不完整** | 已证实 | 2899 条记录里 2285 条 pid 为 0；正在运行的安全中心、互联服务进程找不到对应记录，只有电话进程能找到（`results/start-info.txt`）。只适合作为 sing-box 重启后的补充来源 |
 | 20 | `dynamic_instrumentation`（`IDynamicInstrumentationManager`）和 `uprobestats_bridge` 两个系统服务都已注册 | 已证实 | `service list`。root 能不能直接调用、需要什么权限，**未验证** |
+| 21 | 纯 eBPF 可以在 socket **发送数据时**拿到 cookie 和发送线程：`tp_btf` 挂在 `sock_send_length`（`net/socket.c` 的 `sock_sendmsg_nosec()` 里触发，覆盖 sendto/sendmsg/sendmmsg/write，即 TCP、UDP 和 QUIC），对带类型的 `struct sock *` 调用 `bpf_get_socket_cookie()` | 已证实 | `sendtrace/`：verifier 接受、挂载成功；90 秒内记录到 4753 个 socket 的首次发送，其中对照时仍打开的网络 socket 160 个（TCP 126、UDP 34），全部能用 cookie 和 SOCK_DIAG 对上。发送线程的 cgroup 与 socket 自带的 cgroup 在 137/160 个上相同。这解决了第 15 条里"kprobe 拿不到 cookie"的问题，也能覆盖根 cgroup 里的 root 进程 |
+| 22 | `tp_btf` 挂在 `binder_transaction_received` 上可以读到调用方的 PID 和 UID（`binder_transaction.from_pid` 在第 48 字节、`sender_euid` 在第 132 字节，偏移取自设备 BTF） | 已证实 | `sendtrace/`：例如 keystore2 在收到设置（UID 1000）的 Binder 调用 0.5ms 后发送，cameraserver 在收到 system_server 调用后发送 |
+| 23 | 用"发送前不久收到过谁的 Binder 调用"来推断 system_server 替哪个 App 联网 | **未能评估** | 90 秒内 system_server 没有发送任何网络数据，没有样本。而且这只是时间上的相关，不是权威归属：工作交给其他线程异步执行时，关联就断了。只能作为诊断线索，不能用于分流规则 |
+| 24 | `sock_send_length` 对所有 socket 类型都触发，包括 unix 和 netlink，而且是**每次发送都触发** | 已证实 | 4753 个里只有 160 个是对照时仍打开的网络 socket。正式使用时应在程序开头过滤：只处理根 cgroup（ID 为 1）的发送，Android 启动的进程直接用 socket 自带的 cgroup，这样对 App 流量几乎没有额外开销 |
 
 ## 各工具
 
