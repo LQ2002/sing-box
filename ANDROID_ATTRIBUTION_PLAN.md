@@ -206,10 +206,15 @@ __sock_create 末尾 trace_android_vh_sock_create        [源码] net/socket.c:1
 ```
 
 **为何不采用 AOSP/zygote 启动登记（TASK_STORAGE token）**：
-- 这台设备 bootloader 锁定（`ro.boot.verifiedbootstate=green`、`vbmeta.device_state=locked`），
-  netd 的 BPF 程序在签名的 mainline APEX `com.android.tethering/etc/bpf/mainline/netd.o` 中
-  [实测]，无法修改 system_server/zygote/netd；唯一可行入口是 Zygisk 向每个 App 注入，
-  用户此前不接受这条路。
+- **更正（2026-10-04）**：原先写的“bootloader 锁定（`ro.boot.verifiedbootstate=green`、
+  `vbmeta.device_state=locked`）”是错的。用户指出设备已解锁 BL；`/proc/bootconfig` 实测为
+  `androidboot.verifiedbootstate = "orange"`、`androidboot.vbmeta.device_state = "unlocked"`，
+  `getprop` 读到的 green/locked 是 root 模块（如 TA_enhanced、oh_my_keymint）伪装的属性，
+  不能作为证据。所以“无法修改 system_server/zygote/netd”不成立：netd 的 BPF 程序仍在签名的
+  mainline APEX `com.android.tethering/etc/bpf/mainline/netd.o` 中，但解锁设备上替换或覆盖它
+  技术上可行（代价是随 mainline 更新失效、需自行维护，用户已明确不接受自定义内核，系统分区
+  改动未经用户同意不做）。本设计不依赖这条理由：下面两条以及 v2 的实测结果已足以支持选型；
+  如用户愿意承担系统侧改动，AOSP/zygote 登记可作为后续可选研究，而非被设备状态排除。
 - 启动登记能得到的是“进程为哪个包启动”。对多包共享进程，这与 `am_proc_start` 同源，
   后续载入同一进程的其他包无法区分（阶段 1 探针 B 被误认为 A）[实测]。因此它对
   真正剩余的歧义没有额外区分力，只能缩短事后查询。
@@ -363,10 +368,39 @@ native 进程的可执行路径展示，并用 exe inode 校验。Manifest 索�
   exec 后 `ProcessPaths` 被拦截的用户态逻辑由单元测试覆盖（`TestIdentityV2ExeInodeGuardsProcessPath`）。
 - 真机完整服务：真实 App 冷/热启动，普通/共享 UID、多包进程、native、netd DNS、
   GMS 代发；与 `dumpsys activity processes` 的 `packageList` 逐条比对，统计正确/错误/未知/漏采。
+  **[已通过 2026-10-04，主命名空间、生产服务经用户同意暂停]**（`experimental/creator_v2_probe/fullservice/`：
+  `fullservice.sh accuracy`、`analyze.py`；结果 `results/fullservice/accuracy-analysis.txt`）。
+  `b1af4410` 构建、`config-accuracy.json`（socket_creator 开启、按 package_name 路由），桥接模块
+  capture_all=1，冷启动 Chrome、微信、安全中心、哔哩哔哩并触发 NTP，180 s 内 18 份 dumpsys 快照作
+  真值。46 条带 PID 的归属日志：**正确 22、错误 0**、未知 2（system_server：`system` 被 5 个包声明，
+  按设计判多包）、native 21（netd，路径经 exe inode 核验）、组级 1（`com.android.vending`）。正确项
+  包括 UID 1000 的 `com.miui.securitycenter`、`.remote`、`:cache` 三个进程（E2 按创建时名称），以及
+  微信 `:push`/`:support`、哔哩哔哩 `:download`/`:pushservice`/`:web`、GMS、WebView 服务等。
+  请求方：GMS（10136）的 socket 被 netd 记账给 Chrome（10309）与 `com.binance.dev`（10466），只进
+  debug 日志，路由按 GMS；netd 的 DNS socket sk_uid 为 1051（AID_DNS），本系统上 DNS 看不到具体
+  App 请求方（124 条）。未覆盖：SDK 沙箱（Killswitch 开启）、DownloadManager 主动下载、IPv6 回包。
+  未提交原始日志与 dumpsys（含用户流量目的地址与进程列表）。
 - 完整 sing-box 入口 TCP/UDP、IPv4/IPv6、delivery/shared，校验实际载荷回包。
 - 无模块、半套 pins、v1 残留、netd 表缺失的预期行为。
 - 仅旧方案与仅新方案交替配对：建连与回包尾延迟、CPU、内核与用户态内存、吞吐、
-  长时间持有/释放。
+  长时间持有/释放。**[已执行 2026-10-04]** 原文转录见
+  `experimental/creator_v2_probe/results/fullservice/paired-and-memory.md`。旧 = `7c12b1de` +
+  `sb_sockowner_probe.ko`；新 = HEAD + 桥接 + producer v2；隔离 netns veth 回显，UID 1000、
+  argv[0] `com.miui.securitycenter.remote`、按 package_name 路由（旧只得路径，新经 E2 得包名）。
+  - 首轮（启动 3 s 后即加压）新版 connect p50 多约 40 µs、吞吐低 10–19%：原因是启动期工作与
+    负载重叠（新版启动 CPU 约 50 tick，旧版约 20 tick，主要是解码内核 BTF 加载 producer 和
+    Manifest 索引预热）。等待 20 s 后两轮配对：吞吐、connect/数据/事务 p50/p99、每千连接 CPU
+    均无可测差异；单轮水平随 CPU 频率档位在约 42/82/92 MiB/s 间跳变，与版本无关。
+  - 内存：默认构建新版 RSS 高 13–30 MB。smaps 与 `creator_memprobe` 证明不是活对象：加载后
+    Go 堆在用约 1 MB，其余是运行时已用 MADV_FREE 归还、但内核无压力时仍计入 RSS 的页。Go 只在
+    GOOS=linux 默认 MADV_DONTNEED（`runtime1.go parseRuntimeDebugVars`），android 不是。
+    `release/LDFLAGS` 的 `godebugDefault` 加 `madvdontneed=1` 后：creator 33 MB、仅模块 32 MB、
+    不归属 31 MB，差距消失；该设置影响整个 Android 二进制，与 Linux 默认一致。尝试过的
+    `debug.FreeOSMemory()` 在两种设置下都无效果，未保留。
+  - socket() 内核开销（`creator-v2-probe sockbench`，无钩子/旧模块/新桥接交替，含绑核 3×3 段）：
+    噪声 1–2 µs，三态无法区分；与独立探针测得的 v2 段约 2 µs 一致而不矛盾（全机约 1–2 socket/s）。
+  - 未测：功耗、长时间持有/释放下的内核内存（SK_STORAGE 随 socket 释放，模块按 free 钩子回收，
+    均为设计保证，未量化）。
 
 ### 真机预验证（2026-10-03，独立探针，未接入生产）
 
@@ -475,7 +509,7 @@ SELinux Enforcing，`/sys/kernel/btf/vmlinux` sha256 `37d2c7e7…5f35` 与桥接
 | 1 | 修复包表刷新与查询一致性 | **已完成**（本地测试与真机验收均通过） | 代码 `35624e63`；记录见“阶段 1 实施记录” |
 | 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | **已完成**（本地、真机与真实 App 验收均通过） | sing-ebpf `3c1b28f`（已推送）；应用依赖 `6252b171`；记录见“阶段 2 实施记录” |
 | 3 | sing-box 接入新归属路径并完成整链路验收 | **归属修复、持久创建者第一轮集成及隔离真机验证完成；目标设计与完整验收仍有未完成项** | 修复 `cae57485`；创建者集成 `ee0208de`；实际数据面证据与剩余项见阶段 3 |
-| 目标设计 | creator v2（创建时进程名哈希、exe inode）、netd 请求方、E1–E3 解析 | **实现完成，本机与隔离真机验收通过；整服务真实 App 验收与配对性能未做**（需停用生产服务，待用户同意）；sing-ebpf 新提交未推送、`go.mod` 未升级 | 分支 `claude/attribution-target-design`；sing-ebpf `aa849f4`、`6ab9da7`；见“Claude 目标设计”的预验证与验收矩阵 |
+| 目标设计 | creator v2（创建时进程名哈希、exe inode）、netd 请求方、E1–E3 解析 | **实现完成；本机、隔离真机、整服务真实 App（正确 22/错误 0）与新旧配对（稳态无可测差异，内存经 `madvdontneed=1` 持平）均已验收**；sing-ebpf 已推送（`6ab9da7`），`go.mod` 已升级（`6f291cf8`） | 分支 `claude/attribution-target-design`；sing-ebpf `aa849f4`、`6ab9da7`；见“Claude 目标设计”的预验证与验收矩阵 |
 
 阶段 1、2 已有实现及验收记录；阶段 3 已修正 cgroup 进程归属假设，并补做真实数据回包验证。
 阶段是否通过以实际证据为准；未执行和不适用的检查分别列出，不用勾选掩盖未完成项。

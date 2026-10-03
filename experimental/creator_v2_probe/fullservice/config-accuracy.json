@@ -1,0 +1,29 @@
+{
+  "log": {"level": "debug", "output": "/data/local/tmp/sbo-full/run/accuracy.log", "timestamp": true},
+  "dns": {"servers": [{"type": "local", "tag": "local"}]},
+  "inbounds": [
+    {
+      "type": "ebpf",
+      "tag": "ebpf-in",
+      "network": ["tcp", "udp"],
+      "udp_timeout": "5m",
+      "tc_priority": 1,
+      "local": {
+        "enabled": true,
+        "data_plane": "tc",
+        "dns_mode": "respect_policy",
+        "ipv6": true,
+        "bypass_private_address": true,
+        "socket_creator": {"enabled": true}
+      }
+    }
+  ],
+  "outbounds": [{"type": "direct", "tag": "direct"}],
+  "route": {
+    "rules": [
+      {"package_name": ["com.android.chrome", "com.miui.securitycenter", "com.google.android.gms", "com.tencent.mm"], "outbound": "direct"}
+    ],
+    "final": "direct",
+    "default_domain_resolver": "local"
+  }
+}

@@ -1,0 +1,5 @@
+# requester lines (socket of uid X works for uid Y), counts
+    124 socket of uid 0 works for uid 1051 ()
+      2 socket of uid 10136 works for uid 10309 (com.android.chrome)
+      1 socket of uid 10136 works for uid 10466 (com.binance.dev)
+# outbound connections in run: 514

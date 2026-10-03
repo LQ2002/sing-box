@@ -1,0 +1,47 @@
+ATTRIBUTED_LINES 46 {'no_truth': 21, 'correct': 22, 'group_level': 1, 'unknown': 2}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.android.chrome", "pid": 14607, "user": "u0_a309", "path": "", "truth": [["com.android.chrome", 10309, ["com.android.chrome"]]], "class": "correct"}
+{"package": "com.android.vending", "pid": 0, "user": "u0_a128", "path": "", "class": "group_level"}
+{"package": "com.google.android.gms", "pid": 20351, "user": "u0_a136", "path": "", "truth": [["com.google.android.gms", 10136, ["com.google.android.gms"]]], "class": "correct"}
+{"package": "com.android.vending", "pid": 28886, "user": "u0_a128", "path": "", "truth": [["com.android.vending:background", 10128, ["com.android.vending"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.tencent.mm", "pid": 1302, "user": "u0_a356", "path": "", "truth": [["com.tencent.mm:push", 10356, ["com.tencent.mm"]]], "class": "correct"}
+{"package": "com.tencent.mm", "pid": 29514, "user": "u0_a356", "path": "", "truth": [["com.tencent.mm:push", 10356, ["com.tencent.mm"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.tencent.mm", "pid": 29601, "user": "u0_a356", "path": "", "truth": [["com.tencent.mm", 10356, ["com.tencent.mm"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.tencent.mm", "pid": 30981, "user": "u0_a356", "path": "", "truth": [["com.tencent.mm:support", 10356, ["com.tencent.mm"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.google.android.webview", "pid": 31402, "user": "u0_a196", "path": "", "truth": [["com.google.android.webview:webview_service", 10196, ["com.google.android.webview"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.mobiletools.systemhelper", "pid": 23046, "user": "u0_a106", "path": "", "truth": [["com.mobiletools.systemhelper", 10106, ["com.mobiletools.systemhelper"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "tv.danmaku.bili", "pid": 29116, "user": "u0_a460", "path": "", "truth": [["tv.danmaku.bili", 10460, ["tv.danmaku.bili"]]], "class": "correct"}
+{"package": "tv.danmaku.bili", "pid": 32672, "user": "u0_a460", "path": "", "truth": [["tv.danmaku.bili:download", 10460, ["tv.danmaku.bili"]]], "class": "correct"}
+{"package": "tv.danmaku.bili", "pid": 32693, "user": "u0_a460", "path": "", "truth": [["tv.danmaku.bili:pushservice", 10460, ["tv.danmaku.bili"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.miui.securitycenter", "pid": 32622, "user": "1000", "path": "", "truth": [["com.miui.securitycenter.remote", 1000, ["com.miui.securitycenter"]]], "class": "correct"}
+{"package": "com.xiaomi.xmsf", "pid": 12215, "user": "u0_a205", "path": "", "truth": [["com.xiaomi.xmsf", 10205, ["com.xiaomi.xmsf"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.miui.securitycenter", "pid": 1740, "user": "1000", "path": "", "truth": [["com.miui.securitycenter", 1000, ["com.miui.securitycenter"]]], "class": "correct"}
+{"package": "com.miui.securitycenter", "pid": 32622, "user": "1000", "path": "", "truth": [["com.miui.securitycenter.remote", 1000, ["com.miui.securitycenter"]]], "class": "correct"}
+{"package": "com.lbe.security.miui", "pid": 1526, "user": "u0_a214", "path": "", "truth": [["com.lbe.security.miui", 10214, ["com.lbe.security.miui"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.miui.securitycenter", "pid": 4054, "user": "1000", "path": "", "truth": [["com.miui.securitycenter:cache", 1000, ["com.miui.securitycenter"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.miui.packageinstaller", "pid": 4392, "user": "u0_a53", "path": "", "truth": [["com.miui.packageinstaller", 10053, ["com.miui.packageinstaller"]]], "class": "correct"}
+{"package": "tv.danmaku.bili", "pid": 5020, "user": "u0_a460", "path": "", "truth": [["tv.danmaku.bili:web", 10460, ["tv.danmaku.bili"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 3818, "user": "1000", "path": "", "truth": [["system", 1000, ["android", "com.android.providers.settings", "com.android.server.telecom"]]], "class": "unknown"}
+{"package": "", "pid": 3818, "user": "1000", "path": "", "truth": [["system", 1000, ["android", "com.android.providers.settings", "com.android.server.telecom"]]], "class": "unknown"}
+{"package": "com.miui.securitycenter", "pid": 4054, "user": "1000", "path": "", "truth": [["com.miui.securitycenter:cache", 1000, ["com.miui.securitycenter"]]], "class": "correct"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.miui.weather2", "pid": 6849, "user": "u0_a295", "path": "", "truth": [["com.miui.weather2", 10295, ["com.miui.weather2"]]], "class": "correct"}

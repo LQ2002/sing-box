@@ -1,0 +1,12 @@
+{
+  "log": {"level": "info", "output": "/data/local/tmp/sbe3-fix/perf-attribution.log", "timestamp": true},
+  "inbounds": [{
+    "type": "ebpf", "tag": "isolated-ebpf", "network": ["tcp"],
+    "local": {"enabled": true, "data_plane": "tc", "dns_mode": "off", "ipv6": false, "bypass_private_address": false, "socket_creator": {"enabled": true}}
+  }],
+  "outbounds": [{"type": "direct", "tag": "direct"}],
+  "route": {
+    "rules": [{"package_name": ["com.miui.securitycenter"], "outbound": "direct"}],
+    "final": "direct", "default_interface": "e3client"
+  }
+}
