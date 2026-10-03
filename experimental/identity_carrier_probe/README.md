@@ -44,9 +44,15 @@ which Android package owns a process. AMS/zygote registration, isolated process
 and SDK sandbox policy, registration ordering before application code, and
 shared-process package ambiguity remain separate integration work.
 
-Accepted server sockets, fork/exec semantics, Android application traffic,
-production routing, performance, power consumption, and long-running memory
-behavior are outside the first test matrix. Registration changes use explicit
+The extended matrix uses a native C helper for real fork, leader/nonleader exec,
+and accept. It verifies that fork needs a new task registration, nonleader exec
+loses the old leader's registration, and accepted sockets have no identity in
+this no-CLONE map. A passing boundary test does not mean automatic attribution
+works for that case. Inherited, transferred, and pre-exec sockets keep their
+original creation snapshot.
+
+Android application traffic, production routing, io_uring, performance, power
+consumption, and long-running memory behavior remain untested. Registration changes use explicit
 barriers; concurrent TASK_STORAGE updates during socket creation are not tested.
 The kernel birth timestamp is cross-checked at `/proc` clock-tick precision.
 The module has no owner hash, free
@@ -61,6 +67,8 @@ generated files separate from the existing production module's build products.
 Build BPF with `bash build-bpf.sh [ACK-source-directory]`; its output is
 `build/probe.bpf.o`. The Go runner uses its own nested `go.mod`; run
 `GO_BIN=/path/to/go bash build-runner.sh` to test and cross-compile it.
+Run `bash build-native.sh` for the Android native fixture. It defaults to the
+existing NDK r29 arm64/API 35 compiler; `NATIVE_CC` can override its location.
 
 `run-device.sh` is the outer Android root harness. It expects its inputs under
 `/data/local/tmp/sbo-identity-carrier-20261003` and takes the existing production
@@ -89,10 +97,18 @@ su -c 'sh /data/local/tmp/sbo-identity-carrier-20261003/run-device.sh 11765 \
 `11765` was the protected production service PID for this recorded run, not a
 constant for other devices or boots. The uploaded executable must be named
 `identity-carrier-probe` and executable. The uploaded module is
-`sbo_identity_bridge.ko`. No files are installed into boot or service directories.
+`sbo_identity_bridge.ko`. Also upload the executable `identity-native-worker`
+beside the runner; `-native-worker PATH` can override its location. No files are
+installed into boot or service directories.
 
-On 2026-10-03, two complete device runs passed all seven groups (18 sockets per
-run). This establishes the synthetic task-to-socket-to-first-packet carrier on
-the recorded kernel. The sole plan records hashes, the cleanup correction, and
-the remaining integration limits; it does not claim real package attribution or
-a performance improvement.
+On 2026-10-03, the first matrix passed seven groups (18 sockets). The extended
+matrix passed 15 groups: 35 creation snapshots, 34 matching first-packet records,
+one listener that does not send, and one accepted child correctly found to lack
+identity despite verified payload delivery. It intentionally injects two invalid
+registrations; their rejection counts are expected. The final observed non-INET
+filter count was one AF_UNIX socket, reported separately from failures.
+
+`python3 audit-log.py results/lifecycle-run02.txt` independently checks the
+extended log using exact integers, including old/new identities around fork and
+exec. The sole plan records hashes, checks, and remaining limits. This does not
+establish real package attribution or a performance improvement.

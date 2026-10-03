@@ -112,6 +112,15 @@ struct {
     __type(value, __u64);
 } capture_stats SEC(".maps");
 
+// Runtime libraries can create AF_UNIX or other non-INET sockets in the selected
+// task. Report their actual family separately; filtering them is intentional.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 64);
+    __type(key, __u32);
+    __type(value, __u64);
+} filtered_families SEC(".maps");
+
 static __always_inline void count_stat(__u32 key)
 {
     __u64 *counter = bpf_map_lookup_elem(&capture_stats, &key);
@@ -131,6 +140,10 @@ int BPF_PROG(capture_identity, struct sock *sk)
 
     __u16 family = sk->__sk_common.skc_family;
     if (family != 2 && family != 10) {
+        __u32 key = family;
+        __u64 *counter = bpf_map_lookup_elem(&filtered_families, &key);
+        if (counter)
+            __sync_fetch_and_add(counter, 1);
         count_stat(STAT_UNSUPPORTED_FAMILY);
         return 0;
     }

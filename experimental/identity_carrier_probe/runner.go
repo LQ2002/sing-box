@@ -26,6 +26,8 @@ type runner struct {
 	moduleParameter     string
 	generation          uint64
 	created, registered uint64
+	mismatched          uint64
+	nativeWorker        string
 	seenCookies         map[uint64]bool
 	seenTokens          map[[2]uint64]bool
 }
@@ -183,17 +185,25 @@ type testSocket struct {
 
 func (r *runner) create(c *child, id uint32, family, kind uint16, reg registration, registered, nonleader bool) (testSocket, error) {
 	reply, fd, err := c.request(message{Op: "create", SocketID: id, Family: family, SockType: kind, Nonleader: nonleader}, true)
-	s := testSocket{id: id, fd: fd, family: family, kind: kind}
 	if err != nil {
-		return s, err
+		return testSocket{}, err
+	}
+	return r.verifyCreated(c.hello, reply, fd, id, family, kind, reg, registered, nonleader)
+}
+
+func (r *runner) verifyCreated(hello, reply message, fd int, id uint32, family, kind uint16, reg registration, registered, nonleader bool) (testSocket, error) {
+	s := testSocket{id: id, fd: fd, family: family, kind: kind}
+	var err error
+	if reply.PID != hello.PID || reply.UID != hello.UID || reply.SocketID != id || reply.Family != family || reply.SockType != kind {
+		return s, fmt.Errorf("created socket metadata mismatch: %+v", reply)
 	}
 	if reply.Cookie == 0 || r.seenCookies[reply.Cookie] {
 		return s, fmt.Errorf("zero or repeated SO_COOKIE %d", reply.Cookie)
 	}
-	if nonleader && reply.TID == c.hello.PID {
+	if nonleader && reply.TID == hello.PID {
 		return s, fmt.Errorf("nonleader case ran on leader")
 	}
-	s.want = expectedIdentity{Registration: reg, Cookie: reply.Cookie, TGID: c.hello.PID, TID: reply.TID, UID: c.hello.UID, StartTicks: c.hello.StartTicks, Family: family, Registered: registered}
+	s.want = expectedIdentity{Registration: reg, Cookie: reply.Cookie, TGID: hello.PID, TID: reply.TID, UID: hello.UID, StartTicks: hello.StartTicks, Family: family, Registered: registered}
 	key := uint32(fd)
 	var captured identity
 	if err = r.coll.Maps["socket_identity"].Lookup(&key, &captured); err != nil {
@@ -308,6 +318,9 @@ func (r *runner) sendAndObserve(c *child, s testSocket, afterExit bool) error {
 }
 
 func (r *runner) runCase(ctx context.Context, name string) (err error) {
+	if strings.HasPrefix(name, "native_") {
+		return r.runNativeCase(ctx, name)
+	}
 	uid := 2000
 	if name == "root_matrix" {
 		uid = 0
@@ -318,7 +331,7 @@ func (r *runner) runCase(ctx context.Context, name string) (err error) {
 	}
 	defer func() { err = errors.Join(err, c.close()) }()
 	var reg registration
-	registered := name != "unregistered"
+	registered := name != "unregistered" && name != "late_registration"
 	if registered {
 		reg, err = r.register(c)
 		if err != nil {
@@ -326,6 +339,8 @@ func (r *runner) runCase(ctx context.Context, name string) (err error) {
 		}
 	}
 	switch name {
+	case "registration_uid_mismatch", "registration_tgid_mismatch", "registration_deleted", "late_registration":
+		return r.registrationBoundary(c, name, reg)
 	case "root_matrix", "shell_matrix_a", "shell_matrix_b":
 		id := uint32(0)
 		for _, family := range []uint16{unix.AF_INET, unix.AF_INET6} {
@@ -395,9 +410,11 @@ func (r *runner) runCase(ctx context.Context, name string) (err error) {
 	return c.exit()
 }
 
-var caseNames = []string{"root_matrix", "shell_matrix_a", "shell_matrix_b", "token_snapshot", "unregistered", "nonleader", "creator_exit"}
+var caseNames = []string{"root_matrix", "shell_matrix_a", "shell_matrix_b", "token_snapshot", "unregistered", "nonleader", "creator_exit",
+	"registration_uid_mismatch", "registration_tgid_mismatch", "registration_deleted", "late_registration",
+	"native_fork", "native_leader_exec", "native_nonleader_exec", "native_accept"}
 
-func run(ctx context.Context, object, moduleParameter string) (err error) {
+func run(ctx context.Context, object, moduleParameter, nativeWorker string) (err error) {
 	completed := make(map[string]bool)
 	notRunReason := "setup failed before this case"
 	defer func() {
@@ -445,7 +462,7 @@ func run(ctx context.Context, object, moduleParameter string) (err error) {
 		return fmt.Errorf("BPF collection load: %+v", e)
 	}
 	defer coll.Close()
-	for _, name := range []string{"task_identity", "socket_identity", "observed_by_cookie", "capture_stats"} {
+	for _, name := range []string{"task_identity", "socket_identity", "observed_by_cookie", "capture_stats", "filtered_families"} {
 		if coll.Maps[name] == nil {
 			return fmt.Errorf("missing BPF map %s", name)
 		}
@@ -461,7 +478,7 @@ func run(ctx context.Context, object, moduleParameter string) (err error) {
 	}
 	defer func() { err = errors.Join(err, observer.Close()) }()
 	emit("setup", map[string]any{"network_namespace": selfNS, "init_network_namespace": initNS, "ifindex": iface.Index, "pinned": false, "object": object, "scope": "synthetic process-instance token transport; no APK attribution or throughput claim"})
-	r := &runner{coll: coll, ifindex: uint32(iface.Index), moduleParameter: moduleParameter, seenCookies: map[uint64]bool{}, seenTokens: map[[2]uint64]bool{}}
+	r := &runner{coll: coll, ifindex: uint32(iface.Index), moduleParameter: moduleParameter, nativeWorker: nativeWorker, seenCookies: map[uint64]bool{}, seenTokens: map[[2]uint64]bool{}}
 	var failures []error
 	for _, name := range caseNames {
 		if ctx.Err() != nil {
@@ -486,11 +503,26 @@ func run(ctx context.Context, object, moduleParameter string) (err error) {
 			failures = append(failures, e)
 		}
 	}
-	emit("capture_stats", map[string]any{"values": stats, "expected_created": r.created, "expected_registered": r.registered, "keys": []string{"hook_calls", "storage_create_failed", "registered", "unregistered", "registration_mismatch", "observation_insert_failed", "unsupported_family", "missing_birth", "duplicate_create", "missing_cookie"}})
-	if stats[0] != r.created || stats[2] != r.registered || stats[3] != r.created-r.registered {
+	filtered := make(map[uint32]uint64)
+	var filteredTotal uint64
+	for key := uint32(0); key < 64; key++ {
+		var count uint64
+		if e := coll.Maps["filtered_families"].Lookup(&key, &count); e != nil {
+			failures = append(failures, e)
+		} else if count > 0 {
+			filtered[key] = count
+			filteredTotal += count
+		}
+	}
+	emit("filtered_socket_families", map[string]any{"counts": filtered, "total": filteredTotal, "meaning": "non-INET sockets intentionally excluded; family 1 is AF_UNIX"})
+	if filteredTotal != stats[6] {
+		failures = append(failures, fmt.Errorf("unaccounted filtered socket family: histogram=%d counter=%d", filteredTotal, stats[6]))
+	}
+	emit("capture_stats", map[string]any{"values": stats, "expected_created": r.created, "expected_registered": r.registered, "expected_mismatched": r.mismatched, "keys": []string{"hook_calls", "storage_create_failed", "registered", "unregistered", "registration_mismatch", "observation_insert_failed", "unsupported_family", "missing_birth", "duplicate_create", "missing_cookie"}})
+	if stats[0] != r.created || stats[2] != r.registered || stats[3] != r.created-r.registered || stats[4] != r.mismatched {
 		failures = append(failures, fmt.Errorf("capture totals disagree with verified sockets"))
 	}
-	for _, k := range []int{1, 4, 5, 6, 7, 8, 9} {
+	for _, k := range []int{1, 5, 7, 8, 9} {
 		if stats[k] != 0 {
 			failures = append(failures, fmt.Errorf("capture error counter %d=%d", k, stats[k]))
 		}

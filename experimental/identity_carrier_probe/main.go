@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -33,6 +34,7 @@ func main() {
 	uid := flag.Int("worker-uid", 0, "internal worker UID (0 or 2000)")
 	object := flag.String("object", "probe.bpf.o", "BPF object containing creation producer and private TCX observer")
 	parameter := flag.String("module-param", "/sys/module/sbo_identity_bridge/parameters/target_tgid", "already-loaded diagnostic bridge target parameter")
+	native := flag.String("native-worker", "", "native lifecycle fixture (defaults to identity-native-worker beside this executable)")
 	timeout := flag.Duration("timeout", 90*time.Second, "maximum parent run duration")
 	flag.Parse()
 	if *worker {
@@ -46,13 +48,21 @@ func main() {
 	defer cancel()
 	ctx, deadline := context.WithTimeout(ctx, *timeout)
 	defer deadline()
-	err := run(ctx, *object, *parameter)
+	if *native == "" {
+		executable, e := os.Executable()
+		if e != nil {
+			fmt.Fprintln(os.Stderr, e)
+			os.Exit(1)
+		}
+		*native = filepath.Join(filepath.Dir(executable), "identity-native-worker")
+	}
+	err := run(ctx, *object, *parameter, *native)
 	emit("run_result", map[string]any{"status": func() string {
 		if err != nil {
 			return "fail"
 		}
 		return "pass"
-	}(), "error": errorText(err), "unrun_extensions": []string{"pure fork inheritance", "exec/nonleader exec", "accept clone", "io_uring", "AOSP package registration", "production sing-ebpf assignment integration"}})
+	}(), "error": errorText(err), "unrun_extensions": []string{"io_uring", "concurrent registration updates", "AOSP package registration", "production sing-ebpf assignment integration"}})
 	if err != nil {
 		os.Exit(1)
 	}
