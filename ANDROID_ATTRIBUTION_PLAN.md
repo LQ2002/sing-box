@@ -19,10 +19,10 @@
 | 阶段 | 交付内容 | 状态 | 代码提交 / 验收证据 |
 |---|---|---|---|
 | 1 | 修复包表刷新与查询一致性 | **已完成**（本地测试与真机验收均通过） | 代码 `35624e63`；记录见“阶段 1 实施记录” |
-| 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | **实现与验证基本完成**；真实 App 真值与远程推送待办 | sing-ebpf `3c1b28f`（未推送）；记录见“阶段 2 实施记录” |
+| 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | **实现与真机验收完成**；仅剩远程推送待确认 | sing-ebpf `3c1b28f`（未推送）；记录见“阶段 2 实施记录” |
 | 3 | sing-box 接入新归属路径并完成整链路验收 | 待执行，依赖阶段 2 | 尚无实施提交 |
 
-阶段 1 已完成并通过真机验收；阶段 2 代码已提交并完成内核层真机验收，剩真实 App 真值与远程推送；阶段 3 未开始。
+阶段 1 已完成并通过真机验收；阶段 2 代码已提交并完成真机验收（含真实 App 真值），仅剩远程推送；阶段 3 未开始。
 
 ## 执行纪律
 
@@ -162,10 +162,9 @@
 - [x] 建立 TCP 判定缓存后再更新规则，确认后续判定会刷新；UDP 按目的地处理，不套用
   TCP 的每 socket 结论。未受策略变更影响的长连接不因更新主动断开。
 - [x] 完整 ABI 测试与 verifier/真机加载通过，相关既有后端测试通过。
-- [ ] 实际数据面核对新增字段与应用真值；提供与原 TC 程序配对的开销测量。
+- [x] 实际数据面核对新增字段与应用真值；提供与原 TC 程序配对的开销测量。
   已有约 1.5 ns 是单项 helper 微基准，不是新增结构和整段代码的最终成本。
-  （配对开销已完成；内核层真值已在真机核对；**真实 App 真值未完成**：测试已写好，
-  需要手机解锁、App 在前台，见记录。）
+  （配对开销、内核层真值、真实 App 真值（Chrome、Via）均已在真机完成，见记录。）
 - [ ] 记录可获取的远程依赖提交；应用仓库不留下本机路径 replace。
   （sing-ebpf 本地提交 `3c1b28f`，尚未推送到 `LQ2002/sing-ebpf`，推送需用户确认。）
 
@@ -222,13 +221,24 @@ alpha11 重放提交）上的 `3c1b28f`
   androidpackages 测试通过；两个仓库的 go.mod 均未改动。
 
 **未完成**：
-- 真实 App 真值：`tc_android_app_identity_integration_test.go`。首次在锁屏（Dozing、
-  keyguard）下用 Chrome 运行，App 没有发起连接（程序只跑了 6 次 ARP/IPv6，
-  /proc/net/tcp 无该 App 连接）。需解锁手机后重跑；只加测试 veth、dummy 和一条
-  未用地址的 /32 路由，结束时清理（已确认无残留）。测试网卡名避开 runtime 使用的
-  `sbt*/sbd*/sbi*/sbo*/sbc*` 前缀，因为手机上运行中的 sing-box 用 `sbt…` 命名。
 - 推送 `android-attribution` 到 `LQ2002/sing-ebpf` 并在应用仓库更新 replace 到
   该远程伪版本：属于外部发布动作，等待用户确认。
+
+**真实 App 真值**（真机解锁、App 在前台；`tc_android_app_identity_integration_test.go`，
+驱动方式见文件头注释）：在主网络命名空间只加测试 veth `idta`/`idtb`、dummy `idtd`
+和一条未用地址 10.211.0.2/32 进默认网络的路由表（wlan0 = 1024），用 `am start` 让
+App 打开 `http://10.211.0.2:7000/`，SYN 被记录后重定向到 dummy 丢弃，结束时全部清理，
+事后核对 wlan0 表恢复原样。网卡名避开 runtime 使用的 `sbt*/sbd*/sbi*/sbo*/sbc*`，
+因为手机上运行中的 sing-box 用 `sbt…` 命名。真值判据：SocketUID 等于 `pm` 的包 UID；
+cgroup id 按 inode 解析为 `apps/uid_<UID>/pid_<P>`；进程 P 的真实 UID 等于该 UID 且
+cmdline 为包名。
+- Chrome（UID 10309）：2 条连接，均为 `apps/uid_10309/pid_19344`，进程 UID 10309，
+  cmdline `com.android.chrome`。PASS。
+- Via（`mark.via`，UID 10286）：1 条连接，`apps/uid_10286/pid_25616`，进程 UID 10286，
+  cmdline `mark.via`。PASS。
+- 原始输出 `results/stage2-device-app-truth-{chrome,via}.txt`。首次在锁屏（Dozing、keyguard）
+  时运行，App 没有发起任何连接（程序只处理了 ARP/IPv6，/proc/net/tcp 无该连接）；
+  这是锁屏下 App 不加载页面，不是数据面问题，解锁后重跑通过。
 
 **交给阶段 3 的发现（仅读源码确认编译语义，可达性未验证）**：`protocol/ebpf/action_policy.go`
 `compileActionPolicy` 在配置 include 时把 include（拦截）与 exclude（放行，等于默认动作）
