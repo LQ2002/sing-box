@@ -1,0 +1,3 @@
+# packages.abx is Android binary XML (generated on the device with xml2abx
+# from packages.xml); it must not go through line-ending conversion.
+*.abx binary

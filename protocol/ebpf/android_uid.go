@@ -18,6 +18,17 @@ type androidUIDOptions struct {
 	includeAndroidUser []int
 	includePackage     []string
 	excludePackage     []string
+
+	// The numeric include/exclude UID ranges exactly as configured, before
+	// package names were expanded into them. resolveAndroidUIDPolicy
+	// overwrites localPolicy with the expanded result, so without this copy a
+	// second resolution would start from already-expanded UIDs and keep the
+	// UIDs of uninstalled packages forever. Captured on first resolution;
+	// stage 2 of ANDROID_ATTRIBUTION_PLAN.md recompiles from it when the
+	// package table changes.
+	configuredIncludeUID []uidRange
+	configuredExcludeUID []uidRange
+	configuredCaptured   bool
 }
 
 func newAndroidUIDOptions(options option.EBPFLocalOptions) *androidUIDOptions {
@@ -36,12 +47,17 @@ func (i *Inbound) resolveAndroidUIDPolicy() error {
 	if (len(i.androidUIDOptions.includePackage) > 0 || len(i.androidUIDOptions.excludePackage) > 0) && packageManager == nil {
 		return E.New("Android package manager is unavailable")
 	}
+	if !i.androidUIDOptions.configuredCaptured {
+		i.androidUIDOptions.configuredIncludeUID = slices.Clone(i.localPolicy.IncludeUID)
+		i.androidUIDOptions.configuredExcludeUID = slices.Clone(i.localPolicy.ExcludeUID)
+		i.androidUIDOptions.configuredCaptured = true
+	}
 	warnSharedUID := make(map[uint32]struct{})
 	i.inspectAndroidPackages(packageManager, "include", i.androidUIDOptions.includePackage, warnSharedUID)
 	i.inspectAndroidPackages(packageManager, "exclude", i.androidUIDOptions.excludePackage, warnSharedUID)
 	tunOptions := tun.Options{
-		IncludeUID:         toTunUIDRanges(i.localPolicy.IncludeUID),
-		ExcludeUID:         toTunUIDRanges(i.localPolicy.ExcludeUID),
+		IncludeUID:         toTunUIDRanges(i.androidUIDOptions.configuredIncludeUID),
+		ExcludeUID:         toTunUIDRanges(i.androidUIDOptions.configuredExcludeUID),
 		IncludeAndroidUser: slices.Clone(i.androidUIDOptions.includeAndroidUser),
 		IncludePackage:     slices.Clone(i.androidUIDOptions.includePackage),
 		ExcludePackage:     slices.Clone(i.androidUIDOptions.excludePackage),

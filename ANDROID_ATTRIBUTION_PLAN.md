@@ -18,11 +18,11 @@
 
 | 阶段 | 交付内容 | 状态 | 代码提交 / 验收证据 |
 |---|---|---|---|
-| 1 | 修复包表刷新与查询一致性 | 待执行 | 尚无实施提交 |
+| 1 | 修复包表刷新与查询一致性 | 实现与本地测试完成；**真机验收未执行** | 见下方“阶段 1 实施记录” |
 | 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | 待执行，依赖阶段 1 | 尚无实施提交 |
 | 3 | sing-box 接入新归属路径并完成整链路验收 | 待执行，依赖阶段 2 | 尚无实施提交 |
 
-当前已完成的是方案评审及接口核查；三个阶段的生产代码尚未开始实施。
+阶段 1 的生产代码已实现并通过本地测试，真机验收（10 轮安装/卸载等）因手机未连接尚未执行；阶段 2、3 未开始。
 
 ## 执行纪律
 
@@ -40,29 +40,68 @@
 
 ### 实现项
 
-- [ ] 在 sing-box 增加本地 PackageManager 适配器，实现现有 tun.PackageManager 接口，
+- [x] 在 sing-box 增加本地 PackageManager 适配器，实现现有 tun.PackageManager 接口，
   在 `route/network.go` 替换创建入口；外部持有的对象保持稳定。
-- [ ] 复用现有 ABX 解码器，将必要的包表解析封装为本地纯函数，输出不可变的完整快照。
+- [x] 复用现有 ABX 解码器，将必要的包表解析封装为本地纯函数，输出不可变的完整快照。
   不反复启动依赖内部的 watcher；这种实现仍是本地适配，不是新增组件 fork。
-- [ ] 监听 `/data/system` 并筛选 `packages.xml`，采用 100 ms 去抖、串行重读。
+- [x] 监听 `/data/system` 并筛选 `packages.xml`，采用 100 ms 去抖、串行重读。
   先订阅再初读；读取期间再次收到变化则追加重读；监听错误/溢出有重建与补读处理。
-- [ ] 一次复合解析使用同一快照；查询返回的切片不得暴露内部可写存储。
+- [x] 一次复合解析使用同一快照；查询返回的切片不得暴露内部可写存储。
   完整校验后一次发布，截断/读取失败保留上一份有效表并退避重试。
-- [ ] 语义内容没有变化不发送更新通知；变化时更新包集合和负查询结果，不冻结旧包名映射。
-- [ ] 保留原始 UID/包名/用户配置，为阶段 2 的纯编译函数提供输入；不在本阶段重复调用
+- [x] 语义内容没有变化不发送更新通知；变化时更新包集合和负查询结果，不冻结旧包名映射。
+- [x] 保留原始 UID/包名/用户配置，为阶段 2 的纯编译函数提供输入；不在本阶段重复调用
   追加式 resolveAndroidUIDPolicy 来冒充规则热更新。
 
 ### 验收
 
 - [ ] 连续至少 10 轮安装/卸载，包含升级和共享 UID 集合 A→A+B→A，包表始终正确刷新。
-- [ ] 原子替换、突发通知、截断 ABX/XML、失败恢复和关闭期间回调均有针对性测试。
-- [ ] 并发查询/发布的 race 检查通过；反复更新后 watcher、FD、goroutine 无持续增长。
-- [ ] Android 构建与相关既有回归检查通过，记录实际运行的命令和设备结果。
+  **未执行**（手机未连接）。测试已写好：`common/androidpackages/device_test.go`。
+- [x] 原子替换、突发通知、截断 ABX/XML、失败恢复和关闭期间回调均有针对性测试。
+- [~] 并发查询/发布的 race 检查通过（本地，见记录）；反复更新后 watcher、FD、goroutine
+  无持续增长：本地已测 goroutine，**设备上的 FD/goroutine 检查未执行**。
+- [~] Android 构建与相关既有回归检查通过（本地）；**设备结果未执行**。
 
 交付边界：该阶段完成后，新包可被最新包表查到；如果它此前被 TC 的静态 UID 条件排除，
 不能据此宣称其流量已被自动接管。该能力由阶段 2、3 完成。
 
-实施记录：待填写。
+### 阶段 1 实施记录
+
+**改动**（全部在本仓库，未改任何依赖）：
+
+- 新增 `common/androidpackages/`：`snapshot.go`（解析纯函数、不可变快照、语义比较）、
+  `manager.go`（实现 `tun.PackageManager`：目录监听、去抖串行重读、失败退避、原子发布）。
+- `route/network.go`：只把 `tun.NewPackageManager` 换成 `androidpackages.New`（另加一行 import）。
+- `protocol/ebpf/android_uid.go`：首次解析时保存原始数值 UID 配置，之后每次都从它计算。
+
+**实施中发现并处理的两个问题**（均有源码依据）：
+
+1. **读到写了一半的 `packages.xml`**。AOSP `Settings.getSettingsFile()` 用
+   `ResilientAtomicFile` 写该文件：`startWrite()` 把它改名为 `packages-backup.xml`，再直接在
+   原路径写新内容；`finishWrite()` 刷盘后才删除备份；`openRead()` 在备份存在时优先读备份。
+   实现按同样规则读取，并以“根元素必须闭合”拒绝任何残缺文档。
+2. **`sing/common/abx` 读取器对截断输入无限循环**。`readAttribute()` 读到末尾时返回
+   nil 错误，`readAttributes()` 只认 `io.EOF`，于是不断追加空属性直到内存耗尽（开发中三次
+   拖垮 WSL）。对 1241 字节的 xml2abx 样本逐一截断，1237 个截断位置中 584 个在毫秒级内堆超
+   64 MiB。不改 sing，改为在数据后补 0xFFFF+64 个 `END_DOCUMENT`（0x01）字节：同样 1237 个
+   位置失控 0、卡死 0。补丁使读取器在截断处“正常结束”，因此根元素闭合检查不可省。
+
+**已执行的检查**（WSL Debian，`likayo`，Go 1.25.5/1.26.6）：
+
+- `CGO_ENABLED=1 go test -race -count=1 ./common/androidpackages/`：17 个测试全部通过，含
+  Android 式重写（写入期间旧包不丢失）、写入失败读备份、损坏文件退避重试、内容不变不通知、
+  突发合并、连续写入 1 s 上限、Close 后无回调且 20 次启停无 goroutine 泄漏、启动时恰逢写入、
+  返回切片为拷贝、并发查询与更新、文本/ABX 解析、全部截断前缀的拒绝（ABX 1241 个前缀仅
+  末尾 5 个、文本仅 1 个被接受，且都是完整表）、已知失控截断点 5 s 内返回错误、畸形输入。
+- 对照验证（证明测试能发现问题）：①把 `android_uid.go` 换回修改前版本，新测试
+  `TestResolveAndroidUIDPolicyStartsFromConfiguredUIDs` 失败（旧 UID 10001 残留）；
+  ②去掉 1 s 上限，`TestManagerReadsDuringContinuousWrites` 断言失败；③不加补丁直接解析
+  截断 ABX，堆看门狗在 0.34 s、308 MiB 时中止测试。三项对照后代码均已恢复。
+- `go test -tags with_ebpf ./protocol/ebpf/`：通过；`go vet` 通过；
+  `CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -tags <BASE_TAGS> ./common/androidpackages/ ./route/ ./protocol/ebpf/`：通过。
+
+**未执行**：`device_test.go` 的两项真机测试（与 sing-tun 解析结果逐项对照；10 轮安装/卸载，
+含覆盖重装和共享 UID A→A+B→A，并检查 FD/goroutine）。注意测试包只有一个版本，“升级”以
+`pm install -r` 覆盖重装模拟，它走包替换流程、保留 UID，但不是版本号升高的升级。
 
 ## 阶段 2：在已有 sing-ebpf fork 中补齐两项能力
 
