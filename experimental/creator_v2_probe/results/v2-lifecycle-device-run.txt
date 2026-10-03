@@ -1,0 +1,116 @@
+RESULTS=/data/local/tmp/sbo-creator-integration-20261003/results/run-20261003-215339-30792
+PROTECTED_PID=11765 START_TICKS=14670767 MAIN_NETNS=net:[4026531840]
+PRIVATE_NAMESPACE mnt=mnt:[4026535987] net=net:[4026536041] bpffs=/mnt/sbo-creator-integration/bpf
+=== RUN   TestTCSocketCreatorFirstPacket
+=== RUN   TestTCSocketCreatorFirstPacket/identity=false/protocol=6
+=== RUN   TestTCSocketCreatorFirstPacket/identity=false/protocol=17
+=== RUN   TestTCSocketCreatorFirstPacket/identity=true/protocol=6
+=== RUN   TestTCSocketCreatorFirstPacket/identity=true/protocol=17
+--- PASS: TestTCSocketCreatorFirstPacket (0.53s)
+    --- PASS: TestTCSocketCreatorFirstPacket/identity=false/protocol=6 (0.17s)
+    --- PASS: TestTCSocketCreatorFirstPacket/identity=false/protocol=17 (0.15s)
+    --- PASS: TestTCSocketCreatorFirstPacket/identity=true/protocol=6 (0.12s)
+    --- PASS: TestTCSocketCreatorFirstPacket/identity=true/protocol=17 (0.10s)
+=== RUN   TestTCSocketCreatorKeepsFirstSnapshot
+--- PASS: TestTCSocketCreatorKeepsFirstSnapshot (0.12s)
+=== RUN   TestTCSocketCreatorConfirmsMissingSnapshot
+--- PASS: TestTCSocketCreatorConfirmsMissingSnapshot (0.08s)
+=== RUN   TestTCSocketCreatorRejectsInvalidStorage
+--- PASS: TestTCSocketCreatorRejectsInvalidStorage (0.07s)
+=== RUN   TestTCSocketCreatorTupleReuse
+--- PASS: TestTCSocketCreatorTupleReuse (0.14s)
+=== RUN   TestTCSocketCreatorSurvivesDelivery
+--- PASS: TestTCSocketCreatorSurvivesDelivery (0.07s)
+=== RUN   TestTCSocketCreatorBorrowedMapSurvivesBackend
+--- PASS: TestTCSocketCreatorBorrowedMapSurvivesBackend (0.06s)
+=== RUN   TestTCSocketCreatorRejectsWrongMapBeforeLoading
+--- PASS: TestTCSocketCreatorRejectsWrongMapBeforeLoading (0.00s)
+=== RUN   TestTCSocketCreatorRecordsNetdCharge
+--- PASS: TestTCSocketCreatorRecordsNetdCharge (0.11s)
+=== RUN   TestTCSocketCreatorPlaceholderChargeIsCheckedOnly
+--- PASS: TestTCSocketCreatorPlaceholderChargeIsCheckedOnly (0.09s)
+=== RUN   TestTCSocketCreatorBorrowedCookieTagMapSurvivesBackend
+--- PASS: TestTCSocketCreatorBorrowedCookieTagMapSurvivesBackend (0.05s)
+=== RUN   TestTCSocketCreatorRejectsWrongCookieTagMap
+--- PASS: TestTCSocketCreatorRejectsWrongCookieTagMap (0.00s)
+PASS
+CORE_SYNTHETIC_STORAGE_CASES=12 PASS
+=== RUN   TestDeviceCollectorPersistence
+    collector_device_test.go:497: COLLECTOR_INITIAL map_id=6131 link_id=624 program_id=1681
+    collector_device_test.go:501: CREATOR_SNAPSHOT phase=initial-open family=2 kind=2 cookie=1564764 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:501: CREATOR_SNAPSHOT phase=initial-open family=2 kind=1 cookie=1564765 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:501: CREATOR_SNAPSHOT phase=initial-open family=10 kind=2 cookie=1564766 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:501: CREATOR_SNAPSHOT phase=initial-open family=10 kind=1 cookie=1564767 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:503: LIVE_PRODUCER_CORE_OUTPUT
+        === RUN   TestTCSocketCreatorLiveProducer
+        === RUN   TestTCSocketCreatorLiveProducer/tcp-first-packet
+            tc_socket_creator_live_integration_test.go:80: LIVE_PRODUCER_CREATE case=tcp-first-packet cookie=1555208 birth_ns=168706157491126 tgid=31198 tid=31198 creator_uid=0 flags=0x3a07 comm=636f72652e7465737400000000000000
+            tc_socket_creator_live_integration_test.go:114: LIVE_PRODUCER_ASSIGNMENT case=tcp-first-packet cookie=1555208 birth_ns=168706157491126 tgid=31198 tid=31198 creator_uid=0 socket_uid=9050 path=0 flags=0x3a07 comm=636f72652e7465737400000000000000
+        === RUN   TestTCSocketCreatorLiveProducer/udp-first-packet
+            tc_socket_creator_live_integration_test.go:80: LIVE_PRODUCER_CREATE case=udp-first-packet cookie=1561805 birth_ns=168706157491126 tgid=31198 tid=31198 creator_uid=0 flags=0x3a07 comm=636f72652e7465737400000000000000
+            tc_socket_creator_live_integration_test.go:114: LIVE_PRODUCER_ASSIGNMENT case=udp-first-packet cookie=1561805 birth_ns=168706157491126 tgid=31198 tid=31198 creator_uid=0 socket_uid=9050 path=0 flags=0x3a07 comm=636f72652e7465737400000000000000
+        === RUN   TestTCSocketCreatorLiveProducer/tcp-delivery
+            tc_socket_creator_live_integration_test.go:80: LIVE_PRODUCER_CREATE case=tcp-delivery cookie=1555212 birth_ns=168706157491126 tgid=31198 tid=31198 creator_uid=0 flags=0x3a07 comm=636f72652e7465737400000000000000
+            tc_socket_creator_live_integration_test.go:114: LIVE_PRODUCER_ASSIGNMENT case=tcp-delivery cookie=1555212 birth_ns=168706157491126 tgid=31198 tid=31198 creator_uid=0 socket_uid=9050 path=2 flags=0x3a07 comm=636f72652e7465737400000000000000
+        --- PASS: TestTCSocketCreatorLiveProducer (0.32s)
+            --- PASS: TestTCSocketCreatorLiveProducer/tcp-first-packet (0.15s)
+            --- PASS: TestTCSocketCreatorLiveProducer/udp-first-packet (0.09s)
+            --- PASS: TestTCSocketCreatorLiveProducer/tcp-delivery (0.08s)
+        PASS
+    collector_device_test.go:508: CREATOR_SNAPSHOT phase=all-collectors-closed family=2 kind=2 cookie=1539949 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:508: CREATOR_SNAPSHOT phase=all-collectors-closed family=2 kind=1 cookie=1539950 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:508: CREATOR_SNAPSHOT phase=all-collectors-closed family=10 kind=2 cookie=1539951 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:508: CREATOR_SNAPSHOT phase=all-collectors-closed family=10 kind=1 cookie=1539952 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:509: COLLECTOR_PROCESS_OUTPUT
+        === RUN   TestDeviceCollectorProcessHelper
+    collector_device_test.go:509: COLLECTOR_PROCESS_EXIT child_pid=31261 parent_pid=31185 map_id=6131 link_id=624 program_id=1681 exited=true
+    collector_device_test.go:511: CREATOR_SNAPSHOT phase=collector-process-exited family=2 kind=2 cookie=1522335 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:511: CREATOR_SNAPSHOT phase=collector-process-exited family=2 kind=1 cookie=1522336 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:511: CREATOR_SNAPSHOT phase=collector-process-exited family=10 kind=2 cookie=1522337 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:511: CREATOR_SNAPSHOT phase=collector-process-exited family=10 kind=1 cookie=1522338 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=initial-open family=2 kind=2 cookie=1564764 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=initial-open family=2 kind=1 cookie=1564765 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=initial-open family=10 kind=2 cookie=1564766 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=initial-open family=10 kind=1 cookie=1564767 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=all-collectors-closed family=2 kind=2 cookie=1539949 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=all-collectors-closed family=2 kind=1 cookie=1539950 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=all-collectors-closed family=10 kind=2 cookie=1539951 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=all-collectors-closed family=10 kind=1 cookie=1539952 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=collector-process-exited family=2 kind=2 cookie=1522335 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=collector-process-exited family=2 kind=1 cookie=1522336 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=collector-process-exited family=10 kind=2 cookie=1522337 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:523: CREATOR_SNAPSHOT phase=collector-process-exited family=10 kind=1 cookie=1522338 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:526: CREATOR_SNAPSHOT phase=reopened family=2 kind=2 cookie=1522339 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:526: CREATOR_SNAPSHOT phase=reopened family=2 kind=1 cookie=1522340 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:526: CREATOR_SNAPSHOT phase=reopened family=10 kind=2 cookie=1522341 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:526: CREATOR_SNAPSHOT phase=reopened family=10 kind=1 cookie=1522342 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:545: CREATOR_SNAPSHOT phase=initial-open family=2 kind=2 cookie=1564764 tgid=31185 tid=31185 uid=0 birth_ns=168706048592480 proc_ticks=16870604 clk_tck=100 flags=0x4407 comm_hex=736f636b65746964656e746974792e00 name_hash=0xc6644f414d9a7c04 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" arg_block=153 exe_inode=2036820
+    collector_device_test.go:557: COLLECTOR_CLEANUP pins=0 retained_sockets=17 map_id=6131 link_id=624 program_id=1681
+--- PASS: TestDeviceCollectorPersistence (0.43s)
+PASS
+COLLECTOR_PERSISTENCE_AND_LIVE_TC=PASS
+=== RUN   TestDeviceCreatorLifecycle
+=== RUN   TestDeviceCreatorLifecycle/child-socket-survives-exit
+    lifecycle_device_test.go:205: LIFECYCLE child-after-exit pid=31319 tid=31319 birth_ns=168706594674615 flags=0x4407 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" exe_inode=2036820
+=== RUN   TestDeviceCreatorLifecycle/fork-inherited-socket-keeps-parent
+    lifecycle_device_test.go:233: LIFECYCLE fork-inherited pid=31308 tid=31313 birth_ns=168706518005709 flags=0x4407 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" exe_inode=2036820
+=== RUN   TestDeviceCreatorLifecycle/exec-before-and-after
+    lifecycle_device_test.go:276: LIFECYCLE pre-exec-socket pid=31333 tid=31333 birth_ns=168706614439199 flags=0x4407 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" exe_inode=2036820
+    lifecycle_device_test.go:277: LIFECYCLE post-exec-socket pid=31333 tid=31333 birth_ns=168706614439199 flags=0xf07 name_len=15 argv0="sbo-exec-target" exe_inode=2405210
+=== RUN   TestDeviceCreatorLifecycle/accepted-socket-has-no-snapshot
+    lifecycle_device_test.go:316: LIFECYCLE accept client lookup_error=<nil> pid=31308
+    lifecycle_device_test.go:316: LIFECYCLE accept accepted lookup_error=lookup: key does not exist pid=0
+    lifecycle_device_test.go:316: LIFECYCLE accept listener lookup_error=<nil> pid=31308
+=== RUN   TestDeviceCreatorLifecycle/io_uring-socket
+    lifecycle_device_test.go:346: LIFECYCLE io_uring async=false pid=31308 tid=31311 birth_ns=168706518005709 flags=0x4407 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" exe_inode=2036820
+    lifecycle_device_test.go:346: LIFECYCLE io_uring async=true pid=31308 tid=31345 birth_ns=168706518005709 flags=0x4407 name_len=68 argv0="/data/local/tmp/sbo-creator-integration-20261003/socketidentity.test" exe_inode=2036820
+--- PASS: TestDeviceCreatorLifecycle (0.10s)
+    --- PASS: TestDeviceCreatorLifecycle/child-socket-survives-exit (0.00s)
+    --- PASS: TestDeviceCreatorLifecycle/fork-inherited-socket-keeps-parent (0.00s)
+    --- PASS: TestDeviceCreatorLifecycle/exec-before-and-after (0.02s)
+    --- PASS: TestDeviceCreatorLifecycle/accepted-socket-has-no-snapshot (0.00s)
+    --- PASS: TestDeviceCreatorLifecycle/io_uring-socket (0.00s)
+PASS
+CREATOR_LIFECYCLE=PASS
+PRIVATE_CLEANUP run_rc=0 cleanup_rc=0
+CLEANUP run_rc=0 cleanup_rc=0 protected_pid=11765 start_ticks=14670767 results=/data/local/tmp/sbo-creator-integration-20261003/results/run-20261003-215339-30792

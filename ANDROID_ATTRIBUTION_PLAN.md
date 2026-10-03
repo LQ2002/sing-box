@@ -351,7 +351,16 @@ native 进程的可执行路径展示，并用 exe inode 校验。Manifest 索�
   真值，跨收集器关闭、进程退出、重开不变；实时用例 `flags=0x3a07` 完整复制进 assignment；
   4 个 netd charge 用例在真机 arm64 verifier 上通过；清理后模块卸载、生产 PID 11765 与
   start ticks 不变（日志 `experimental/creator_v2_probe/results/v2-collector-tc-device-run.txt`）。
-  fork、exec、accept、创建者退出、io_uring 的真机分组尚未执行（exec 的路径拦截目前仅单元测试）。
+  **生命周期分组 [已通过]**：新增 `TestDeviceCreatorLifecycle`（`common/socketidentity/lifecycle_device_test.go`，
+  接入同一 harness，在同一私有 bpffs/netns 中运行），日志
+  `experimental/creator_v2_probe/results/v2-lifecycle-device-run.txt`：子进程自建 socket 记录子进程
+  （pid 31319），子进程退出后快照仍在；fork 继承的父 socket 在子进程使用后快照逐字节不变；
+  exec 前建的 socket 保留 exec 前名称哈希与 exe inode 2036820，exec 后同一 pid 新建的 socket 记录
+  `sbo-exec-target`（`flags=0xf07`，长度 15）与副本 inode 2405210，两者 leader 出生时间相同；
+  accept 子 socket 查无快照（listener 与 client 有）；io_uring `IORING_OP_SOCKET` 内联执行记录提交线程
+  （tid 31311），`IOSQE_ASYNC` 记录 io-wq 工作线程（tid 31345），两者 TGID、名称、exe 均为提交进程。
+  同次运行 12 个 TC 用例、持久化与实时 producer→TC 再次全部通过，清理后生产 PID/ticks 不变。
+  exec 后 `ProcessPaths` 被拦截的用户态逻辑由单元测试覆盖（`TestIdentityV2ExeInodeGuardsProcessPath`）。
 - 真机完整服务：真实 App 冷/热启动，普通/共享 UID、多包进程、native、netd DNS、
   GMS 代发；与 `dumpsys activity processes` 的 `packageList` 逐条比对，统计正确/错误/未知/漏采。
 - 完整 sing-box 入口 TCP/UDP、IPv4/IPv6、delivery/shared，校验实际载荷回包。

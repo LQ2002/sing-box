@@ -21,6 +21,7 @@ TestTCSocketCreatorBorrowedCookieTagMapSurvivesBackend
 TestTCSocketCreatorRejectsWrongCookieTagMap'
 CORE_REGEX='^TestTCSocketCreator(FirstPacket|KeepsFirstSnapshot|ConfirmsMissingSnapshot|RejectsInvalidStorage|TupleReuse|SurvivesDelivery|BorrowedMapSurvivesBackend|RejectsWrongMapBeforeLoading|RecordsNetdCharge|PlaceholderChargeIsCheckedOnly|BorrowedCookieTagMapSurvivesBackend|RejectsWrongCookieTagMap)$'
 COLLECTOR_NAME=TestDeviceCollectorPersistence
+LIFECYCLE_NAME=TestDeviceCreatorLifecycle
 LIVE_NAME=TestTCSocketCreatorLiveProducer
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
@@ -201,6 +202,7 @@ if [ "${1:-}" = --inner ]; then
   check_test_list "$DIR/core.test" "$CORE_REGEX" "$CORE_NAMES" core
   check_test_list "$DIR/core.test" "^$LIVE_NAME\$" "$LIVE_NAME" live
   check_test_list "$DIR/socketidentity.test" "^$COLLECTOR_NAME\$" "$COLLECTOR_NAME" collector
+  check_test_list "$DIR/socketidentity.test" "^$LIFECYCLE_NAME\$" "$LIFECYCLE_NAME" lifecycle
   export SING_EBPF_INTEGRATION=1
   run_test_binary "$DIR/core.test" "$CORE_REGEX" 120s core
   for test_name in $CORE_NAMES; do require_pass core "$test_name"; done
@@ -218,6 +220,14 @@ if [ "${1:-}" = --inner ]; then
     [ -z "$(ls -A "$PIN_PATH")" ] || fail 'collector test left persistent pins'
   fi
   echo 'COLLECTOR_PERSISTENCE_AND_LIVE_TC=PASS'
+  # Creator lifecycle (child exit, fork inheritance, exec, accept, io_uring)
+  # on a fresh collector in the same private bpffs; the test removes it.
+  run_test_binary "$DIR/socketidentity.test" "^$LIFECYCLE_NAME\$" 120s lifecycle
+  require_pass lifecycle "$LIFECYCLE_NAME"
+  if [ -d "$PIN_PATH" ]; then
+    [ -z "$(ls -A "$PIN_PATH")" ] || fail 'lifecycle test left persistent pins'
+  fi
+  echo 'CREATOR_LIFECYCLE=PASS'
   exit 0
 fi
 
