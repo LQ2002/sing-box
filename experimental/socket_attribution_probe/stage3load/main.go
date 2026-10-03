@@ -44,7 +44,15 @@ func main() {
 	payloadBytes := flag.Int("bytes", 65536, "bytes sent and verified per connection in echo mode")
 	timeout := flag.Duration("timeout", 5*time.Second, "connect timeout and complete payload exchange deadline")
 	expect := flag.String("expect", "success", "success or blocked; blocked requires echo mode and zero verified replies")
+	argv0 := flag.String("argv0", "", "re-exec with this argv[0] first, so a socket creator snapshot records it as the process name (an ActivityManager-style name such as com.miui.securitycenter.remote)")
 	flag.Parse()
+	if *argv0 != "" && os.Args[0] != *argv0 {
+		// /proc/self/exe keeps the executable; only argv[0] changes. The
+		// re-executed process sees os.Args[0] == *argv0 and continues.
+		err := syscall.Exec("/proc/self/exe", append([]string{*argv0}, os.Args[1:]...), os.Environ())
+		fmt.Fprintln(os.Stderr, "re-exec with argv0:", err)
+		os.Exit(1)
+	}
 	if *listen != "" {
 		if *timeout <= 0 {
 			fmt.Fprintln(os.Stderr, "timeout must be positive")

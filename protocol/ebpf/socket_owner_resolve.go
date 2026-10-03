@@ -177,6 +177,11 @@ func logResolvedOwner(ctx context.Context, logger log.ContextLogger, info *adapt
 	} else if info.UserId != -1 {
 		attribution = append(attribution, "user id: "+strconv.Itoa(int(info.UserId)))
 	}
+	// The creator PID lets a log line be checked against ActivityManager's
+	// pid -> packageList truth (dumpsys activity processes).
+	if info.ProcessID != 0 && len(attribution) > 0 {
+		attribution = append(attribution, "pid: "+strconv.FormatUint(uint64(info.ProcessID), 10))
+	}
 	if len(attribution) > 0 {
 		logger.InfoContext(ctx, "found ", strings.Join(attribution, ", "))
 	}

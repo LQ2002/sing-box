@@ -7,7 +7,9 @@ cd -- "$(dirname -- "$0")"
 # does not depend on where the trees live. Verified by rebuilding the v1
 # object from /root/common-6.12.69 and from
 # experimental/sb_sockowner_probe/target/common-6.12.69: identical program
-# section, differing only in the recorded include directory.
+# section, differing only in the recorded include directory. Line endings
+# matter too: clang records the source MD5 in DWARF, and the same file with
+# CRLF built 6cdcef2f... instead of d9270fe2..., hence .gitattributes eol=lf.
 kernel="$(realpath "${1:-/root/common-6.12.69}")"
 compiler="${BPF_CC:-/home/likayo/toolchains/clang-r536225/bin/clang}"
 mkdir -p .build

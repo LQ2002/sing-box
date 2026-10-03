@@ -51,6 +51,8 @@ func main() {
 		err = runProcs(os.Args[2:])
 	case "netdscan":
 		err = runNetdScan()
+	case "sockbench":
+		err = runSockBench(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown mode %q", os.Args[1])
 	}
