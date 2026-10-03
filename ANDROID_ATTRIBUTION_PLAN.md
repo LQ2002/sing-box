@@ -11,6 +11,8 @@
 - 不新增 sing-tun、sing、fswatch 等 fork；不提交指向本机目录的 go.mod replace。
 - 不新增独立 TC/TCX 采集程序、Java/app_process 常驻辅助程序、临时丢包保护程序，
   也不为正常包表更新设计整套后端拆除/重建机制。
+  2026-10-03 用户另行授权独立身份载体验证原型、明确不考虑自定义内核；此授权仅允许
+  下文原型在私有网络命名空间挂测试 TCX，不改变上述生产集成范围。
 - 只有三个阶段，依次执行，各自具备独立价值和验收标准。前一阶段未通过，不扩大到下一阶段。
   如果用户只要求某一阶段，就完成该阶段；若授权执行全计划，按顺序继续，不逐阶段重复索要确认。
 
@@ -512,6 +514,80 @@ socket。两种输出的语义和 fixture 不同，只能分别描述函数成�
 - 测试：`go test -race -tags with_ebpf ./protocol/ebpf/ ./common/androidpackages/
   ./common/androidmanifest/`；真机 `common/androidmanifest` 的 Device 测试；按上面的
   真机整链路步骤复验（脚本与说明在 `experimental/socket_attribution_probe/stage3e2e/`）。
+
+### 进程身份到 socket 存储的独立原型（2026-10-03）
+
+用户允许跳出当前项目的既有假设，深入 AOSP/Linux 源码，并明确授权“验证原型可以，
+但是不考虑自定义内核”，要求代码提交。本实验属于阶段 3 的独立研究，不新增第四阶段，
+不把原型结果算作生产集成验收；不修改 `E:\sing-ebpf` 或移植目标。
+
+原型代码提交：`7ffa23f2`（`experiment: verify task-to-socket identity carrier on Android`）。
+
+**已实测路径**：测试登记者使用进程自身交出的 pidfd 写 TASK_STORAGE；独立小模块把
+现有 Android socket-create vendor hook 桥接为带 `struct sock *` 的标准 typed tracepoint；
+BPF 在创建现场从线程组 leader 的 TASK_STORAGE 复制身份到 SK_STORAGE；私有 lo 上的
+TCX 直接读取同一 socket storage。模块不维护 owner 哈希表、不提供查询 ioctl，不修改
+当前运行内核；用户生产模块与 sing-box 保持运行。
+
+原型位于 `experimental/identity_carrier_probe/`，只对指定测试 TGID 启用桥接；登记使用
+随机 128 位合成 token，**不代表已实现 AMS/zygote 的可信 App 包名登记**。由 root 父进程
+写入 task storage；worker 通过 `SCM_RIGHTS` 交出自身打开的 pidfd，未向 worker 交付 map FD，
+也未在事后用裸 PID 重新打开登记目标。未登记时 token 为零，保留实际创建者元信息。
+
+**构建与兼容性**：
+- 模块以 Android Clang r536225 构建；13/13 传统 CRC 与 13/13 扩展 CRC 均一致，12 个导入
+  全部有设备 CRC。当前运行内核的 BTF SHA-256 与构建底座逐字节相同，加载脚本强制核对。
+- 最初包含完整 `net/sock.h` 的构建暴露了关联类型图差异，不能仅凭 `sock` 本身布局相同
+  就绕过 verifier 的类型要求。最终 C 桥只检查 TGID、不解引用 socket；标准 pahole 自然
+  将 opaque `struct sock` 解析到真实设备 base BTF ID 2886，没有修改 BTF ID 或放宽验证。
+  对 C 实际用到的 task size/TGID/stack canary 偏移保留设备布局断言。
+- BPF 由 clang 19 构建；`sk_kern_sock` 位字段使用 CO-RE 重定位，非内核 INET4/6 socket
+  才进入采集。Go 1.26.6 的普通测试、race、vet 与 Linux arm64 静态交叉编译通过；单测
+  覆盖 ABI、错误 token/出生时间/首包标志、FD 传输协议及只允许 loopback 目的地址。
+
+**真机结果**：设备 `8b97939c`，原有内核
+`6.12.69-android16-6-g586bfab1b9c5-abogki536749445-4k`。
+模块加载、runtime module BTF、BPF verifier、typed tracepoint 和私有 lo TCX 均实际通过。
+两轮各 7 组、18 个 socket 全部通过；每个 socket 首次 send/connect 前，父进程都用收到的
+真实 socket FD 核对 SK_STORAGE，且确认 TC 观察记录尚不存在。对端收到并核验完整载荷，
+随后按真实 `SO_COOKIE` 核对 TC 的首个观察；TCP 必须为 SYN 且无 ACK，UDP 必须只有一次
+数据报观察，并核对地址族、接口、token、generation、TGID/TID、UID 与 leader 出生时间。
+
+| 场景 | 每轮 socket 数 | 已观察到的行为 |
+|---|---:|---|
+| root IPv4/IPv6 × TCP/UDP | 4 | 首个 SYN/数据报已有创建时身份 |
+| shell worker A，同上 | 4 | UID 2000，身份与本 worker 的登记一致 |
+| shell worker B，同上 | 4 | 同 UID 下不同进程/token 严格区分 |
+| 登记 A→建 socket A→登记 B→建 socket B→发送 | 2 | 两个 socket 分别保留 A/B 快照 |
+| 未登记 worker | 1 | token/generation/registered flag 均为零，未伪造身份 |
+| 非主线程创建 | 1 | TID 不等于 TGID，token 与出生时间来自 leader |
+| 转交 FD 后创建者退出，再由父进程首次发送 | 2 | 旧 pidfd 已 ESRCH、TASK_STORAGE 已 ENOENT，TCP/UDP 仍携带原创建者身份 |
+
+两轮计数均为 `hook_calls=18, registered=17, unregistered=1`，其余七项错误计数全为 0。
+主命名空间直接运行的拒绝检查也实际通过。原始日志（Git 忽略）在原型的
+`results/device-run01.txt`、`device-run02.txt`、`device-run0{1,2}-state/` 与
+`main-namespace-refusal.txt`。
+
+首轮测试全过，但清理比较把移动网络 IPv6 RA 路由 `expires 64312sec→64311sec` 的自然
+倒计时误报为变化。保留原始快照，比较时只规范化 `expires` 秒数后重跑：最终
+`CLEANUP run_rc=0 cleanup_rc=0`；接口、IPv4 路由、IPv4 policy rules、IPv6 路由条目均一致。
+boot ID 未变，生产 sing-box 始终 PID 11765/start ticks 14670767，cmdline 相同；原生产
+模块仍加载、taint 4608 未变。原型模块已卸载，无原型进程或 pinned BPF 对象；日志取回后，
+本轮专用 `/data/local/tmp/sbo-identity-carrier-20261003` 目录已删除。
+
+**最终构建 SHA-256**：
+- runner：`811c990f3f5ee4902b50ecf19343b72a3a5f7daa67515a3f9fb690f1af3245ac`。
+- BPF：`b8f3e83c4df712ebd56e5ff0d89004185bf0eec684fcd125237280fbdcdb3001`。
+- 模块：`c840d6b2463fcd0698b983522fc408a61a30100229ff5ce3bd9a5473fd110d2b`。
+- 设备 base BTF：`37d2c7e7bc5ec219db6148d4a874d9cfc05216db3d7b860adfafc567576b5f35`。
+
+**结论与边界**：现有内核上，创建时把进程实例身份固化到 socket、再由 TC 首包直接读取
+已经有实测证据；创建者退出和同 UID 不会迫使此载体退化为猜测 PID/UID。它仍使用一个小
+桥接模块，尚未接入 AOSP 可信包名登记、真实 App 流量或生产 sing-ebpf assignment；没有
+替换现有生产 owner 模块。纯 fork、exec/非主线程 exec、accept clone、io_uring、长期内存、
+真实性能/功耗对比均未执行，不能据本轮声称包归属覆盖或速度已经提升。
+登记切换通过屏障串行执行，未验证创建 socket 时并发更新 TASK_STORAGE 的原子性；内核
+出生时间只以 `/proc` 的 USER_HZ ticks 交叉核验，root/shell 夹具不代表 App SELinux 场景。
 
 ## 已移除的设计
 
