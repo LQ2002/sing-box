@@ -198,3 +198,29 @@ func writeCmdline(t *testing.T, tree *fakeCgroupTree, pid uint32, name string) {
 		t.Fatal(err)
 	}
 }
+
+// An instance's attribution is logged once, and again only when its package
+// changes (unknown until the manifest index is built, then known).
+func TestCgroupOwnerResolverLogsOncePerInstance(t *testing.T) {
+	tree := newFakeCgroupTree(t)
+	id := tree.addProcess(t, "apps", 10050, 100, "/system/bin/app_process64")
+	resolver := newCgroupOwnerResolver(tree.root)
+	if !resolver.lookup(id, 10050).found {
+		t.Fatal("not found")
+	}
+	if !resolver.markLogged(id, "") {
+		t.Fatal("first attribution not logged")
+	}
+	if resolver.markLogged(id, "") {
+		t.Fatal("unchanged attribution logged twice")
+	}
+	if !resolver.markLogged(id, "com.example.app") {
+		t.Fatal("package becoming known not logged")
+	}
+	if resolver.markLogged(id, "com.example.app") {
+		t.Fatal("logged again without a change")
+	}
+	if resolver.markLogged(1<<40, "") {
+		t.Fatal("an unknown cgroup was logged")
+	}
+}

@@ -94,6 +94,12 @@ type cgroupOwner struct {
 	// only for processes whose package is not decided by the UID alone.
 	processName string
 	nameLoaded  bool
+	// logged and loggedPackage remember what was last logged for this
+	// process instance, so its attribution is logged once (and again only
+	// if the package becomes known later, e.g. once the manifest index for
+	// its UID is built).
+	logged        bool
+	loggedPackage string
 }
 
 type cgroupOwnerResolver struct {
@@ -117,15 +123,7 @@ func newCgroupOwnerResolver(root string) *cgroupOwnerResolver {
 // lookup returns the process that created cgroup id, using uidHint (sk_uid)
 // to pick the first directory to look in.
 func (r *cgroupOwnerResolver) lookup(cgroupID uint64, uidHint uint32) cgroupOwner {
-	owner, _ := r.lookupFresh(cgroupID, uidHint)
-	return owner
-}
-
-// lookupFresh also reports whether this call resolved the process for the
-// first time (a cache miss), which is when its attribution is logged.
-func (r *cgroupOwnerResolver) lookupFresh(cgroupID uint64, uidHint uint32) (cgroupOwner, bool) {
 	owner, loaded := r.cache.Get(cgroupID)
-	fresh := !loaded
 	if !loaded {
 		owner = r.scan(cgroupID, uidHint)
 	}
@@ -136,7 +134,21 @@ func (r *cgroupOwnerResolver) lookupFresh(cgroupID uint64, uidHint uint32) (cgro
 		owner.exeLoaded = true
 		r.cache.Add(cgroupID, owner)
 	}
-	return owner, fresh
+	return owner
+}
+
+// markLogged reports whether the attribution of this process instance should
+// be logged now: the first time, or when its package changed since. Entries
+// are updated without a lock; a race can only log a line twice.
+func (r *cgroupOwnerResolver) markLogged(cgroupID uint64, packageName string) bool {
+	owner, loaded := r.cache.Peek(cgroupID)
+	if !loaded || !owner.found || (owner.logged && owner.loggedPackage == packageName) {
+		return false
+	}
+	owner.logged = true
+	owner.loggedPackage = packageName
+	r.cache.Add(cgroupID, owner)
+	return true
 }
 
 // processName returns owner's argv[0], reading it once per process instance.
@@ -307,10 +319,9 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 		return &adapter.ConnectionOwner{UserId: int32(identity.uid), UserName: cachedUserName(identity.uid)}
 	}
 	var creator cgroupOwner
-	fresh := false
 	resolver := i.cgroupOwners.Load()
 	if resolver != nil {
-		creator, fresh = resolver.lookupFresh(identity.cgroupID, identity.uid)
+		creator = resolver.lookup(identity.cgroupID, identity.uid)
 	}
 	if !creator.found {
 		i.identityCounters.cgroupGone.Add(1)
@@ -322,10 +333,16 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 		UserName:  cachedUserName(creator.uid),
 	}
 	// The router does not log ProcessInfo it did not search for itself, so
-	// log once per process instance, as the procfs path did on a cache miss.
-	if fresh {
-		defer logResolvedOwner(ctx, i.logger, owner)
-	}
+	// log once per process instance (see cgroupOwner.logged).
+	defer func() {
+		packageName := ""
+		if len(owner.PackageNames) > 0 {
+			packageName = owner.PackageNames[0]
+		}
+		if resolver.markLogged(identity.cgroupID, packageName) {
+			logResolvedOwner(ctx, i.logger, owner)
+		}
+	}()
 	if creator.executable != "" && !isAndroidApplicationExecutable(strings.TrimSuffix(creator.executable, deletedPathSuffix)) {
 		owner.ProcessPaths = []string{creator.executable}
 	}
