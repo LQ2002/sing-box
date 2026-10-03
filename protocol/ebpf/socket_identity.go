@@ -41,6 +41,7 @@ import (
 
 	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/androidmanifest"
 	"github.com/sagernet/sing-box/common/androidpackages"
 	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/contrab/freelru"
@@ -89,6 +90,10 @@ type cgroupOwner struct {
 	// only once per process instance.
 	executable string
 	exeLoaded  bool
+	// processName is the cmdline's argv[0], read lazily (nameLoaded) and
+	// only for processes whose package is not decided by the UID alone.
+	processName string
+	nameLoaded  bool
 }
 
 type cgroupOwnerResolver struct {
@@ -117,11 +122,28 @@ func (r *cgroupOwnerResolver) lookup(cgroupID uint64, uidHint uint32) cgroupOwne
 		owner = r.scan(cgroupID, uidHint)
 	}
 	if owner.found && owner.system && !owner.exeLoaded {
-		owner.executable = processExecutable(owner.pid, cgroupID, r.scanRoot)
+		owner.executable = readProcessInstance(owner.pid, cgroupID, r.scanRoot, func(procDir string) (string, error) {
+			return os.Readlink(procDir + "/exe")
+		})
 		owner.exeLoaded = true
 		r.cache.Add(cgroupID, owner)
 	}
 	return owner
+}
+
+// processName returns owner's argv[0], reading it once per process instance.
+func (r *cgroupOwnerResolver) processName(cgroupID uint64, owner cgroupOwner) string {
+	if owner.nameLoaded {
+		return owner.processName
+	}
+	owner.processName = readProcessInstance(owner.pid, cgroupID, r.scanRoot, func(procDir string) (string, error) {
+		content, err := os.ReadFile(procDir + "/cmdline")
+		name, _, _ := strings.Cut(string(content), "\x00")
+		return name, err
+	})
+	owner.nameLoaded = true
+	r.cache.Add(cgroupID, owner)
+	return owner.processName
 }
 
 func (r *cgroupOwnerResolver) scan(cgroupID uint64, uidHint uint32) cgroupOwner {
@@ -189,13 +211,14 @@ func (r *cgroupOwnerResolver) scanUIDDirectory(kind, uidDir string, uid uint32, 
 	return result, found
 }
 
-// processExecutable reads /proc/<pid>/exe and keeps it only if the process
-// is still the one in that cgroup afterwards: its /proc/<pid>/cgroup must
-// still resolve to the same cgroup id. A PID reused between the readdir and
-// the readlink lives in a different cgroup, so it fails this check.
-func processExecutable(pid uint32, cgroupID uint64, root string) string {
+// readProcessInstance reads something from /proc/<pid> and keeps it only if
+// the process is still the one in that cgroup afterwards: its
+// /proc/<pid>/cgroup must still resolve to the same cgroup id. A PID reused
+// between the directory scan and the read lives in a different cgroup, so
+// it fails this check.
+func readProcessInstance(pid uint32, cgroupID uint64, root string, read func(procDir string) (string, error)) string {
 	procDir := procRoot + "/" + strconv.FormatUint(uint64(pid), 10)
-	executable, err := os.Readlink(procDir + "/exe")
+	value, err := read(procDir)
 	if err != nil {
 		return ""
 	}
@@ -212,7 +235,7 @@ func processExecutable(pid uint32, cgroupID uint64, root string) string {
 		if unix.Stat(root+relative, &stat) != nil || stat.Ino != cgroupID {
 			return ""
 		}
-		return executable
+		return value
 	}
 	return ""
 }
@@ -229,10 +252,15 @@ func parseCgroupComponent(name, prefix string) (uint32, bool) {
 // Reasons an identity did not yield a package, counted for diagnostics.
 type identityCounters struct {
 	resolvedPackage atomic.Uint64
+	// resolvedByProcess counts shared/system UID processes named through
+	// the (process name, UID) manifest index.
+	resolvedByProcess atomic.Uint64
 	noIdentity      atomic.Uint64
 	rootCgroup      atomic.Uint64
 	cgroupGone      atomic.Uint64
-	notUniqueUID    atomic.Uint64
+	// unknownPackage counts creators found whose package the UID and the
+	// process name do not decide (shared or system UID, native daemon).
+	unknownPackage atomic.Uint64
 }
 
 var userNameCache sync.Map // uint32 -> string
@@ -271,8 +299,9 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 		return &adapter.ConnectionOwner{UserId: int32(identity.uid), UserName: cachedUserName(identity.uid)}
 	}
 	var creator cgroupOwner
-	if i.cgroupOwners != nil {
-		creator = i.cgroupOwners.lookup(identity.cgroupID, identity.uid)
+	resolver := i.cgroupOwners.Load()
+	if resolver != nil {
+		creator = resolver.lookup(identity.cgroupID, identity.uid)
 	}
 	if !creator.found {
 		i.identityCounters.cgroupGone.Add(1)
@@ -289,9 +318,22 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 	if packageName := i.packageForCreatorUID(creator.uid); packageName != "" {
 		owner.PackageNames = []string{packageName}
 		i.identityCounters.resolvedPackage.Add(1)
-	} else if creator.uid%androidUserRange >= 10000 {
-		i.identityCounters.notUniqueUID.Add(1)
+		return owner
 	}
+	// Not decided by the UID: a shared or system UID. Only zygote children
+	// have manifest-declared process names; a native daemon keeps its path.
+	index := i.processIndex.Load()
+	if index != nil && (!creator.system || isAndroidApplicationExecutable(strings.TrimSuffix(creator.executable, deletedPathSuffix))) {
+		name := androidmanifest.ProcessRecordName(resolver.processName(identity.cgroupID, creator))
+		if name != "" {
+			if packageName := index.lookup(creator.uid%androidUserRange, name); packageName != "" {
+				owner.PackageNames = []string{packageName}
+				i.identityCounters.resolvedByProcess.Add(1)
+				return owner
+			}
+		}
+	}
+	i.identityCounters.unknownPackage.Add(1)
 	return owner
 }
 

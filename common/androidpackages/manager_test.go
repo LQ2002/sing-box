@@ -332,3 +332,31 @@ func TestSubscribeNotifiesOnChangeAndStopsAfterCancel(t *testing.T) {
 	time.Sleep(5 * testQuietPeriod)
 	require.Equal(t, int32(1), notified.Load(), "a cancelled subscription was notified")
 }
+
+// An upgrade that keeps every UID but moves the code (a new /data/app
+// directory) is published, so manifest readers find the new APKs, without
+// notifying anyone: no UID lookup changed.
+func TestCodeOnlyChangeIsPublishedSilently(t *testing.T) {
+	document := func(codePath string) string {
+		return `<packages>` + "\n" +
+			`<package name="a.app" codePath="` + codePath + `" ut="1" version="1" userId="10100" />` + "\n" +
+			`</packages>` + "\n"
+	}
+	table := newTestTable(t, document("/data/app/~~old/a.app"))
+	callback := &recorder{}
+	manager := startManager(t, table.path, callback)
+	var notified atomic.Int32
+	defer manager.Subscribe(func() { notified.Add(1) })()
+	code, loaded := manager.Snapshot().PackageCode("a.app")
+	require.True(t, loaded)
+	require.Equal(t, "/data/app/~~old/a.app", code.Path)
+
+	table.rewrite(t, document("/data/app/~~new/a.app"), 0, false)
+	require.Eventually(t, func() bool {
+		code, _ := manager.Snapshot().PackageCode("a.app")
+		return code.Path == "/data/app/~~new/a.app"
+	}, 3*time.Second, 5*time.Millisecond)
+	time.Sleep(5 * testQuietPeriod)
+	require.Equal(t, int32(1), callback.calls.Load(), "a code-only change notified the router")
+	require.Zero(t, notified.Load(), "a code-only change notified subscribers")
+}

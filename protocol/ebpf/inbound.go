@@ -90,7 +90,10 @@ type Inbound struct {
 	compiledPolicy            commonEBPF.CompiledPolicy
 	androidUIDOptions         *androidUIDOptions
 	androidUIDUpdater         *androidUIDUpdater
-	cgroupOwners              *cgroupOwnerResolver
+	// Set during startInbound while listeners may already accept, hence
+	// atomic.
+	cgroupOwners atomic.Pointer[cgroupOwnerResolver]
+	processIndex atomic.Pointer[processPackageIndex]
 	socketIdentityActive      atomic.Bool
 	identityCounters          identityCounters
 	androidUIDUpdaterAccess   sync.Mutex

@@ -110,11 +110,12 @@ func TestCgroupOwnerResolverRejectsReusedPID(t *testing.T) {
 
 func newIdentityTestInbound(t *testing.T, tree *fakeCgroupTree, packages *testPackageManager) *Inbound {
 	t.Helper()
-	return &Inbound{
+	inbound := &Inbound{
 		logger:         log.NewNOPFactory().Logger(),
 		networkManager: &testNetworkManager{packageManager: packages},
-		cgroupOwners:   newCgroupOwnerResolver(tree.root),
 	}
+	inbound.cgroupOwners.Store(newCgroupOwnerResolver(tree.root))
+	return inbound
 }
 
 func TestOwnerFromIdentity(t *testing.T) {
@@ -182,10 +183,18 @@ func TestOwnerFromIdentity(t *testing.T) {
 	}
 
 	counters := &inbound.identityCounters
-	if counters.resolvedPackage.Load() != 2 || counters.notUniqueUID.Load() != 1 ||
+	if counters.resolvedPackage.Load() != 2 || counters.unknownPackage.Load() != 3 ||
 		counters.rootCgroup.Load() != 1 || counters.cgroupGone.Load() != 1 || counters.noIdentity.Load() != 1 {
-		t.Fatalf("counters: resolved=%d notUnique=%d root=%d gone=%d none=%d",
-			counters.resolvedPackage.Load(), counters.notUniqueUID.Load(), counters.rootCgroup.Load(),
+		t.Fatalf("counters: resolved=%d unknownPackage=%d root=%d gone=%d none=%d",
+			counters.resolvedPackage.Load(), counters.unknownPackage.Load(), counters.rootCgroup.Load(),
 			counters.cgroupGone.Load(), counters.noIdentity.Load())
+	}
+}
+
+func writeCmdline(t *testing.T, tree *fakeCgroupTree, pid uint32, name string) {
+	t.Helper()
+	path := filepath.Join(tree.proc, strconv.FormatUint(uint64(pid), 10), "cmdline")
+	if err := os.WriteFile(path, append([]byte(name), 0), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

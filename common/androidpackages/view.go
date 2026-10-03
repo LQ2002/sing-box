@@ -79,3 +79,12 @@ func (v View) SharedPackageByID(id uint32) (string, bool) {
 	name, loaded := v.table.sharedByID[id]
 	return name, loaded
 }
+
+// PackageCode returns where a package's APKs are, for reading its manifest.
+func (v View) PackageCode(packageName string) (PackageCode, bool) {
+	if v.table == nil {
+		return PackageCode{}, false
+	}
+	code, loaded := v.table.codeByPackage[packageName]
+	return code, loaded
+}

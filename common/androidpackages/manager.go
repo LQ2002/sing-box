@@ -187,6 +187,11 @@ func (m *Manager) read() (*snapshot, error) {
 func (m *Manager) publish(next *snapshot) bool {
 	previous := m.current.Load()
 	if previous != nil && previous.equal(next) {
+		if !previous.codeEqual(next) {
+			// Same UIDs, new code locations or stamps (an upgrade): publish
+			// silently so manifest readers see the new APKs.
+			m.current.Store(next)
+		}
 		return false
 	}
 	m.current.Store(next)

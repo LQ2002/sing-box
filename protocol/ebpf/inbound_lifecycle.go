@@ -115,8 +115,8 @@ func (i *Inbound) startInbound() error {
 		// (socket_identity.go). Only when routing needs process information.
 		RecordSocketIdentity: i.recordsSocketIdentity(),
 	}
-	if backendConfig.RecordSocketIdentity && i.cgroupOwners == nil {
-		i.cgroupOwners = newCgroupOwnerResolver(cgroupRoot)
+	if backendConfig.RecordSocketIdentity && i.cgroupOwners.Load() == nil {
+		i.cgroupOwners.Store(newCgroupOwnerResolver(cgroupRoot))
 	}
 	if runtime.GOOS == "android" {
 		backendConfig.AssignmentCapacity = commonEBPF.CompactTCAssignmentCapacity
@@ -146,6 +146,9 @@ func (i *Inbound) startInbound() error {
 		return err
 	}
 	i.socketIdentityActive.Store(backend != nil && backendConfig.RecordSocketIdentity)
+	if i.socketIdentityActive.Load() {
+		i.startProcessIndex()
+	}
 	if backend != nil {
 		if err = i.listeners.registerTCTCPListeners(backend); err != nil {
 			i.setTCDataPlane(newUnstartedTCRuntime(backend))
@@ -556,6 +559,7 @@ func (i *Inbound) cleanupStartFailure() error {
 func (i *Inbound) closeResources() error {
 	// First, so no UID update races the backend being taken apart.
 	i.stopAndroidUIDUpdater()
+	i.stopProcessIndex()
 	monitorErr := i.stopTCInterfaceMonitor()
 	i.stopBypassRuleSets()
 	sharedRewriteErr := error(nil)

@@ -34,6 +34,21 @@ type snapshot struct {
 	sharedByPackage map[string]uint32
 	packageByID     map[uint32][]string
 	sharedByID      map[uint32]string
+	// codeByPackage is where each package's APKs are and a stamp that
+	// changes whenever they may have changed (see PackageCode). It is not
+	// part of the UID tables sing-tun exposes.
+	codeByPackage map[string]PackageCode
+}
+
+// PackageCode locates a package's installed code.
+type PackageCode struct {
+	// Path is packages.xml's codePath: the directory holding base.apk and
+	// split APKs (or, for some system packages, the APK's directory).
+	Path string
+	// Stamp combines the last-update time ("ut") and versionCode
+	// ("version"); a reinstall or upgrade changes it even when Path is
+	// reused.
+	Stamp string
 }
 
 const rootElement = "packages"
@@ -97,6 +112,7 @@ func parsePackages(content []byte) (*snapshot, error) {
 		sharedByPackage: make(map[string]uint32),
 		packageByID:     make(map[uint32][]string),
 		sharedByID:      make(map[uint32]string),
+		codeByPackage:   make(map[string]PackageCode),
 	}
 	depth := 0
 	rootSeen := false
@@ -161,6 +177,22 @@ func (s *snapshot) addElement(element xml.StartElement) error {
 		}
 		s.idByPackage[name] = userID
 		s.packageByID[userID] = append(s.packageByID[userID], name)
+		var code PackageCode
+		var updated, version string
+		for _, attr := range element.Attr {
+			switch attr.Name.Local {
+			case "codePath":
+				code.Path = attr.Value
+			case "ut":
+				updated = attr.Value
+			case "version":
+				version = attr.Value
+			}
+		}
+		if code.Path != "" {
+			code.Stamp = updated + "/" + version
+			s.codeByPackage[name] = code
+		}
 	case "shared-user":
 		name, userID, err := readNameAndID(element, "userId")
 		if err != nil {
@@ -223,6 +255,17 @@ func (s *snapshot) equal(other *snapshot) bool {
 		}
 	}
 	return true
+}
+
+// codeEqual reports whether both snapshots locate every package's code the
+// same way. It is kept apart from equal: a changed code path or stamp alone
+// (an in-place upgrade) must be published so manifest lookups read the new
+// APKs, but it does not change any UID lookup, so it notifies nobody.
+func (s *snapshot) codeEqual(other *snapshot) bool {
+	if s == nil || other == nil {
+		return s == other
+	}
+	return mapsEqual(s.codeByPackage, other.codeByPackage)
 }
 
 func mapsEqual[K comparable, V comparable](left, right map[K]V) bool {

@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="p.split" split="ondemand">
+  <application>
+    <service android:name=".OnDemandService" android:process="@string/split_process" />
+  </application>
+</manifest>
