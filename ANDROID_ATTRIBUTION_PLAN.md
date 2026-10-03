@@ -20,9 +20,10 @@
 |---|---|---|---|
 | 1 | 修复包表刷新与查询一致性 | **已完成**（本地测试与真机验收均通过） | 代码 `35624e63`；记录见“阶段 1 实施记录” |
 | 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | **已完成**（本地、真机与真实 App 验收均通过） | sing-ebpf `3c1b28f`（已推送）；应用依赖 `6252b171`；记录见“阶段 2 实施记录” |
-| 3 | sing-box 接入新归属路径并完成整链路验收 | **已完成**（本地与真机整链路验收通过，部分项未执行已注明） | `851da4e3`…`dc9c85b5`；记录见“阶段 3 实施记录” |
+| 3 | sing-box 接入新归属路径并完成整链路验收 | **归属修复与本轮补充验收完成；完整验收仍有未执行项** | 修复 `cae57485`；实际数据面证据与剩余项见阶段 3 |
 
-阶段 1、2、3 均已完成；未执行的验收子项在各阶段记录中注明。
+阶段 1、2 已有实现及验收记录；阶段 3 已修正 cgroup 进程归属假设，并补做真实数据回包验证。
+阶段是否通过以实际证据为准；未执行和不适用的检查分别列出，不用勾选掩盖未完成项。
 
 ## 执行纪律
 
@@ -253,14 +254,15 @@ cmdline 为包名。
 ### 实现项
 
 - [x] 在 `protocol/ebpf` 接收新的 assignment；普通、非共享应用 UID 优先查当前包表，
-  保留完整 UID/userId。cgroup 和 `am_proc_start` 提供进程证据，Go Manifest 解析按需使用。
-  （cgroup 作为进程证据；`am_proc_start` 经评估不采用，理由见记录。）
+  保留完整 UID/userId。socket UID 与 cgroup 的 UID 标签一致时可提供应用级包归属，
+  不从目录 PID 推断创建者；共享/系统归包只使用 cookie 创建者证据与核验后的进程名。
 - [x] Go Manifest 缓存按 APK 路径与包更新信息失效；包升级、进程声明变化重新读取。
   组件/共享 UID 歧义、不完整解析和缺失证据均保持未知，不再扩展 Java 构建链。
 - [x] 不把 46/46 或当前第三方应用 UID 分布当作一般性证明。AM 日志没有出生令牌，
   不能仅凭 PID/进程名/接收时间窗口永久绑定；校验当前实例与事件来源，过期、重连、
   PID 复用或证据矛盾即失效。存量补齐使用有界查询，不在每条连接轮询 /proc。
-  （以 cgroup id 作出生令牌；/proc 每个进程实例只读一次并做 cgroup 一致性校验。）
+  （cgroup id 仅标识组。模块提供 socket 创建时的 PID/UID/start_boottime；同一 proc
+  目录 FD 核验启动时间和 UID 后读取 exe/cmdline。元数据仅缓存 1 s，不承诺立即检测 exec。）
 - [x] 普通唯一路径不等待 AM；共享/系统 UID 无法唯一归包时返回未知。
   未知返回非 nil ConnectionOwner，阻止路由器回退后填入整组候选包。
 - [x] 已有模块仅按需提供创建者后备；创建者、socket UID、宿主和记账 UID 语义分开。
@@ -275,16 +277,21 @@ cmdline 为包名。
 
 ### 验收与交付
 
-- [x] 包规则中指定一个未安装 App，安装后自动查包并接管；卸载后旧 UID 不累积；
-  同 UID 升级且最终规则不变，不更新 TC。规则未完成应用时诊断不得显示已生效。
-- [x] TCP/UDP、IPv4/IPv6、冷/热启动、UDP 多目的地、共享进程未知、模块缺失均通过。
+- [x] 包规则指定未安装包，安装后该 UID 的实际流量自动被接管；卸载配置包后规则移除。
+  已用共享 UID 的 A/B 包与同 UID 原生负载验证：只装 B 时回包、装 A 后拒绝、卸载 A 保留 B
+  后恢复回包，始终为同一 sing-box 实例。同包覆盖重装不更新 TC。规则未应用时诊断不显示
+  已生效有单元测试。此项不等于真实 App 自主发流或版本号升高的升级验收。
+- [ ] TCP/UDP、IPv4/IPv6、冷/热启动、UDP 多目的地、共享进程未知、模块缺失均通过。
   测试真实 sing-box 转发入口，不以 loopback 独立探针代替集成验收。
-  （模块缺失未在真机执行，见记录。）
-- [x] 包升级、进程退出/重用、日志断连、system_server 重连及启动存量，不能把旧身份
-  贴给新进程或新包；证据不足明确未知。（日志断连/system_server 重连不适用：未使用 AM 日志。）
-- [x] 相同设备/配置/负载下至少五组配对性能检查，报告吞吐、CPU、内存、建立连接和
-  转发尾延迟，以及识别覆盖与未知原因；不从单项 helper 延迟推导总体提速。
-  （吞吐未单独测，理由见记录。）
+  （本轮完成 IPv4 TCP 真实转发及消费者无法打开模块的真机分支；其余矩阵未完整重跑。
+  共享进程歧义与模块缺失有单元测试，未物理卸载模块。）
+- [ ] 包升级、进程退出/重用、system_server 重启及启动存量，不能把旧身份
+  贴给新进程或新包；证据不足明确未知。（AM 日志断连不适用；未使用 AM 并不免除
+  system_server 重启后包表/UID 变化的验收。本次不重启用户设备的 Framework。）
+- [x] 相同设备/配置/负载下五组配对数据转发检查，报告已校验 echo 吞吐、CPU、RSS、
+  建连延迟与数据回包尾延迟，逐轮交替新旧版；共 10000 次完整 64 KiB 回包。
+  仅覆盖系统段原生 UID 经 TC 的受控 IPv4 TCP 负载，不代表普通 App 识别覆盖、饱和吞吐
+  或长期内存行为；识别范围和未知边界见下方记录，不据此宣称总体提速。
 - [x] 提供最小移植清单：主仓库提交、依赖提交、触及的接口、已执行测试。
   `E:\Ref_sing-box` 仍不在本次修改范围内，移植时依照这份清单执行。
 
@@ -307,49 +314,128 @@ cmdline 为包名。
 
 **3b 归属**（`protocol/ebpf/socket_identity.go`、`process_package_index.go`、新包
 `common/androidmanifest`）：
-- 用 TC 记录的 cgroup id 定位创建进程（`/apps|system/uid_X/pid_Y`）；kernfs id 一次开机内不
-  复用，作出生令牌。按“发送者”归属：用创建者 UID，不用 sk_uid（netd 为 App fchown 的 DNS
-  socket 归 netd）。
-- 普通唯一 UID → 包名，无 /proc 访问；SDK 沙箱 → 宿主（UID−10000）；共享/系统 UID →
-  （进程名, UID）查 Manifest 声明，唯一才给包名（与 AMS `mProcessNames` 同键）；
-  system_server 的 cmdline 与记录名不同（`system_server`/`system`）已按源码处理。
-- 效率：cgroup id 解析一次缓存；先只读 sk_uid 指向的 uid 目录并缓存同级进程；exe 只对
-  /system 进程懒读，进程名只对非唯一 UID 懒读，均做 cgroup 一致性校验。Manifest 解析不在
-  连接路径上：后台单 goroutine 按 appId 建索引，启动只预热当前运行的共享/系统 UID，按
+- **复核修正**：TC 的 cgroup id 只定位 Android 进程组。fork 子进程继承该组，迁入进程也可
+  共用它；`pid_Y` 不是 socket 创建者，kernfs id 也不是进程出生令牌。
+- socket UID 与组 UID 一致、且是普通唯一应用 UID 时 → 包名，无 /proc 或模块查询，
+  `ProcessID=0`、不填路径；SDK 沙箱 → 宿主（UID−10000）。这是 UID/应用组级归属，
+  不声称精确识别创建进程，也不对有权限任意迁组、改凭据或 fchown 的行为作安全保证。
+- 共享/系统 UID、UID 矛盾、根组或组已消失 → 按 socket cookie 查询可选模块；用模块的
+  创建者 UID/PID/start_boottime 核验 procfs 后，exe 为 app_process 才用完整 cmdline 查
+  Manifest，唯一才归包。netd 的 fchown socket 在模块有记录时归 netd；无证据不归给 App。
+  不同 cookie 的创建者不能共用按 cgroup id 缓存的进程结果。
+- 效率：cgroup id 仅缓存组 UID；进程元数据复用原有 `(PID, UID, start_boottime)` 的 1 s
+  缓存，核验失败或 cmdline 不完整不缓存。Manifest 解析不在连接路径上：
+  后台单 goroutine 按 appId 建索引，仅有可选创建者来源时预热共享/系统 UID，按
   codePath+ut+version 失效；resources.arsc 只在出现引用时读取，并跨该包全部 APK 解析
   （Chrome 的 split 引用 base 资源）。`open_by_handle_at` 本可 O(1)，但真机 GKI 未开
   `CONFIG_FHANDLE`（ENOSYS）。
 - `am_proc_start` 不采用：它给出“启动该进程的组件所属包”，而其他包的组件之后会载入同一
   进程（阶段 1 探针已见到误认），对 (进程名, UID) 没有额外区分力，且只能按 PID 拼接、
-  没有出生令牌；cgroup id 已标识进程实例。
+  没有出生令牌；因此精确进程证据取自可选模块，而非 cgroup 目录。
 - 包表新增 codePath 与版本戳；只改这两项（原地升级）时静默发布，不触发回调。
 - 用户名：Go 的 `os/user` 在 android 上未实现（与 CGO 无关），只有当前用户 root 能解析；
   App/isolated UID 按 bionic 公式生成 `u<user>_a<n>`/`u<user>_i<n>`。
 - 诊断：`EBPFDiagnostics.android_uid_policy`（目标/已生效、更新/失败计数）与
   `attribution`（按 UID/按进程名归包数、未知原因、索引进度）。上游 daemon 的 protobuf
   未改（需重新生成上游代码、增加 rebase 成本），所以这些字段暂不经 API 输出；归属结果
-  按进程实例记日志一次。
+  普通快路径按 cgroup 组记日志，模块元数据按已有短期缓存抑制重复日志。
 
 **验证**：
 - 本地：全部单元测试（含 -race）、android/arm64 vet；Manifest 解析用 aapt2 生成的真实 APK
   夹具（各种资源编码、split 引用 base），截断输入全部报错。
 - 真机 `TestDeviceProcessNamesMatchManifests`：79 个运行中 App 进程 67 唯一、7 多包、0 无法
   解释，533 个包 0 解析失败（`results/stage3-device-manifest-process-names.txt`）。
-- 真机整链路（`results/stage3-device-acceptance-summary.txt`）：Chrome 冷启动首连接即归包；
+- 修复前真机记录（`results/stage3-device-acceptance-summary.txt`，不能代替修复后的验收）：Chrome 冷启动首连接即归包；
   一分钟内后台流量归属涵盖普通 App、UID 1000 的 securitycenter、同一共享 UID 下两个进程
   分别归包、系统 AID 6110；system_server 按设计未知，netd 给出可执行路径；
   exclude_package 测试 App 安装后 0.16 s 规则生效、覆盖重装不写内核、卸载后 0.06 s 移除；
   IPv6 连接被拦截并归属（本网络无 IPv6 出口）。用户 config.json 下 check 通过、归属正常。
-- 配对性能（用户配置，5 轮×1000 连接，`results/stage3-device-perf-paired.txt`）：建立连接
+- 修复前配对性能（用户配置，5 轮×1000 连接，`results/stage3-device-perf-paired.txt`）：本地 TCP 建立连接
   p50 110.3→109.4 µs、p90 210.3→198.8 µs、p99 539→603 µs（逐轮互有高低）、sing-box CPU
   0.37 s→0.37 s/1000 连接；启动后 RSS 新版前 30 s 多约 7 MB（Manifest 预热解压
   resources.arsc 的临时堆），90 s 时已回落到 39.4 MB（旧版 44.9 MB）。
-- 未执行：模块缺失（用户的 sockowner 模块已安装，未停用；身份路径仅在根 cgroup 时调用
-  模块，单元测试覆盖无模块路径）；吞吐（阶段 3 只改连接建立时的归属，逐包路径没有改动，
-  逐包开销已在阶段 2 配对测量）；AM 日志断连/system_server 重连（未使用 AM 日志）。
+- 上述性能脚本在 connect 返回后立即关闭，无业务数据回包；p99 不是转发尾延迟。
+  CPU 采样含后台流量和负载后 2 s 等待，RSS 是短时观测；不能据此宣称整体性能优于旧方案。
+- 原次未执行：物理卸载模块、实际版本升级、Framework 重启；不适用：AM 日志断连。
+  修复后模块是所有精确进程归属的可选来源，而非只用于根 cgroup。
 - 发现：用户日常二进制来自另一分支，其完整 config.json 含本仓库不支持的字段
   （`experimental.urltest_unified_delay`、`group` 类型 DNS 等）；用户随后换用的 config.json
   本仓库可直接运行。
+
+### 阶段 3 复核修正与补充验收（2026-10-03）
+
+**代码提交**：`cae57485`。`E:\sing-ebpf` 本轮未修改，仍使用 `3c1b28f0eb65`；
+`E:\Ref_sing-box` 未修改。
+
+**修正内容**：
+- 删除 cgroup 缓存中的 PID、exe、进程名及基于目录 PID 的 procfs 查询。普通唯一应用
+  快路径仅返回 UID/包名、PID 为 0；其余按每条流的 cookie 找创建者，绝不在同组 cookie
+  之间复用某个进程的身份。组 UID 与 socket UID 矛盾且无创建者证据时，UID 也保持未知。
+- procfs 元数据继续用 `(PID, UID, start_boottime)` 短期缓存；共享/系统归包所需的完整
+  cmdline 必须来自同一个已核验的 proc 目录。缺失、空或无 NUL 结束的 argv[0] 不缓存。
+  包名细化先取得一份包表快照；后台 Manifest 索引只在存在 cookie 创建者来源时启动。
+- TC 身份新路径限制为 Android，Linux 保留旧 tracker 路径。诊断新增创建者不可用与 UID
+  矛盾计数，把误称创建者消失的字段改为组无法解析。
+- 原突发通知测试用调度相关的“最多 5 次更新”断言，完整 race 复跑暴露偶发失败；现用
+  同步门控持有一次后端写入，再投递 50 次更新，严格断言一次在途写入加一次最终更新。
+  只修正测试，不改变实际合并算法。
+
+**本地验证**（WSL Debian / Go 1.26.6）：
+- `go test -race -tags with_ebpf ./protocol/ebpf ./common/androidpackages ./common/androidmanifest -count=1`
+  通过；最后的 Android-only guard 与测试门控修改后，完整 `protocol/ebpf` race 再次通过
+  （10.724 s），对应平台与合并测试 `-count=20 -race` 通过（2.215 s）。
+- 新回归覆盖同组不同 cookie/创建者、组目录父进程退出、同组 PID 重用、UID/启动时间不符、
+  cmdline 不完整、模块不可用/查无记录、netd fchown、普通快路径零 procfs/模块查询，以及
+  一次细化只用同一包表快照。独立最终代码复核未发现阻断问题。
+- android/arm64 vet 通过；NDK r29、CGO、仓库工作流 BASE_TAGS 的 Android arm64 构建通过。
+  最终 guard 不改变 Android 成品字节，重建哈希一致。最终测试二进制
+  `results/sing-box-android` SHA-256：
+  `07260be09bab492f147d6b10ce47cb224067af557af521f4dc09f1e6de2dfb36`。
+  它在提交前构建（当时 HEAD `0dd5dbb7`，含本次修复），不能仅用构建时 HEAD 代表其源代码。
+  本地原始输出：`results/stage3-fix-{local-race,platform-coalescing,android-build}.txt`。
+- 验收负载工具的 race、vet、arm64 构建及回包损坏/截断/超时测试通过；所有验收 shell
+  脚本语法检查与 `git diff --check` 通过。旧 connect-only 模式与新 echo 模式分别标注指标。
+
+**真机数据面**（设备 `8b97939c`；以下 `results/` 均指
+`experimental/socket_attribution_probe/results/`，已被 Git 忽略）：
+- 使用两个私有网络命名空间、veth 和可核验的 echo 对端；每次启动先用 bpftool 确认私有
+  接口已挂 TCX。负载必须完整发送并逐字节核对回包；connect 成功不再作为转发成功。
+- 旧 `7c12b1de` 与上述最终修复二进制交替五组，每组每版 1000 次 × 64 KiB，10000 次全部
+  校验通过。各版五轮中位数如下；“配对差”是逐轮新减旧后取中位数，不是两列中位数相减。
+
+| 指标 | 旧版 | 修复版 | 配对差中位数 |
+|---|---:|---:|---:|
+| 建连 p50 / p99（µs） | 122.865 / 399.844 | 120.938 / 381.355 | -0.885 / +20.937 |
+| 64 KiB 数据回包 p50 / p99（µs） | 468.958 / 1042.083 | 468.593 / 930.677 | +0.469 / -24.010 |
+| 建连到完整回包 p99（µs） | 1183.229 | 1139.323 | -42.812 |
+| 已校验 echo 吞吐（MiB/s） | 95.988 | 96.940 | +0.472 |
+| sing-box CPU（tick，100 tick/s） | 59 | 60 | -1 |
+| 负载结束 RSS（KiB） | 31892 | 38316 | +6464 |
+
+  第五组两版都明显变慢，完整保留；RSS 为启动约 3 s 后的短时观测，修复版此时约多 6.3 MiB。
+  负载为 UID 9050 原生程序，不是普通 App 归包覆盖；顺序 echo 吞吐不是最大承载能力。
+  原始数据：`stage3-fix-device/isolated-perf.txt`、`perf-summary.json`。
+- **消费者模块不可用**：在测试进程的私有 mount namespace 内，用只读普通文件覆盖设备
+  节点，使打开模块返回 EROFS；日志确认 `process_tracking=tc_socket_identity`、无 cookie
+  来源。100 次 × 64 KiB 回包全部通过。全局模块保持加载，因此不代表卸载模块后的系统
+  开销或普通 App 归属覆盖。见 `stage3-fix-device/module-unavailable-final.txt`、`forward.log`。
+- **安装与同包重装**：`include_package` 指定起初未安装的测试包；安装后实际 UID 10495
+  的同目的流量被捕获并由 reject 路由拒绝，同一实例内覆盖重装仍拒绝且规则更新计数
+  1→1。不挂测试 TC 时同 UID 5/5 完整回包，排除端点自身故障。完全卸载独占 UID 后，
+  有无测试 TC 都被 netd 阻断，此结果明确为 INCONCLUSIVE，不能证明规则清除。
+- **卸载配置包**：为排除上项 netd 干扰，另用共享 UID 10496 的 A/B 夹具，配置只 include A。
+  同一实例 PID 12242/start 14903174：只安装 B → 5/5 完整回包；安装 A → 5/5 拒绝；
+  卸载 A 保留 B → 同 UID 5/5 完整回包恢复。前后不挂测试 TC 的基线也均 5/5 通过。
+  这验证配置包卸载后实际 UID 规则移除，未把原生同 UID 负载写成 App 自主发流。
+  见 `stage3-fix-device/isolated-shared-package.txt`、`shared-package.log`。
+- 测试包已全部卸载、测试进程和私有命名空间已清理，本次 `/data/local/tmp/sbe3-fix`
+  临时目录已删除。用户服务始终为 PID 11765、
+  start ticks 14670767；前后 cmdline、主命名空间 links/IPv4 routes 逐字节一致，模块设备
+  仍为 10,300。清理核对见 `stage3-fix-device/shared-cleanup.txt` 等原始文件。
+
+**仍未完成的完整验收**：本轮修复后真实 App 自主发流与冷/热启动矩阵、UDP 多目的地及
+IPv6 完整转发、真实版本升级、Framework 重启、真机受控 PID 重用及长期内存行为未验证；
+未物理卸载模块。当前成果不能把阶段 3 整张检查表标为全部通过。
 
 **移植清单（→ `E:\Ref_sing-box`）**：
 - 依赖：`github.com/LQ2002/sing-ebpf` `3c1b28f0eb65`（`UpdateUIDPolicy`、
@@ -362,7 +448,9 @@ cmdline 为包名。
   exclude 优先）；`android_uid.go`（`resolveAndroidUIDRanges`、启动提示）；
   `inbound.go`（字段）；`inbound_lifecycle.go`（RecordSocketIdentity、回退、跳过 cgroup
   追踪器、启动/停止 updater 与索引）；`tc_connection.go`、`inbound_connection.go`、
-  `udp_state.go`（身份传递）；`socket_owner_resolve.go`（用户名）；`diagnostics.go`。
+  `udp_state.go`（身份传递）；`socket_owner_resolve.go`（用户名、创建者元数据与同快照归包）；
+  `diagnostics.go`。必须包含本轮修复 `cae57485` 及对应 creator/platform 回归测试，不能只
+  移植 `0dd5dbb7` 以前的 cgroup PID 归属实现。
 - 测试：`go test -race -tags with_ebpf ./protocol/ebpf/ ./common/androidpackages/
   ./common/androidmanifest/`；真机 `common/androidmanifest` 的 Device 测试；按上面的
   真机整链路步骤复验（脚本与说明在 `experimental/socket_attribution_probe/stage3e2e/`）。

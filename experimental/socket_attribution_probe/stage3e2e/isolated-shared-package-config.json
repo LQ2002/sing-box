@@ -1,0 +1,15 @@
+{
+  "log": {"level": "debug", "output": "/data/local/tmp/sbe3-fix/shared-package.log", "timestamp": true},
+  "inbounds": [{
+    "type": "ebpf", "tag": "isolated-ebpf", "network": ["tcp"],
+    "local": {
+      "enabled": true, "data_plane": "tc", "dns_mode": "off", "ipv6": false,
+      "bypass_private_address": false, "include_package": ["dev.sbo.firstconnection.a"]
+    }
+  }],
+  "outbounds": [{"type": "direct", "tag": "direct"}],
+  "route": {
+    "rules": [{"user_id": [9050], "outbound": "direct"}, {"action": "reject"}],
+    "final": "direct", "default_interface": "e3client"
+  }
+}

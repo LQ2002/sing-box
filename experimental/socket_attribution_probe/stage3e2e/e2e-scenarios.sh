@@ -1,8 +1,11 @@
 #!/system/bin/sh
 # Stage 3 functional scenarios against the running test instance.
+# Package lifecycle steps observe rule-update logs only. They do not send
+# test-package traffic or prove the corresponding TC data-plane transition.
 LOG=/data/local/tmp/sbe2/e2e/e2e.log
 APK=/data/local/tmp/sbe2/test-single.apk
 PKG=dev.sbo.firstconnection.single
+echo "PACKAGE_RULE_EVIDENCE=update_logs_only (no test-package data-plane assertion)"
 up() { cut -d' ' -f1 /proc/uptime; }
 rules() { grep -c "eBPF UID rules follow the package table" $LOG; }
 wait_rules() { # wait until the rule-update count exceeds $1, print the delay
