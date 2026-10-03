@@ -168,3 +168,116 @@ func TestDeviceProcessNamesMatchManifests(t *testing.T) {
 		t.Errorf("%d running processes are declared by no package of their UID", none)
 	}
 }
+
+// TestDeviceProcessNameHashes checks the socket creator v2 name evidence
+// (ANDROID_ATTRIBUTION_PLAN.md, Claude 目标设计) over every installed
+// package: per app ID, FNV-1a 64 of each manifest process name must not
+// collide with a different name, and names declared by more than one package
+// of the same app ID are counted, because such a name cannot single out a
+// package. Names at or beyond the zygote argument block limits are counted
+// too: setArgv0 strlcpy's into the zygote's original argv block
+// (AndroidRuntime::setArgv0, app_main.cpp computeArgBlockSize), so a longer
+// name reaches argv[0] truncated. The block sizes are read from the running
+// zygote and USAP processes.
+func TestDeviceProcessNameHashes(t *testing.T) {
+	if os.Getenv("SBO_DEVICE_TEST") != "1" {
+		t.Skip("set SBO_DEVICE_TEST=1 to run on a device")
+	}
+	manager := androidpackages.New(androidpackages.Options{})
+	if err := manager.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	view := manager.Snapshot()
+
+	fnv := func(value string) uint64 {
+		hash := uint64(0xcbf29ce484222325)
+		for index := 0; index < len(value); index++ {
+			hash ^= uint64(value[index])
+			hash *= 0x100000001b3
+		}
+		return hash
+	}
+	// Argument block sizes of every running zygote-like parent.
+	blocks := map[int]bool{}
+	entries, _ := os.ReadDir("/proc")
+	for _, entry := range entries {
+		cmdline, err := os.ReadFile("/proc/" + entry.Name() + "/cmdline")
+		if err != nil {
+			continue
+		}
+		name, _, _ := strings.Cut(string(cmdline), "\x00")
+		if !strings.HasPrefix(name, "zygote") && !strings.HasSuffix(name, "_zygote") && !strings.HasPrefix(name, "usap") {
+			continue
+		}
+		stat, err := os.ReadFile("/proc/" + entry.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		fields := strings.Fields(string(stat)[strings.LastIndexByte(string(stat), ')')+2:])
+		if len(fields) < 47 {
+			continue
+		}
+		start, _ := strconv.ParseUint(fields[45], 10, 64)
+		end, _ := strconv.ParseUint(fields[46], 10, 64)
+		t.Logf("ZYGOTE pid=%s name=%s arg_block=%d", entry.Name(), name, end-start)
+		blocks[int(end-start)] = true
+	}
+	limit := 1 << 30
+	for size := range blocks {
+		limit = min(limit, size-1)
+	}
+
+	names, collisions, ambiguous, longest, overLimit, appIDs, failed := 0, 0, 0, 0, 0, 0, 0
+	for id := uint32(0); id < 20000; id++ {
+		packages, loaded := view.PackagesByID(id)
+		if !loaded {
+			continue
+		}
+		appIDs++
+		owners := map[string]map[string]bool{}
+		for _, packageName := range packages {
+			code, loaded := view.PackageCode(packageName)
+			if !loaded {
+				continue
+			}
+			processes, err := PackageProcesses(packageName, code.Path)
+			if err != nil {
+				failed++
+				continue
+			}
+			for _, process := range processes {
+				if owners[process] == nil {
+					owners[process] = map[string]bool{}
+				}
+				owners[process][packageName] = true
+			}
+		}
+		hashes := map[uint64]string{}
+		for process, packageSet := range owners {
+			names++
+			longest = max(longest, len(process))
+			if len(process) >= limit {
+				overLimit++
+				t.Logf("AT_OR_OVER_BLOCK app_id=%d len=%d %s", id, len(process), process)
+			}
+			if len(packageSet) > 1 {
+				ambiguous++
+				list := make([]string, 0, len(packageSet))
+				for packageName := range packageSet {
+					list = append(list, packageName)
+				}
+				sort.Strings(list)
+				t.Logf("AMBIGUOUS app_id=%d %s: %s", id, process, strings.Join(list, ","))
+			}
+			hash := fnv(process)
+			if other, exists := hashes[hash]; exists && other != process {
+				collisions++
+				t.Errorf("FNV collision app_id=%d %q %q", id, process, other)
+			}
+			hashes[hash] = process
+		}
+	}
+	t.Logf("app_ids=%d process_names=%d ambiguous_names=%d hash_collisions=%d longest=%d smallest_block_limit=%d at_or_over_limit=%d parse_failures=%d",
+		appIDs, names, ambiguous, collisions, longest, limit, overLimit, failed)
+}

@@ -1,0 +1,31 @@
+=== RUN   TestDeviceProcessNamesMatchManifests
+    device_test.go:132: MULTI android.process.acore uid=10089: com.android.providers.contactkeys,com.android.providers.blockednumber,com.android.providers.userdictionary,com.android.providers.contacts
+    device_test.go:132: MULTI android.process.media uid=10095: com.android.providers.downloads,com.android.mtp
+    device_test.go:132: MULTI system uid=1000: android,com.android.providers.settings,com.android.inputdevices,com.android.server.telecom,com.android.location.fused
+    device_test.go:132: MULTI com.android.networkstack.process uid=1073: com.android.networkstack,com.android.networkstack.tethering
+    device_test.go:132: MULTI com.qti.phone uid=10154: org.codeaurora.ims,com.qualcomm.qcrilmsgtunnel,com.qti.phone
+    device_test.go:132: MULTI .dataservices uid=1001: vendor.qti.data.ntnsatapp,vendor.qti.imsdatachannel
+    device_test.go:132: MULTI .qtidataservices uid=10119: vendor.qti.iwlan,com.qualcomm.qti.cne
+    device_test.go:132: MULTI com.android.phone uid=1001: com.android.providers.telephony,com.android.mms.service,com.miui.vsimcore,com.qti.qualcomm.deviceinfo,com.android.ons,com.android.stk,com.xiaomi.phone,com.android.cellbroadcastservice,com.xiaomi.ecc,com.android.phone,com.qualcomm.atfwd
+    device_test.go:142: running=89 unique=76 multi=8 none=0 sandbox_or_isolated=5 parsed_packages=127 parse_errors=0 parse_time=551.707656ms
+    device_test.go:166: all installed packages: 533 parsed in 2.087445312s, 0 failed
+--- PASS: TestDeviceProcessNamesMatchManifests (2.70s)
+=== RUN   TestDeviceProcessNameHashes
+    device_test.go:223: ZYGOTE pid=10339 name=usap64 arg_block=99
+    device_test.go:223: ZYGOTE pid=10985 name=usap64 arg_block=99
+    device_test.go:223: ZYGOTE pid=2034 name=zygote64 arg_block=99
+    device_test.go:223: ZYGOTE pid=5055 name=usap64 arg_block=78
+    device_test.go:223: ZYGOTE pid=6208 name=webview_zygote arg_block=99
+    device_test.go:271: AMBIGUOUS app_id=1000 com.android.phone: com.android.settings,com.miui.cit,com.xiaomi.mtb
+    device_test.go:271: AMBIGUOUS app_id=1000 system: android,com.android.inputdevices,com.android.location.fused,com.android.providers.settings,com.android.server.telecom
+    device_test.go:271: AMBIGUOUS app_id=1001 com.android.phone: com.android.cellbroadcastservice,com.android.mms.service,com.android.ons,com.android.phone,com.android.providers.telephony,com.android.stk,com.miui.vsimcore,com.qti.qualcomm.deviceinfo,com.qualcomm.atfwd,com.xiaomi.ecc,com.xiaomi.phone
+    device_test.go:271: AMBIGUOUS app_id=1001 .dataservices: vendor.qti.data.ntnsatapp,vendor.qti.imsdatachannel
+    device_test.go:271: AMBIGUOUS app_id=1073 com.android.networkstack.process: com.android.networkstack,com.android.networkstack.tethering
+    device_test.go:271: AMBIGUOUS app_id=10089 android.process.acore: com.android.providers.blockednumber,com.android.providers.contactkeys,com.android.providers.contacts,com.android.providers.userdictionary
+    device_test.go:271: AMBIGUOUS app_id=10095 android.process.media: com.android.mtp,com.android.providers.downloads
+    device_test.go:271: AMBIGUOUS app_id=10119 .qtidataservices: com.qualcomm.qti.cne,vendor.qti.iwlan
+    device_test.go:271: AMBIGUOUS app_id=10154 com.qti.phone: com.qti.phone,com.qualcomm.qcrilmsgtunnel,org.codeaurora.ims
+    device_test.go:262: AT_OR_OVER_BLOCK app_id=10192 len=78 com.google.android.accessibility.switchaccess:playcore_missing_splits_activity
+    device_test.go:281: app_ids=462 process_names=2041 ambiguous_names=9 hash_collisions=0 longest=78 smallest_block_limit=77 at_or_over_limit=1 parse_failures=0
+--- PASS: TestDeviceProcessNameHashes (1.80s)
+PASS

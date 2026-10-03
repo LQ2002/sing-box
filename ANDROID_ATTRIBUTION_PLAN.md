@@ -235,8 +235,12 @@ __sock_create 末尾 trace_android_vh_sock_create        [源码] net/socket.c:1
 
 **包名证据等级**（只有 E1–E3 才填 `PackageNames`，其余返回非 nil 未知并记原因）：
 - **E1**：普通应用 UID 且当前包表只有一个包；创建者 UID（无快照时用组 UID 且与 sk_uid 一致）决定。
-- **E2**：共享/系统 UID，快照 argv[0] 哈希在该 appId 的 Manifest 声明进程名中唯一。
-- **E3**：SDK 沙箱 UID → 宿主 UID−10000 的 E1 [源码] `Process.getAppUidForSdkSandboxUid`。
+- **E2**：共享/系统 UID，快照 argv[0] 哈希在该 appId 的 Manifest 声明进程名中只对应一个包。
+  名称截断（flags `NAME_TRUNCATED`，见“真机预验证”）时按声明名前 `len` 字节比对；
+  `system_server` 只在 UID 1000 视为 `system`。[实测] 2041 个声明名同 appId 内哈希碰撞 0。
+- **E3**：SDK 沙箱 UID → 宿主 UID−10000 [源码] `Process.getAppUidForSdkSandboxUid`；宿主为单包时
+  即 E1，宿主为共享 UID 时把 argv[0] 去掉 `_sdk_sandbox` 后缀对宿主 appId 走 E2
+  [源码] `SdkSandboxServiceProviderImpl.toSandboxProcessName`。
 - 未知原因：`multi_package_process`、`undeclared_process`、`no_creator_snapshot`、
   `name_unavailable`、`index_pending`、`index_failed`、`native_process`、`root_cgroup`、`uid_mismatch`。
 
@@ -274,8 +278,8 @@ native 进程的可执行路径展示，并用 exe inode 校验。Manifest 索�
 |---|---|
 | 共享 UID、进程名唯一 | E2 |
 | 多包共享进程（如 `com.android.phone` 承载 11 个包） | 未知 `multi_package_process`；需要进程内请求级钩子才能区分，超出本设计 |
-| isolated 进程 | SELinux 禁止其创建 inet socket [实测] 研究结论 62；宿主传入的 socket 带宿主快照 → 宿主 |
-| SDK 沙箱 | E3 |
+| isolated 进程 | SELinux 禁止其创建 inet socket [实测] 研究结论 62；宿主传入的 socket 带宿主快照 → 宿主。真机所见为 WebView 渲染沙箱，记录名属 WebView 包、`packageList` 是宿主 [实测] 预验证 3 |
+| SDK 沙箱 | E3（宿主 E1，或去后缀后的宿主 E2）；本机 Killswitch 开启，仅 [源码] |
 | 系统 native（netd、daemon） | 无包名；exe 路径经 inode 校验；`UserId` |
 | netd 代发 DNS | 发送者 = netd；请求方 = sk_uid（fchown 的 App UID） |
 | GMS/DownloadProvider 等代发 | 发送者 = 服务进程；请求方 = netd 记账 UID |
@@ -286,8 +290,10 @@ native 进程的可执行路径展示，并用 exe inode 校验。Manifest 索�
 - 默认关闭；显式启用而模块/BTF/producer 缺失时启动报错（GPT 已实现）。
 - v2 使用新 pin 目录 `/sys/fs/bpf/sing-box/socket-creator-v2`；发现 v1 pins 仍在时拒绝启动并
   提示先用旧版维护命令移除，避免两个 producer 同时全局采集。[未实现]
-- TC 只认 64 字节 v2 快照；v1 map 不能借给 v2 TC（大小校验拒绝）。[未实现]
-- netd `cookie_tag_map` 不存在或不可读：请求方未知，不报错、不影响路由。[未实现]
+- TC 只认 64 字节 v2 快照；v1 map 不能借给 v2 TC（大小校验拒绝）。[已实现] sing-ebpf `aa849f4`，
+  WSL root 集成测试 `TestTCSocketCreatorRejectsWrongMapBeforeLoading` 含 48 字节 v1 存储被拒。
+- netd `cookie_tag_map` 不存在或不可读：请求方未知，不报错、不影响路由。TC 侧 [已实现]
+  sing-ebpf `aa849f4`（未借表时绑定空占位表，只置 CHECKED）；sing-box 侧打开与降级 [未实现]。
 - 正常停止、禁用配置、升级、显式卸载沿用 GPT 已证实的持久化契约。
 
 ### 决策 6：开销模型（实测前为估算）
@@ -295,7 +301,7 @@ native 进程的可执行路径展示，并用 exe inode 校验。Manifest 索�
 | 阶段 | 新增工作 | 量级 |
 |---|---|---|
 | 进程启动 | 无 | 0 |
-| socket 创建（全机 inet socket） | tracepoint + 一次 SK_STORAGE 分配 + ≤128 字节用户态读与哈希 + exe inode 读 | 每次数百 ns 量级 [待验证] |
+| socket 创建（全机 inet socket） | tracepoint + 一次 SK_STORAGE 分配 + ≤128 字节用户态读与哈希 + exe inode 读 | v2 新增部分约 2 µs/socket（argv 读 ~1.0、exe 链 ~0.9 冷、FNV ~0.2），cache miss 主导；全机约 1–2 socket/s [实测] 预验证 1 |
 | 首包/刷新 | sk_storage_get + netd 表查找 + assignment 写 | 每 socket 一次 [待验证] |
 | 每包 | 已有 creator 变体的有效性判断 | 阶段 2 量级 [待验证] |
 | 每连接（用户态） | 缓存命中的 map 查找；E2 为哈希表查找，无 /proc | 微秒以下 [待验证] |
@@ -304,7 +310,9 @@ native 进程的可执行路径展示，并用 exe inode 校验。Manifest 索�
 ### 实施落点与顺序
 
 1. `E:\sing-ebpf`：creator ABI v2（64 B）与 assignment 扩展；可选外借 netd `cookie_tag_map`，
-   在记录时读取记账 UID/标签；C/Go 布局断言、生成物、集成测试。
+   在记录时读取记账 UID/标签；C/Go 布局断言、生成物、集成测试。**[已完成] `aa849f4`**：
+   make check、vet、gofmt、unit、race、android vet、宿主 C 状态迁移测试、WSL root 全部集成测试通过；
+   真机 arm64 verifier 加载与真实 netd 表随整链验收进行（netd 表借用已由预验证 2 独立证实）。
 2. `common/socketidentity`：producer v2（argv[0] FNV-1a 64 哈希、exe inode、标志位）、
    v2 pin 目录、v1 残留检测；Go ABI 与 BTF 布局测试。
 3. `protocol/ebpf`：E2 走哈希索引、exe inode 校验、请求方记录、未知原因计数；单元测试。
@@ -321,6 +329,93 @@ native 进程的可执行路径展示，并用 exe inode 校验。Manifest 索�
 - 无模块、半套 pins、v1 残留、netd 表缺失的预期行为。
 - 仅旧方案与仅新方案交替配对：建连与回包尾延迟、CPU、内核与用户态内存、吞吐、
   长时间持有/释放。
+
+### 真机预验证（2026-10-03，独立探针，未接入生产）
+
+用户要求在写 producer v2 之前，先用独立小探针在真机上核对设计依赖的不确定点，全程不动
+生产 sing-box、`config.json` 与模块。探针：`experimental/creator_v2_probe/`（`build.sh` 在
+WSL 以 likayo 构建；`run-device.sh capture|netd|procs`、`coldstart.sh` 在设备 root 运行；
+原始结果在 `results/`）。设备：内核 `6.12.69-android16-6-g586bfab1b9c5-abogki536749445-4k`，
+SELinux Enforcing，`/sys/kernel/btf/vmlinux` sha256 `37d2c7e7…5f35` 与桥接模块构建基线一致。
+生产 sing-box pid 11765（start_ticks 14670767，上下文 `u:r:ksu:s0`）在每次运行前后核对未变
+（每次输出 `PRODUCTION_UNCHANGED`）；桥接模块每次由脚本加载、`capture_all` 置 1 采集、
+结束后置 0 并卸载（每次输出 `BRIDGE_REMOVED`）。
+
+**1. producer v2 的读取能否通过 verifier、是否与 /proc 一致 —— 通过 [实测]**
+- `tp_btf/sbo_identity_socket_create` 上的探针程序（读 `task->mm->arg_start/arg_end`、
+  `bpf_probe_read_user_str` ≤128 字节、FNV-1a 64、`mm->exe_file->f_inode->i_ino`）被 verifier
+  接受：初版 657 条指令/处理 2206 条；带分段计时与对照哈希的版本处理 32977 条，远低于上限。
+- 五轮共 865 个 inet socket 创建事件（180 s 自然流量 207、冷启动 75 s 264、三轮分段计时
+  98/176/120）：argv[0] 与事件当刻 `/proc/<pid>/cmdline` 首段 **865/865 一致**，exe inode 与
+  `stat /proc/<pid>/exe` **865/865 一致**，BPF 内 FNV 与 Go `hash/fnv` 对同一字节串 865/865 一致；
+  `no_mm`、`argv_fail`（返回负值）、`argv_empty`、`exe_fail`、ringbuf 满均为 **0**。
+  覆盖 system_server、普通 App、带冒号子进程（`com.tencent.mm:push`、`com.xiaomi.xmsf:services`）、
+  native（netd、iptables-restore）、root 进程（sing-box 本身）。
+- 冷启动：`coldstart.sh` 启动未运行的 `com.xiaomi.market`（由 MIUI 的 USAP 预孵化进程特化，
+  pid 10985 此前名为 `usap64`），其后 48 个 socket 的 argv[0] 全部为 `com.xiaomi.market`；
+  `com.xiaomi.finddevice` 在出生 379 ms 时建的 socket 已是正确名称；另一轮 24 个出生不到 60 s
+  的进程同样一致。**未出现任何 App UID 的 socket 带 zygote/usap 名称**（计数器
+  `app_uid_pre_rename_name` 为 0）。`com.android.browser` 在设备上被禁用，未能启动。
+- 开销分段（每个 inet socket 一次，不在包路径；`bpf_ktime_get_ns` 自身约 163–187 ns 已扣除）：
+  用户态 argv 读取约 1.0 µs；exe 指针链约 0.9 µs（冷）/ 约 0.05 µs（热）；FNV 约 0.2 µs
+  （平均哈希 17–20 字节）。直接 BTF 指针解引用与 `BPF_CORE_READ` 辅助函数链交换先后各测一次：
+  先执行者都约 1 µs、后执行者都 <0.1 µs，说明成本是 cache miss，不是辅助函数调用；
+  按 8 字节分组的哈希比 FNV 只省约 0.1 µs。整段 p50 1.46 µs、p90 4.7 µs、p99 7.6 µs。
+  全机自然流量约 1–2 个 inet socket/秒（180 s 207 个），故 **v2 新增 CPU 约每秒数 µs**。
+- `argv[0]` 有长度上限 [源码]：`AndroidRuntime::setArgv0` 为
+  `memset(mArgBlockStart, 0, mArgBlockLength); strlcpy(mArgBlockStart, argv0, mArgBlockLength)`，
+  `mArgBlockLength` 来自 `app_main.cpp computeArgBlockSize`（zygote 原始参数块）。真机参数块：
+  `zygote64`、`webview_zygote` 与两个 `usap64` 为 99 字节，另一个 `usap64`（pid 5055，
+  `com.miui.home`、`com.miui.gallery` 等由它特化）为 **78 字节**，即进程名最多 77 字节。
+  全部已安装 Manifest 中最长进程名 78 字节
+  （`com.google.android.accessibility.switchaccess:playcore_missing_splits_activity`），
+  在 78 字节块中会被截成 77 字节——截断是真实情形，不能只比对完整哈希。
+- native 单参数进程（如 `/system/bin/netd`）的 argv[0] 恰好填满参数块，属正常，不是截断。
+
+**2. 借用 netd `cookie_tag_map` —— 通过 [实测]**
+- 在 `u:r:ksu:s0`（与生产 sing-box 相同）以 root 只读打开
+  `/sys/fs/bpf/netd_shared/map_netd_cookie_tag_map`（文件 `root:net_bw_acct 0660`，
+  标签 `u:object_r:fs_bpf_netd_shared:s0`）成功。Info：`name="cookie_tag_map" id=22 type=Hash
+  key=8 value=8 max_entries=10000 flags=0x0`，与 sing-ebpf `validateCookieTagMapInfo` 一致。
+- 引用该表的最小 TC 程序用**只读 fd** 做 `MapReplacements` 加载成功，在 `unshare -n` 私有网络
+  命名空间的 `lo` 上以 TCX egress 挂载：未打标签的探针 socket `found=0`；把探针自己的 socket
+  按 `libnetd_updatable` 的 tagSocket 同样方式写入 `{uid 0, tag 0x5b0c2e}` 后 TC 查到
+  `found=1 uid=0 tag=0x5b0c2e`，随后删除该条目（`UNTAGGED`）。无 avc 拒绝。
+  首轮因 lo 上内核 ICMP 端口不可达包覆盖了单槽结果而误显示未命中，改为按 cookie 分键后正确。
+- 只读扫描（`creator-v2-probe netdscan`，sock_diag 关联）：当时主命名空间 42 个 inet socket，
+  表中 2 条，均为活跃 socket，**charge UID 与 sk_uid 不同者 0**。即稳态下“请求方 ≠ 发送方”
+  很少出现；DownloadManager/GMS 代发需在完整服务验收中专门触发才能看到。
+
+**3. 进程名哈希与 Manifest/AMS 能否对上 —— 通过，附三条约束 [实测]+[源码]**
+- 对 `dumpsys activity processes` 的 89 条 ProcessRecord：88 条 argv[0] 与记录名完全相同，
+  1 条为 system_server（argv[0] `system_server`，记录名 `system`）。另有 UID 10088
+  （`com.miui.rom`，`framework-ext-res.apk`）的进程记录名也是 `system`（argv[0] `system`）：
+  名称只能在同一 appId 内解释，`system_server`→`system` 的别名只属于 UID 1000。
+- 已有设备测试 `TestDeviceProcessNamesMatchManifests`：运行中 89 个 zygote 子进程，
+  唯一归包 76、多包共享同名进程 8、无包声明 0、isolated 5；533 个已安装包解析 0 失败。
+  新增 `TestDeviceProcessNameHashes`（`common/androidmanifest/device_test.go`）：462 个 appId、
+  2041 个声明进程名，**同 appId 内 FNV-1a 64 碰撞 0**；同 appId 被多个包声明的进程名 9 个
+  （`system`、两处 `com.android.phone`、`android.process.acore`、`android.process.media`、
+  `com.android.networkstack.process`、`com.qti.phone`、`.dataservices`、`.qtidataservices`），
+  这些名称只能落到 UID 级；以 `.` 开头的进程名按原样使用，与 `buildCompoundName` 一致。
+- isolated（UID 99xxx）进程为 WebView 渲染沙箱：记录名是 `com.google.android.webview:sandboxed_process0:…`，
+  `packageList` 是宿主（`com.tencent.mm`、`tv.danmaku.bili` 等）；本次采集中它们未创建 inet socket。
+- SDK 沙箱 [源码]：`SdkSandboxServiceProviderImpl.toSandboxProcessName` =
+  宿主 `ApplicationInfo.processName + "_sdk_sandbox"`（插桩为 `_sdk_sandbox_instr`）；UID 为
+  `Process.toSdkSandboxUid`（+10000，20000–29999 一一对应）。本机 `dumpsys sdk_sandbox`：
+  `Killswitch enabled: true`、无会话，**无法实测**，保持 [源码] 级。
+
+**4. 新旧方案配对性能测试**：需要停用生产 sing-box，按用户要求先询问，尚未执行。
+
+**据此对设计的修订**（已写入下方各决策；producer 实现随后按此进行）：
+- creator flags 增加 `NAME_TRUNCATED`（bit 3）与名称字节数（bits 8–15）：当读到的字符串填满
+  参数块（`len + 1 >= arg_end - arg_start`）或填满 128 字节缓冲时置位。未置位按完整名哈希比对；
+  置位时按 Manifest 名称前 `len` 字节的哈希比对，多个候选即判歧义。64 字节布局不变，TC 不解释
+  这些位（只校验 VALID），sing-ebpf 无需再改。
+- E2 的“唯一”指同 appId 内只有一个包声明该名称；上面 9 个多包同名进程判 `multi_package_process`。
+- E3 扩展：SDK 沙箱先换算宿主 UID，再去掉 `_sdk_sandbox` 后缀对宿主 appId 走 E2（宿主可能是共享 UID）。
+- 开销模型改用上面的实测值；不做按进程缓存：唯一能省的是约 2 µs/socket 的 cache miss，
+  全机约每秒数 µs，却要引入“argv 被改写后缓存过期”的新语义，不值得。
 
 ## 仓库与范围
 

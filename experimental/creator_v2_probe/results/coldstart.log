@@ -1,0 +1,25 @@
+PRODUCTION sing-box pid=11765 start_ticks=14670767 context=u:r:ksu:s0
+CAPTURE_ALL_ON for 75s
+VERIFIER_ACCEPTED program=probe_argv insns=657
+VERIFIER_STATS processed 2206 insns (limit 1000000) max_states_per_insn 4 total_states 62 peak_states 62 mark_read 14
+CAPTURING until 2026-10-03T13:11:24Z
+YOUNG_PROCESS pid=30468 uid=6110 age_ms=379 argv0="com.xiaomi.finddevice" result=match
+BPF_COUNTERS (summed over CPUs):
+  calls=2976
+  filtered=2712
+  no_mm=0
+  argv_fail=0
+  argv_empty=0
+  exe_fail=0
+  ring_full=0
+  cost_ns=335207
+  avg_v2_cost_ns=1270
+SUMMARY:
+  argv_fills_whole_block=91
+  argv_match=264
+  events=264
+  exe_match=264
+  process_younger_than_60s=1
+ARG_BLOCK_LENGTHS: 17:91 45:36 46:36 99:85 115:16
+BRIDGE_REMOVED
+PRODUCTION_UNCHANGED pid=11765

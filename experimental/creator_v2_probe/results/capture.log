@@ -1,0 +1,19 @@
+VERIFIER_ACCEPTED program=probe_argv insns=657
+VERIFIER_STATS processed 2206 insns (limit 1000000) max_states_per_insn 4 total_states 62 peak_states 62 mark_read 14
+CAPTURING until 2026-10-03T13:01:23Z
+BPF_COUNTERS (summed over CPUs):
+  calls=8781
+  filtered=8574
+  no_mm=0
+  argv_fail=0
+  argv_empty=0
+  exe_fail=0
+  ring_full=0
+  cost_ns=477346
+  avg_v2_cost_ns=2306
+SUMMARY:
+  argv_fills_whole_block=28
+  argv_match=207
+  events=207
+  exe_match=207
+ARG_BLOCK_LENGTHS: 17:28 45:27 46:27 99:123 115:2
