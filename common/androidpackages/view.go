@@ -88,3 +88,11 @@ func (v View) PackageCode(packageName string) (PackageCode, bool) {
 	code, loaded := v.table.codeByPackage[packageName]
 	return code, loaded
 }
+
+// PackageCount is the number of installed packages in the table.
+func (v View) PackageCount() int {
+	if v.table == nil {
+		return 0
+	}
+	return len(v.table.idByPackage)
+}

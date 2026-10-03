@@ -198,6 +198,10 @@ type EBPFDiagnostics struct {
 	// AndroidUIDPolicy is present when include_package/exclude_package rules
 	// follow the package table (android_uid_update.go).
 	AndroidUIDPolicy *AndroidUIDPolicyDiagnostics `json:"android_uid_policy,omitempty"`
+
+	// Attribution is present when the TC program records socket identity
+	// (socket_identity.go).
+	Attribution *AttributionDiagnostics `json:"attribution,omitempty"`
 }
 
 // tcOutcomeHistory is the small amount of extra bookkeeping Diagnostics
@@ -517,6 +521,7 @@ func (i *Inbound) Diagnostics() EBPFDiagnostics {
 	if i.localEnabled {
 		diagnostics.LocalDataPlane = i.localDataPlane
 		diagnostics.AndroidUIDPolicy = i.androidUIDPolicyDiagnostics()
+		diagnostics.Attribution = i.attributionDiagnostics()
 	}
 	if backend := i.cgroupBackendInstance(); backend != nil && !backend.IsClosed() {
 		diagnostics.LocalCgroupAttachMode = backend.AttachMode()

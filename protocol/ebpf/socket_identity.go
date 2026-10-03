@@ -362,3 +362,56 @@ func (i *Inbound) packageForCreatorUID(uid uint32) string {
 func (i *Inbound) recordsSocketIdentity() bool {
 	return i.localTCEnabled() && i.router != nil && i.router.NeedFindProcess() && !i.usePlatformProcessFinder
 }
+
+// AttributionDiagnostics counts how connections were attributed since start
+// and why the rest are unknown, without per-connection logging.
+type AttributionDiagnostics struct {
+	Mode string `json:"mode"`
+	// PackageTableLoaded and Packages describe the package table the
+	// attribution reads.
+	PackageTableLoaded bool `json:"package_table_loaded"`
+	Packages           int  `json:"packages"`
+	// By UID alone (ordinary app or SDK sandbox) / by (process name, UID).
+	ResolvedByUID     uint64 `json:"resolved_by_uid"`
+	ResolvedByProcess uint64 `json:"resolved_by_process"`
+	// Unknown reasons.
+	UnknownPackage uint64 `json:"unknown_package"`
+	RootCgroup     uint64 `json:"root_cgroup"`
+	CreatorGone    uint64 `json:"creator_gone"`
+	NoIdentity     uint64 `json:"no_identity"`
+	// Manifest index.
+	IndexedPackages uint64 `json:"indexed_packages"`
+	IndexFailures   uint64 `json:"index_failures"`
+	IndexPending    uint64 `json:"index_pending_lookups"`
+}
+
+func (i *Inbound) attributionDiagnostics() *AttributionDiagnostics {
+	if !i.socketIdentityActive.Load() {
+		return nil
+	}
+	counters := &i.identityCounters
+	diagnostics := &AttributionDiagnostics{
+		Mode:              i.processTrackingMode(),
+		ResolvedByUID:     counters.resolvedPackage.Load(),
+		ResolvedByProcess: counters.resolvedByProcess.Load(),
+		UnknownPackage:    counters.unknownPackage.Load(),
+		RootCgroup:        counters.rootCgroup.Load(),
+		CreatorGone:       counters.cgroupGone.Load(),
+		NoIdentity:        counters.noIdentity.Load(),
+	}
+	if i.networkManager != nil {
+		if source, loaded := i.networkManager.PackageManager().(interface{ Snapshot() androidpackages.View }); loaded {
+			view := source.Snapshot()
+			diagnostics.PackageTableLoaded = view.Loaded()
+			diagnostics.Packages = view.PackageCount()
+		}
+	}
+	if index := i.processIndex.Load(); index != nil {
+		index.access.Lock()
+		diagnostics.IndexedPackages = index.parsedTotal
+		diagnostics.IndexFailures = index.failedTotal
+		diagnostics.IndexPending = index.pendingTotal
+		index.access.Unlock()
+	}
+	return diagnostics
+}
