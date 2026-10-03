@@ -40,6 +40,9 @@ type socketOwnerCacheKey struct {
 	ProcessID   uint32
 	UserID      uint32
 	StartTimeNs uint64
+	// exec keeps PID and start time but replaces the executable; a snapshot's
+	// exe inode decides which program's path may be shown.
+	ExeInode uint64
 }
 
 // procRoot is replaceable only by tests. Every metadata read uses one open
@@ -49,6 +52,9 @@ var procRoot = "/proc"
 type socketOwnerMetadata struct {
 	*adapter.ConnectionOwner
 	processName string
+	// exeMismatch: the snapshot's exe inode differs from the live process's
+	// (it exec'd after creating the socket); its path was withheld.
+	exeMismatch bool
 }
 
 // Only verified procfs metadata is cached. Package membership is checked on
@@ -66,14 +72,14 @@ var socketOwnerCache = sync.OnceValue(func() *freelru.Cache[socketOwnerCacheKey,
 })
 
 func (i *Inbound) resolveSocketOwner(ctx context.Context, owner SocketOwner) *adapter.ConnectionOwner {
-	key := socketOwnerCacheKey{ProcessID: owner.ProcessID, UserID: owner.UserID, StartTimeNs: owner.StartTimeNs}
+	key := socketOwnerCacheKey{ProcessID: owner.ProcessID, UserID: owner.UserID, StartTimeNs: owner.StartTimeNs, ExeInode: owner.exeInode}
 	cache := socketOwnerCache()
 	var rawInfo *socketOwnerMetadata
 	var cached bool
 	if owner.StartTimeNs != 0 && cache != nil {
 		rawInfo, cached = cache.Get(key)
 	}
-	if cached && i.processIndex.Load() != nil && rawInfo.processName == "" &&
+	if cached && !owner.hasName && i.processIndex.Load() != nil && rawInfo.processName == "" &&
 		len(rawInfo.ProcessPaths) > 0 && isAndroidApplicationExecutable(strings.TrimSuffix(rawInfo.ProcessPaths[0], deletedPathSuffix)) {
 		// An index may have started after this raw entry was cached.
 		cached = false
@@ -84,6 +90,9 @@ func (i *Inbound) resolveSocketOwner(ctx context.Context, owner SocketOwner) *ad
 		if verified && cache != nil {
 			cache.Add(key, rawInfo)
 		}
+	}
+	if !cached && rawInfo.exeMismatch {
+		i.identityCounters.exeMismatch.Add(1)
 	}
 	// Refinement must not mutate the cache's raw executable classification.
 	info := *rawInfo.ConnectionOwner
@@ -96,10 +105,10 @@ func (i *Inbound) resolveSocketOwner(ctx context.Context, owner SocketOwner) *ad
 			packageManager = snapshotter.Snapshot()
 		}
 		refineConnectionOwner(&info, owner, packageManager)
-		if len(info.PackageNames) > 0 {
+		if !owner.hasName && len(info.PackageNames) > 0 {
 			i.identityCounters.resolvedPackage.Add(1)
 		}
-		if index := i.processIndex.Load(); index != nil && len(info.PackageNames) == 0 && rawInfo.processName != "" {
+		if index := i.processIndex.Load(); index != nil && !owner.hasName && len(info.PackageNames) == 0 && rawInfo.processName != "" {
 			name := androidmanifest.ProcessRecordName(rawInfo.processName)
 			if packageName := index.lookup(owner.UserID%androidUserRange, name); packageName != "" {
 				info.PackageNames = []string{packageName}
@@ -107,10 +116,48 @@ func (i *Inbound) resolveSocketOwner(ctx context.Context, owner SocketOwner) *ad
 			}
 		}
 	}
+	if owner.hasName {
+		// The creation-time name decides the package, whether or not the
+		// creator is still alive: no /proc read is involved.
+		info.PackageNames = nil
+		if packageName := i.packageFromSnapshot(owner); packageName != "" {
+			info.PackageNames = []string{packageName}
+		}
+	}
 	if !cached {
 		logResolvedOwner(ctx, i.logger, &info)
 	}
 	return &info
+}
+
+// packageFromSnapshot applies E1-E3 (creator_snapshot.go) and counts why a
+// snapshot did not name a package.
+func (i *Inbound) packageFromSnapshot(owner SocketOwner) string {
+	var view tun.PackageManager
+	if i.networkManager != nil {
+		view = i.networkManager.PackageManager()
+		if snapshotter, ok := view.(interface{ Snapshot() androidpackages.View }); ok {
+			view = snapshotter.Snapshot()
+		}
+	}
+	packageName, outcome := snapshotPackage(owner.UserID, owner.name, owner.hasName,
+		func(uid uint32) string { return uniqueApplicationPackage(view, uid) }, i.processIndex.Load())
+	counters := &i.identityCounters
+	switch outcome {
+	case processLookupFoundByUID:
+		counters.resolvedPackage.Add(1)
+	case processLookupFound:
+		counters.resolvedByProcess.Add(1)
+	case processLookupMultiPackage:
+		counters.multiPackageProcess.Add(1)
+	case processLookupUndeclared:
+		counters.undeclaredProcess.Add(1)
+	case processLookupFailed:
+		counters.indexFailedLookups.Add(1)
+	case processLookupPending:
+		counters.indexPendingLookups.Add(1)
+	}
+	return packageName
 }
 
 // The router skips its own search/logging when ProcessInfo is already present.
@@ -170,12 +217,23 @@ func (i *Inbound) resolveThroughProcDir(owner SocketOwner) (*socketOwnerMetadata
 	if err != nil || !filepath.IsAbs(executable) {
 		return unknown()
 	}
-	info := &adapter.ConnectionOwner{
-		ProcessID: owner.ProcessID, UserId: int32(owner.UserID), ProcessPaths: []string{executable},
+	exeMismatch := false
+	if owner.hasExe {
+		// The path names whatever the process runs now. Show it only when it
+		// is still the program that created the socket.
+		var stat unix.Stat_t
+		if unix.Fstatat(dirFD, "exe", &stat, 0) != nil || stat.Ino != owner.exeInode {
+			executable, exeMismatch = "", true
+		}
+	}
+	info := &adapter.ConnectionOwner{ProcessID: owner.ProcessID, UserId: int32(owner.UserID)}
+	if executable != "" {
+		info.ProcessPaths = []string{executable}
 	}
 	completeOwnerUser(info)
-	metadata := &socketOwnerMetadata{ConnectionOwner: info}
-	if i.processIndex.Load() != nil && isAndroidApplicationExecutable(strings.TrimSuffix(executable, deletedPathSuffix)) {
+	metadata := &socketOwnerMetadata{ConnectionOwner: info, exeMismatch: exeMismatch}
+	// A snapshot that carries the creation-time name needs no cmdline read.
+	if !owner.hasName && i.processIndex.Load() != nil && isAndroidApplicationExecutable(strings.TrimSuffix(executable, deletedPathSuffix)) {
 		cmdline, err := readFileAt(dirFD, "cmdline")
 		if err != nil {
 			// Keep the creator evidence but retry incomplete metadata on the

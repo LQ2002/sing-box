@@ -77,6 +77,7 @@ type Inbound struct {
 	socketCreator            socketCreatorCollector
 	socketCreatorPinPath     string
 	socketCreatorActive      atomic.Bool
+	netdCookieTags           netdCookieTagMap
 	processInfoCache         *processInfoCache
 	usePlatformProcessFinder bool
 	listeners                internalListenerSet

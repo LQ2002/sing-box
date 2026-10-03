@@ -305,7 +305,7 @@ native 进程的可执行路径展示，并用 exe inode 校验。Manifest 索�
 | 首包/刷新 | sk_storage_get + netd 表查找 + assignment 写 | 每 socket 一次 [待验证] |
 | 每包 | 已有 creator 变体的有效性判断 | 阶段 2 量级 [待验证] |
 | 每连接（用户态） | 缓存命中的 map 查找；E2 为哈希表查找，无 /proc | 微秒以下 [待验证] |
-| 内存 | SK_STORAGE 每 socket 约 64 B 数据 + 元素开销；assignment 88→112 B × 8192 项 ≈ +192 KiB | [待验证] |
+| 内存 | SK_STORAGE 每 socket 64 B 数据 + 元素开销；assignment 88→112 B，Android 使用 `CompactTCAssignmentCapacity` 项 | 布局已证实；占用 [待验证] |
 
 ### 实施落点与顺序
 
@@ -313,16 +313,45 @@ native 进程的可执行路径展示，并用 exe inode 校验。Manifest 索�
    在记录时读取记账 UID/标签；C/Go 布局断言、生成物、集成测试。**[已完成] `aa849f4`**：
    make check、vet、gofmt、unit、race、android vet、宿主 C 状态迁移测试、WSL root 全部集成测试通过；
    真机 arm64 verifier 加载与真实 netd 表随整链验收进行（netd 表借用已由预验证 2 独立证实）。
+   sing-ebpf `6ab9da7` 另定义 flags bit 3 `NAME_TRUNCATED` 与 bits 8–15 名称长度（布局不变）。
 2. `common/socketidentity`：producer v2（argv[0] FNV-1a 64 哈希、exe inode、标志位）、
-   v2 pin 目录、v1 残留检测；Go ABI 与 BTF 布局测试。
+   v2 pin 目录、v1 残留检测；Go ABI 与 BTF 布局测试。**[已完成]**：`bpf/creator.bpf.c` 增加
+   `record_process_name`（读 `mm->arg_start/arg_end`、≤128 字节 `bpf_probe_read_user_str`、FNV-1a 64、
+   填满参数块或缓冲即置截断位、`mm->exe_file->f_inode->i_ino`），各事实独立标志，读失败只缺该事实；
+   `ValueSize` 64、`abiVersion` 2、metadata magic `sbo.creator.v2`、`DefaultPinPath`
+   `/sys/fs/bpf/sing-box/socket-creator-v2`；`Valid()` 拒绝未定义的标志位；默认路径下
+   `socket-creator-v1` 仍有 pins 时 `Open` 拒绝（`checkLegacyCollector`，空目录放行）。
+   `build-bpf.sh` 增加内核树 `-fdebug-prefix-map`：同一源码在两个不同目录、两个内核树副本下构建
+   得到同一 sha256 `d9270fe2…3cc9`（v1 对照：程序段相同，仅 DWARF 头路径不同）。
 3. `protocol/ebpf`：E2 走哈希索引、exe inode 校验、请求方记录、未知原因计数；单元测试。
+   **[已完成]**：`creator_snapshot.go`（E1/E2/E3 纯函数、截断前缀匹配、`system_server` 别名仅限
+   UID 1000、SDK 沙箱去后缀走宿主 E2）；`process_package_index.go` 的查找泛化为
+   `lookupMatching`，返回结果原因（找到/多包/未声明/读取失败/待建）；`resolveSocketOwner`
+   有名称快照时不读 cmdline、创建者退出后仍可归包；`ProcessPaths` 仅在 `/proc/<pid>/exe` 的
+   inode 等于快照时给出（缓存键含 exe inode）；netd `cookie_tag_map` 只读借给 TC，缺失时只记 debug；
+   请求方（charge UID 优先，其次 sk_uid）只进 debug 日志与诊断，不进 `ConnectionOwner`；
+   诊断新增 `multi_package_process`、`undeclared_process`、`index_failed_lookups`、
+   `index_pending_connections`、`creator_name_unavailable`、`creator_exe_mismatch`、
+   `charge_checked`、`charge_found`、`requester_differs`。
 4. 文档与验收：按下方矩阵在真机执行，逐项记录。
 
-### 验收矩阵（全部为 [待验证]，执行后在此逐项填写）
+### 验收矩阵（执行后在此逐项填写）
 
 - 本机：两仓库 race/vet；C/Go ABI；BPF 加载（WSL）；哈希一致性（BPF 与 Go 对同一名称）。
+  **[已通过 2026-10-03]** sing-ebpf：make check、vet（含 integration tag）、gofmt、unit、race、
+  android vet、宿主 C 状态迁移、WSL root 全部集成测试。主仓库（经仓库外 `go.work` 指向本地
+  sing-ebpf，`go.mod` 未改）：`protocol/ebpf`、`common/socketidentity`、`common/androidmanifest`、
+  `common/androidpackages` 的 vet、android/arm64 vet、unit、race、gofmt 全过。新增测试 FNV 对照
+  `hash/fnv`；变异检验：去掉截断前缀、别名不限 UID、去掉 exe inode 比对三处各自使对应测试失败，
+  恢复后 sha 校验一致。
 - 真机 producer：创建时哈希与 `/proc/<pid>/cmdline` 一致；exe inode 一致；fork、exec、
-  accept、创建者退出、io_uring 各一组。
+  accept、创建者退出、io_uring 各一组。**[部分通过]** 独立探针 865/865（预验证 1）；生产 producer v2
+  经 `run-creator-integration-device.sh`（清单扩为 12 个 TC 用例 + 持久化 + 实时 producer→TC）
+  全部通过：16 个快照 `flags=0x4407`（VALID|NAME|EXE，长度 68），哈希与 exe inode 等于 /proc
+  真值，跨收集器关闭、进程退出、重开不变；实时用例 `flags=0x3a07` 完整复制进 assignment；
+  4 个 netd charge 用例在真机 arm64 verifier 上通过；清理后模块卸载、生产 PID 11765 与
+  start ticks 不变（日志 `experimental/creator_v2_probe/results/v2-collector-tc-device-run.txt`）。
+  fork、exec、accept、创建者退出、io_uring 的真机分组尚未执行（exec 的路径拦截目前仅单元测试）。
 - 真机完整服务：真实 App 冷/热启动，普通/共享 UID、多包进程、native、netd DNS、
   GMS 代发；与 `dumpsys activity processes` 的 `packageList` 逐条比对，统计正确/错误/未知/漏采。
 - 完整 sing-box 入口 TCP/UDP、IPv4/IPv6、delivery/shared，校验实际载荷回包。
@@ -437,6 +466,7 @@ SELinux Enforcing，`/sys/kernel/btf/vmlinux` sha256 `37d2c7e7…5f35` 与桥接
 | 1 | 修复包表刷新与查询一致性 | **已完成**（本地测试与真机验收均通过） | 代码 `35624e63`；记录见“阶段 1 实施记录” |
 | 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | **已完成**（本地、真机与真实 App 验收均通过） | sing-ebpf `3c1b28f`（已推送）；应用依赖 `6252b171`；记录见“阶段 2 实施记录” |
 | 3 | sing-box 接入新归属路径并完成整链路验收 | **归属修复、持久创建者第一轮集成及隔离真机验证完成；目标设计与完整验收仍有未完成项** | 修复 `cae57485`；创建者集成 `ee0208de`；实际数据面证据与剩余项见阶段 3 |
+| 目标设计 | creator v2（创建时进程名哈希、exe inode）、netd 请求方、E1–E3 解析 | **实现完成，本机与隔离真机验收通过；整服务真实 App 验收与配对性能未做**（需停用生产服务，待用户同意）；sing-ebpf 新提交未推送、`go.mod` 未升级 | 分支 `claude/attribution-target-design`；sing-ebpf `aa849f4`、`6ab9da7`；见“Claude 目标设计”的预验证与验收矩阵 |
 
 阶段 1、2 已有实现及验收记录；阶段 3 已修正 cgroup 进程归属假设，并补做真实数据回包验证。
 阶段是否通过以实际证据为准；未执行和不适用的检查分别列出，不用勾选掩盖未完成项。

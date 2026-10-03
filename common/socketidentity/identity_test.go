@@ -32,7 +32,7 @@ func TestCreatorABIEqualsEmbeddedObject(t *testing.T) {
 	fields := []struct {
 		c, goName string
 		offset    uintptr
-	}{{"cookie", "Cookie", 0}, {"start_time_ns", "StartTimeNs", 8}, {"process_id", "ProcessID", 16}, {"thread_id", "ThreadID", 20}, {"user_id", "UserID", 24}, {"flags", "Flags", 28}, {"comm", "Comm", 32}}
+	}{{"cookie", "Cookie", 0}, {"start_time_ns", "StartTimeNs", 8}, {"process_id", "ProcessID", 16}, {"thread_id", "ThreadID", 20}, {"user_id", "UserID", 24}, {"flags", "Flags", 28}, {"comm", "Comm", 32}, {"process_name_hash", "ProcessNameHash", 48}, {"exe_inode", "ExeInode", 56}}
 	if len(value.Members) != len(fields) {
 		t.Fatalf("unexpected BTF fields: %+v", value.Members)
 	}
@@ -62,7 +62,8 @@ func TestCreatorRejectsIncompleteIdentityButAllowsRoot(t *testing.T) {
 	for _, mutate := range []func(*Creator){
 		func(c *Creator) { c.Cookie = 0 }, func(c *Creator) { c.StartTimeNs = 0 },
 		func(c *Creator) { c.ProcessID = 0 }, func(c *Creator) { c.ThreadID = 0 },
-		func(c *Creator) { c.Flags = 0 }, func(c *Creator) { c.Flags = CreatorValid | 2 },
+		func(c *Creator) { c.Flags = 0 }, func(c *Creator) { c.Flags = CreatorValid | 1<<4 },
+		func(c *Creator) { c.Flags = CreatorValid | 1<<16 }, func(c *Creator) { c.Flags = CreatorNameValid },
 	} {
 		changed := creator
 		mutate(&changed)
@@ -93,5 +94,13 @@ func TestMetadataRejectsStaleOrForeignIdentity(t *testing.T) {
 				t.Fatal("accepted stale or foreign metadata")
 			}
 		})
+	}
+}
+
+func TestCreatorOptionalFieldsKeepSnapshotValid(t *testing.T) {
+	creator := Creator{Cookie: 1, StartTimeNs: 2, ProcessID: 3, ThreadID: 4,
+		Flags: CreatorValid | CreatorNameValid | CreatorExeValid | CreatorNameTruncated | 77<<nameLengthShift}
+	if !creator.Valid() || creator.NameLength() != 77 {
+		t.Fatalf("v2 snapshot with every optional fact rejected: %+v length=%d", creator, creator.NameLength())
 	}
 }

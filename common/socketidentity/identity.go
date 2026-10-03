@@ -15,16 +15,30 @@ import (
 )
 
 const (
-	DefaultPinPath = "/sys/fs/bpf/sing-box/socket-creator-v1"
-	MapSymbol      = "socket_creators"
-	MapName        = "sb_sk_creator"
-	CreatorValid   = uint32(1)
-	ValueSize      = uint32(48)
+	DefaultPinPath = "/sys/fs/bpf/sing-box/socket-creator-v2"
+	// LegacyPinPath is where the 48-byte v1 collector pinned itself. Its
+	// producer link keeps capturing after sing-box exits, so a v2 collector at
+	// the default path refuses to start while v1 pins remain there: two global
+	// producers would double the per-socket cost and the old one would never
+	// be cleaned up. Remove them with the v1 binary's maintenance path.
+	LegacyPinPath = "/sys/fs/bpf/sing-box/socket-creator-v1"
+	MapSymbol     = "socket_creators"
+	MapName       = "sb_sk_creator"
+	ValueSize     = uint32(64)
+
+	// Flag bits, shared with sing-ebpf's SocketCreator* constants and
+	// bpf/creator.bpf.c.
+	CreatorValid         = uint32(1 << 0)
+	CreatorNameValid     = uint32(1 << 1)
+	CreatorExeValid      = uint32(1 << 2)
+	CreatorNameTruncated = uint32(1 << 3)
+	nameLengthShift      = 8
+	knownFlags           = CreatorValid | CreatorNameValid | CreatorExeValid | CreatorNameTruncated | 0xff<<nameLengthShift
 
 	moduleName  = "sbo_identity_bridge"
 	traceName   = "sbo_identity_socket_create"
 	programName = "sb_sk_create"
-	abiVersion  = uint32(1)
+	abiVersion  = uint32(2)
 )
 
 var (
@@ -34,21 +48,36 @@ var (
 
 // Creator is the immutable creation-time snapshot shared with sing-ebpf.
 // UserID is the creating task's UID; zero is a valid root UID.
+//
+// ProcessNameHash is FNV-1a 64 over argv[0] at creation (the ActivityManager
+// process record name for zygote children), covering NameLength bytes; with
+// CreatorNameTruncated those bytes may be a prefix of the real name. ExeInode
+// is the inode of the creating process's executable.
 type Creator struct {
-	Cookie      uint64
-	StartTimeNs uint64
-	ProcessID   uint32
-	ThreadID    uint32
-	UserID      uint32
-	Flags       uint32
-	Comm        [16]byte
+	Cookie          uint64
+	StartTimeNs     uint64
+	ProcessID       uint32
+	ThreadID        uint32
+	UserID          uint32
+	Flags           uint32
+	Comm            [16]byte
+	ProcessNameHash uint64
+	ExeInode        uint64
 }
 
+// Valid requires the complete identity and rejects flag bits this build
+// does not define, so a value from an unknown producer is never trusted.
 func (c Creator) Valid() bool {
-	return c.Flags == CreatorValid && c.Cookie != 0 && c.StartTimeNs != 0 && c.ProcessID != 0 && c.ThreadID != 0
+	return c.Flags&CreatorValid != 0 && c.Flags&^knownFlags == 0 &&
+		c.Cookie != 0 && c.StartTimeNs != 0 && c.ProcessID != 0 && c.ThreadID != 0
 }
 
-var _ [48]byte = [unsafe.Sizeof(Creator{})]byte{}
+// NameLength is the number of argv[0] bytes covered by ProcessNameHash.
+func (c Creator) NameLength() int {
+	return int(c.Flags >> nameLengthShift & 0xff)
+}
+
+var _ [64]byte = [unsafe.Sizeof(Creator{})]byte{}
 
 type Config struct {
 	// PinPath is a root-owned private directory on an already mounted bpffs.
@@ -93,7 +122,7 @@ var producerObject []byte
 
 var producerSHA = sha256.Sum256(producerObject)
 var traceSHA = sha256.Sum256([]byte(moduleName + ":" + traceName))
-var metadataMagic = [16]byte{'s', 'b', 'o', '.', 'c', 'r', 'e', 'a', 't', 'o', 'r', '.', 'v', '1'}
+var metadataMagic = [16]byte{'s', 'b', 'o', '.', 'c', 'r', 'e', 'a', 't', 'o', 'r', '.', 'v', '2'}
 
 // Stored in a frozen, pinned Array map: bpffs does not support ordinary files.
 type metadata struct {

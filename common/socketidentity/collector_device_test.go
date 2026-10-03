@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"os/exec"
@@ -63,6 +64,11 @@ type deviceCreatorTruth struct {
 	StartTicks    uint64
 	ClockTicks    uint64
 	Comm          [16]byte
+	// v2: argv[0] from /proc/self/cmdline, the argv block size from
+	// /proc/self/stat (arg_start/arg_end), and stat(/proc/self/exe).Ino.
+	Argv0    string
+	ArgBlock uint64
+	ExeInode uint64
 }
 
 type deviceHeldSocket struct {
@@ -194,7 +200,52 @@ func deviceSelfTruth(t *testing.T) deviceCreatorTruth {
 		t.Fatalf("unexpected current thread comm length: %d", len(comm))
 	}
 	copy(truth.Comm[:], comm)
+	cmdline, err := os.ReadFile("/proc/self/cmdline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv0, _, _ := bytes.Cut(cmdline, []byte{0})
+	truth.Argv0 = string(argv0)
+	if len(fields) > 46 {
+		argStart, _ := strconv.ParseUint(fields[45], 10, 64)
+		argEnd, _ := strconv.ParseUint(fields[46], 10, 64)
+		if argEnd > argStart {
+			truth.ArgBlock = argEnd - argStart
+		}
+	}
+	var exe unix.Stat_t
+	if err := unix.Stat("/proc/self/exe", &exe); err != nil {
+		t.Fatal(err)
+	}
+	truth.ExeInode = exe.Ino
 	return truth
+}
+
+// deviceVerifyV2 checks the v2 creation facts against /proc truth: the name
+// hash covers argv[0] (a prefix when flagged truncated) and the exe inode is
+// the test binary's.
+func deviceVerifyV2(t *testing.T, got Creator, want deviceCreatorTruth) {
+	t.Helper()
+	if got.Flags&CreatorNameValid == 0 || got.Flags&CreatorExeValid == 0 {
+		t.Fatalf("v2 facts missing: flags=%#x", got.Flags)
+	}
+	hashed := want.Argv0
+	if got.Flags&CreatorNameTruncated != 0 {
+		if got.NameLength() > len(hashed) {
+			t.Fatalf("truncated length %d exceeds argv[0] %q", got.NameLength(), hashed)
+		}
+		hashed = hashed[:got.NameLength()]
+	} else if got.NameLength() != len(hashed) {
+		t.Fatalf("name length %d, argv[0] %q (block %d)", got.NameLength(), hashed, want.ArgBlock)
+	}
+	reference := fnv.New64a()
+	_, _ = reference.Write([]byte(hashed))
+	if got.ProcessNameHash != reference.Sum64() {
+		t.Fatalf("name hash %#x, want FNV-1a(%q) %#x", got.ProcessNameHash, hashed, reference.Sum64())
+	}
+	if got.ExeInode != want.ExeInode {
+		t.Fatalf("exe inode %d, want %d", got.ExeInode, want.ExeInode)
+	}
 }
 
 func deviceCreateSocket(t *testing.T, held *[]*deviceHeldSocket, phase string, family, kind int) *deviceHeldSocket {
@@ -238,6 +289,7 @@ func deviceVerifySocket(t *testing.T, creators *ebpf.Map, record *deviceHeldSock
 	if !got.Valid() || got.Cookie != record.Cookie || got.ProcessID != want.PID || got.ThreadID != want.TID || got.UserID != want.UID || got.Comm != want.Comm {
 		t.Fatalf("creator mismatch phase=%s: got=%+v cookie=%d truth=%+v", record.Phase, got, record.Cookie, want)
 	}
+	deviceVerifyV2(t, got, want)
 	// /proc exports USER_HZ ticks, not exact nanoseconds. Avoid overflowing the
 	// product on long uptimes and allow one exported tick of conversion precision.
 	gotTicks := got.StartTimeNs/1_000_000_000*want.ClockTicks + got.StartTimeNs%1_000_000_000*want.ClockTicks/1_000_000_000
@@ -254,7 +306,7 @@ func deviceVerifySocket(t *testing.T, creators *ebpf.Map, record *deviceHeldSock
 		t.Fatalf("existing creation snapshot changed: before=%+v after=%+v", record.Snapshot, got)
 	}
 	record.Snapshot, record.Captured = got, true
-	t.Logf("CREATOR_SNAPSHOT phase=%s family=%d kind=%d cookie=%d tgid=%d tid=%d uid=%d birth_ns=%d proc_ticks=%d clk_tck=%d flags=%d comm_hex=%x", record.Phase, record.Family, record.Kind, got.Cookie, got.ProcessID, got.ThreadID, got.UserID, got.StartTimeNs, want.StartTicks, want.ClockTicks, got.Flags, got.Comm)
+	t.Logf("CREATOR_SNAPSHOT phase=%s family=%d kind=%d cookie=%d tgid=%d tid=%d uid=%d birth_ns=%d proc_ticks=%d clk_tck=%d flags=%#x comm_hex=%x name_hash=%#x name_len=%d argv0=%q arg_block=%d exe_inode=%d", record.Phase, record.Family, record.Kind, got.Cookie, got.ProcessID, got.ThreadID, got.UserID, got.StartTimeNs, want.StartTicks, want.ClockTicks, got.Flags, got.Comm, got.ProcessNameHash, got.NameLength(), want.Argv0, want.ArgBlock, got.ExeInode)
 }
 
 func deviceVerifyUnknown(t *testing.T, creators *ebpf.Map, record *deviceHeldSocket) {

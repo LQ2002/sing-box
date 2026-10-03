@@ -1,16 +1,23 @@
 # Persistent socket creators
 
 `Open(Config{PinPath: ...})` creates or reopens a root-owned bpffs collector.
-The default directory is `/sys/fs/bpf/sing-box/socket-creator-v1`. The bridge module
+The default directory is `/sys/fs/bpf/sing-box/socket-creator-v2`. While the v1
+directory `/sys/fs/bpf/sing-box/socket-creator-v1` still holds pins, opening the
+default v2 path is refused (two global producers would both run). The bridge module
 must already be loaded with `capture_all=1` and expose its module BTF. The package
 does not load/unload modules, mount bpffs, change bridge parameters, or attach a
 TC program. The embedded producer supports Linux/Android arm64 little-endian.
 
 The producer attaches to `tp_btf/sbo_identity_socket_create`. For each non-kernel
 IPv4/IPv6 socket, it initializes `socket_creators` (`sb_sk_creator` in the kernel)
-once with the creator's cookie, leader birth time, TGID, TID, UID, and current
-thread comm. UID zero is valid. Missing cookie/birth/PID/TID leaves identity
-unknown. The 48-byte value is shared with the existing TC consumer; there is no
+once with the creator's cookie, leader birth time, TGID, TID, UID, current
+thread comm, and (v2) an FNV-1a 64 hash of argv[0] plus the executable's inode.
+UID zero is valid. Missing cookie/birth/PID/TID leaves identity unknown; a
+failed argv or exe read only leaves that fact unflagged. argv[0] is the
+ActivityManager process record name for zygote children, cut to zygote's
+argument block (99 or 78 bytes measured), so a string that fills the block is
+flagged as possibly truncated with its hashed length in flag bits 8-15. The
+64-byte value is shared with the existing TC consumer; there is no
 TASK_STORAGE map or package-token registration. Existing values are never
 rewritten. There is no clone flag, so accepted children remain unknown.
 

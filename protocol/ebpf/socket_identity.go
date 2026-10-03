@@ -64,6 +64,12 @@ type socketIdentity struct {
 	cgroupID uint64
 	valid    bool
 	creator  commonEBPF.SocketCreator
+	// netd's cookie_tag_map entry, read by TC once per cookie. chargeChecked
+	// without chargeValid means netd had no tag; without chargeChecked the
+	// lookup never ran (no creator variant, or no full-socket packet yet).
+	chargeChecked bool
+	chargeValid   bool
+	chargeUID     uint32
 }
 
 func identityFromAssignment(assignment commonEBPF.TCAssignment) socketIdentity {
@@ -78,7 +84,28 @@ func identityFromAssignment(assignment commonEBPF.TCAssignment) socketIdentity {
 		cgroupID: assignment.SocketCgroupID,
 		valid:    assignment.HasSocketIdentity(),
 		creator:  assignment.Creator,
+
+		chargeChecked: assignment.IdentityFlags&commonEBPF.TCIdentityChargeChecked != 0,
+		chargeValid:   assignment.HasCharge(),
+		chargeUID:     assignment.ChargeUID,
 	}
+}
+
+// requesterUID names the UID a socket works for when that differs from its
+// sender: netd's charge UID (a service tagging its socket for an app, which
+// netd allows only with UPDATE_DEVICE_STATS, Connectivity BpfHandler.cpp
+// tagSocket), else the socket UID when something privileged fchown()ed it
+// (netd's DNS sockets for an app). It is diagnostic only: the user routes by
+// the sending process (ANDROID_ATTRIBUTION_PLAN.md decision 1), so the
+// requester never enters ConnectionOwner.
+func (identity socketIdentity) requesterUID(senderUID uint32) (uint32, bool) {
+	if identity.chargeValid && identity.chargeUID != senderUID {
+		return identity.chargeUID, true
+	}
+	if identity.valid && identity.uid != senderUID {
+		return identity.uid, true
+	}
+	return 0, false
 }
 
 func (identity socketIdentity) hasCreator() bool {
@@ -231,6 +258,19 @@ type identityCounters struct {
 	creatorMissing     atomic.Uint64
 	creatorInvalid     atomic.Uint64
 	creatorFallbacks   atomic.Uint64
+	// v2 snapshot outcomes (creator_snapshot.go): why a recorded name did
+	// not single out a package, a snapshot without a readable name, and a
+	// creator that exec'd after creating the socket (path withheld).
+	multiPackageProcess atomic.Uint64
+	undeclaredProcess   atomic.Uint64
+	indexFailedLookups  atomic.Uint64
+	indexPendingLookups atomic.Uint64
+	nameUnavailable     atomic.Uint64
+	exeMismatch         atomic.Uint64
+	// netd cookie_tag_map charge (the requester) as recorded by TC.
+	chargeChecked    atomic.Uint64
+	chargeFound      atomic.Uint64
+	requesterDiffers atomic.Uint64
 }
 
 var userNameCache sync.Map // uint32 -> string
@@ -279,8 +319,22 @@ func androidUserName(uid uint32) (string, bool) {
 // a shared UID.
 func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity) *adapter.ConnectionOwner {
 	hasCreator := identity.hasCreator()
+	if identity.chargeChecked {
+		i.identityCounters.chargeChecked.Add(1)
+		if identity.chargeValid {
+			i.identityCounters.chargeFound.Add(1)
+		}
+	}
 	if hasCreator {
 		i.identityCounters.creatorSnapshots.Add(1)
+		if !identity.creator.HasProcessName() {
+			i.identityCounters.nameUnavailable.Add(1)
+		}
+		if requester, differs := identity.requesterUID(identity.creator.UserID); differs {
+			i.identityCounters.requesterDiffers.Add(1)
+			i.logger.DebugContext(ctx, "socket of uid ", identity.creator.UserID, " works for uid ", requester,
+				" (", i.packageForApplicationUID(requester), "); routed by the sender")
+		}
 	} else if identity.creator.Flags != 0 {
 		i.identityCounters.creatorInvalid.Add(1)
 	} else if i.socketCreatorActive.Load() && identity.cookie != 0 {
@@ -344,11 +398,7 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 // particular, a missing cgroup or fchown'ed sk_uid must not hide a creator.
 func (i *Inbound) creatorFromIdentity(ctx context.Context, identity socketIdentity) *adapter.ConnectionOwner {
 	if identity.hasCreator() {
-		creator := identity.creator
-		return i.resolveSocketOwner(ctx, SocketOwner{
-			ProcessID: creator.ProcessID, UserID: creator.UserID,
-			StartTimeNs: creator.StartTimeNs, Comm: socketOwnerModuleComm(creator.Comm),
-		})
+		return i.resolveSocketOwner(ctx, socketOwnerFromCreator(identity.creator))
 	}
 	if i.socketCreatorActive.Load() && identity.cookie != 0 && i.processTracker != nil {
 		i.identityCounters.creatorFallbacks.Add(1)
@@ -405,6 +455,19 @@ type AttributionDiagnostics struct {
 	CreatorMissing     uint64 `json:"creator_snapshot_missing"`
 	CreatorInvalid     uint64 `json:"creator_snapshot_invalid"`
 	CreatorFallbacks   uint64 `json:"creator_cookie_fallbacks"`
+	// v2 snapshot outcomes: the recorded name is declared by several
+	// packages of the app ID, by none, or the index could not decide yet;
+	// snapshots without a readable name; creators that exec'd since.
+	MultiPackageProcess uint64 `json:"multi_package_process"`
+	UndeclaredProcess   uint64 `json:"undeclared_process"`
+	IndexFailedLookups  uint64 `json:"index_failed_lookups"`
+	IndexPendingLookups uint64 `json:"index_pending_connections"`
+	NameUnavailable     uint64 `json:"creator_name_unavailable"`
+	ExeMismatch         uint64 `json:"creator_exe_mismatch"`
+	// netd cookie_tag_map: consulted, found, and requester != sender.
+	ChargeChecked    uint64 `json:"charge_checked"`
+	ChargeFound      uint64 `json:"charge_found"`
+	RequesterDiffers uint64 `json:"requester_differs"`
 	// Manifest index.
 	IndexedPackages uint64 `json:"indexed_packages"`
 	IndexFailures   uint64 `json:"index_failures"`
@@ -430,6 +493,16 @@ func (i *Inbound) attributionDiagnostics() *AttributionDiagnostics {
 		CreatorMissing:     counters.creatorMissing.Load(),
 		CreatorInvalid:     counters.creatorInvalid.Load(),
 		CreatorFallbacks:   counters.creatorFallbacks.Load(),
+
+		MultiPackageProcess: counters.multiPackageProcess.Load(),
+		UndeclaredProcess:   counters.undeclaredProcess.Load(),
+		IndexFailedLookups:  counters.indexFailedLookups.Load(),
+		IndexPendingLookups: counters.indexPendingLookups.Load(),
+		NameUnavailable:     counters.nameUnavailable.Load(),
+		ExeMismatch:         counters.exeMismatch.Load(),
+		ChargeChecked:       counters.chargeChecked.Load(),
+		ChargeFound:         counters.chargeFound.Load(),
+		RequesterDiffers:    counters.requesterDiffers.Load(),
 	}
 	if i.networkManager != nil {
 		if source, loaded := i.networkManager.PackageManager().(interface{ Snapshot() androidpackages.View }); loaded {

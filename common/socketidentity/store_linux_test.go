@@ -240,3 +240,19 @@ func TestUnsupportedArchitectureDoesNotCreatePins(t *testing.T) {
 		t.Fatalf("unsupported Open modified pin storage: %v", err)
 	}
 }
+
+func TestLegacyCollectorPinsBlockDefaultV2(t *testing.T) {
+	directory := t.TempDir()
+	if err := checkLegacyCollector(directory + "/missing"); err != nil {
+		t.Fatalf("absent v1 directory rejected: %v", err)
+	}
+	if err := checkLegacyCollector(directory); err != nil {
+		t.Fatalf("empty v1 directory (left by v1 Remove) rejected: %v", err)
+	}
+	if err := os.WriteFile(directory+"/producer", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkLegacyCollector(directory); err == nil {
+		t.Fatal("remaining v1 pins accepted")
+	}
+}

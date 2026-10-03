@@ -65,8 +65,29 @@ type processPackageTable interface {
 type processLookupResult struct {
 	view        processPackageTable
 	packageName string
-	complete    bool
+	outcome     processLookupOutcome
 }
+
+// processLookupOutcome says why a lookup did or did not name a package; the
+// unknown outcomes are the attribution's reported reasons.
+type processLookupOutcome uint8
+
+const (
+	processLookupFound processLookupOutcome = iota
+	// Several packages of the app ID declare the name (com.android.phone,
+	// system, android.process.acore, ... on the test device).
+	processLookupMultiPackage
+	// No package of the app ID declares it (or none of a truncated name's
+	// candidates); also a native process of a system UID.
+	processLookupUndeclared
+	// Some package of the app ID could not be read.
+	processLookupFailed
+	// The app ID is not indexed yet; it has been queued.
+	processLookupPending
+	// The UID alone decided (E1, or E3 on a single-package host); returned by
+	// snapshotPackage, never by the index.
+	processLookupFoundByUID
+)
 
 type processPackageIndex struct {
 	snapshot     func() processPackageTable
@@ -110,20 +131,34 @@ func (x *processPackageIndex) close() {
 // lookup names the package owning process name in appID, or "" when it is
 // not unique, not declared, or not indexed yet (the latter queues appID).
 func (x *processPackageIndex) lookup(appID uint32, processName string) string {
+	packageName, _ := x.lookupMatching(appID, processLookupKey{appID: appID, process: processName},
+		func(declared string) bool { return declared == processName })
+	return packageName
+}
+
+// lookupSnapshot is lookup for a v2 creator snapshot, which carries only an
+// FNV-1a 64 hash of argv[0] (possibly of a prefix) instead of the name.
+// suffix is appended to every declared name before matching; SDK sandbox
+// processes are named after their host's process plus "_sdk_sandbox".
+func (x *processPackageIndex) lookupSnapshot(appID uint32, name snapshotName, suffix string) (string, processLookupOutcome) {
+	return x.lookupMatching(appID, processLookupKey{appID: appID, process: name.memoKey(suffix)},
+		func(declared string) bool { return name.matches(declared + suffix) })
+}
+
+func (x *processPackageIndex) lookupMatching(appID uint32, key processLookupKey, match func(declared string) bool) (string, processLookupOutcome) {
 	view := x.snapshot()
 	if !view.Loaded() {
-		return ""
+		return "", processLookupPending
 	}
-	key := processLookupKey{appID: appID, process: processName}
 	x.access.Lock()
 	defer x.access.Unlock()
-	if result, loaded := x.memo[key]; loaded && result.view == view && result.complete {
-		return result.packageName
+	if result, loaded := x.memo[key]; loaded && result.view == view {
+		return result.packageName, result.outcome
 	}
 	packages, _ := view.PackagesByID(appID)
-	match := ""
+	matched := ""
 	matches := 0
-	complete := true
+	complete, failed := true, false
 	for _, packageName := range packages {
 		code, loaded := view.PackageCode(packageName)
 		entry, parsed := x.packages[packageName]
@@ -133,24 +168,36 @@ func (x *processPackageIndex) lookup(appID uint32, processName string) string {
 		}
 		if entry.failed {
 			// An unreadable package might declare the name: unknown.
-			matches = 2
+			failed = true
 			continue
 		}
-		if _, declared := entry.processes[processName]; declared {
-			match = packageName
-			matches++
+		for declared := range entry.processes {
+			if match(declared) {
+				matched = packageName
+				matches++
+				break
+			}
 		}
 	}
 	if !complete {
 		x.pendingTotal++
 		x.enqueueLocked(appID)
-		return ""
+		return "", processLookupPending
 	}
-	if matches != 1 {
-		match = ""
+	outcome := processLookupFound
+	switch {
+	case failed:
+		outcome = processLookupFailed
+	case matches > 1:
+		outcome = processLookupMultiPackage
+	case matches == 0:
+		outcome = processLookupUndeclared
 	}
-	x.memo[key] = processLookupResult{view: view, packageName: match, complete: true}
-	return match
+	if outcome != processLookupFound {
+		matched = ""
+	}
+	x.memo[key] = processLookupResult{view: view, packageName: matched, outcome: outcome}
+	return matched, outcome
 }
 
 func (x *processPackageIndex) enqueue(appID uint32) {

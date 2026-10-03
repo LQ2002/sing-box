@@ -14,8 +14,12 @@ TestTCSocketCreatorRejectsInvalidStorage
 TestTCSocketCreatorTupleReuse
 TestTCSocketCreatorSurvivesDelivery
 TestTCSocketCreatorBorrowedMapSurvivesBackend
-TestTCSocketCreatorRejectsWrongMapBeforeLoading'
-CORE_REGEX='^TestTCSocketCreator(FirstPacket|KeepsFirstSnapshot|ConfirmsMissingSnapshot|RejectsInvalidStorage|TupleReuse|SurvivesDelivery|BorrowedMapSurvivesBackend|RejectsWrongMapBeforeLoading)$'
+TestTCSocketCreatorRejectsWrongMapBeforeLoading
+TestTCSocketCreatorRecordsNetdCharge
+TestTCSocketCreatorPlaceholderChargeIsCheckedOnly
+TestTCSocketCreatorBorrowedCookieTagMapSurvivesBackend
+TestTCSocketCreatorRejectsWrongCookieTagMap'
+CORE_REGEX='^TestTCSocketCreator(FirstPacket|KeepsFirstSnapshot|ConfirmsMissingSnapshot|RejectsInvalidStorage|TupleReuse|SurvivesDelivery|BorrowedMapSurvivesBackend|RejectsWrongMapBeforeLoading|RecordsNetdCharge|PlaceholderChargeIsCheckedOnly|BorrowedCookieTagMapSurvivesBackend|RejectsWrongCookieTagMap)$'
 COLLECTOR_NAME=TestDeviceCollectorPersistence
 LIVE_NAME=TestTCSocketCreatorLiveProducer
 
@@ -200,7 +204,7 @@ if [ "${1:-}" = --inner ]; then
   export SING_EBPF_INTEGRATION=1
   run_test_binary "$DIR/core.test" "$CORE_REGEX" 120s core
   for test_name in $CORE_NAMES; do require_pass core "$test_name"; done
-  echo 'CORE_SYNTHETIC_STORAGE_CASES=8 PASS'
+  echo 'CORE_SYNTHETIC_STORAGE_CASES=12 PASS'
   export SBO_SOCKET_CREATOR_DEVICE_TEST=1
   export SBO_SOCKET_CREATOR_TEST_BPFFS="$BPFFS"
   export SBO_SOCKET_CREATOR_TEST_PIN_PATH="$PIN_PATH"

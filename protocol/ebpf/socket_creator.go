@@ -44,6 +44,29 @@ func normalizeSocketCreator(options *option.EBPFSocketCreatorOptions, localEnabl
 	return filepath.Clean(path), nil
 }
 
+// netdCookieTagMapPath is netd's cookie_tag_map (Connectivity bpf/netd,
+// COOKIE_TAG_MAP_PATH). Borrowed read-only so TC can record each socket's
+// charge UID; checked on the device: opens in sing-box's u:r:ksu:s0 context,
+// HASH key 8 value 8, 10000 entries (ANDROID_ATTRIBUTION_PLAN.md, 真机预验证 2).
+const netdCookieTagMapPath = "/sys/fs/bpf/netd_shared/map_netd_cookie_tag_map"
+
+// netdCookieTagMap keeps the cilium import out of inbound.go.
+type netdCookieTagMap = *ebpf.Map
+
+// openNetdCookieTags returns nil when the map is missing or unreadable: the
+// requester then stays unknown, which never affects routing.
+func (i *Inbound) openNetdCookieTags() *ebpf.Map {
+	if runtime.GOOS != "android" {
+		return nil
+	}
+	cookieTags, err := ebpf.LoadPinnedMap(netdCookieTagMapPath, &ebpf.LoadPinOptions{ReadOnly: true})
+	if err != nil {
+		i.logger.Debug("netd cookie tag map unavailable; socket requesters stay unknown: ", err)
+		return nil
+	}
+	return cookieTags
+}
+
 func (i *Inbound) startSocketCreator() error {
 	if i.socketCreatorPinPath == "" {
 		return nil
@@ -62,6 +85,9 @@ func (i *Inbound) startSocketCreator() error {
 		return E.Cause(err, "open persistent socket creator collector")
 	}
 	i.socketCreator = collector
+	if i.netdCookieTags == nil {
+		i.netdCookieTags = i.openNetdCookieTags()
+	}
 	i.logger.Debug("eBPF socket creator collector opened at ", i.socketCreatorPinPath)
 	return nil
 }
@@ -80,6 +106,11 @@ func (i *Inbound) closeSocketCreator() error {
 	}
 	if err := i.socketCreator.Close(); err != nil {
 		return E.Cause(err, "close socket creator collector references")
+	}
+	if i.netdCookieTags != nil {
+		// Only our read-only descriptor closes; netd's pinned map is unaffected.
+		_ = i.netdCookieTags.Close()
+		i.netdCookieTags = nil
 	}
 	i.socketCreator = nil
 	i.socketCreatorActive.Store(false)

@@ -120,6 +120,7 @@ func (i *Inbound) startInbound() error {
 	}
 	if i.socketCreator != nil {
 		backendConfig.SocketCreatorMap = i.socketCreator.Map()
+		backendConfig.CookieTagMap = i.netdCookieTags
 		backendConfig.RecordSocketIdentity = true
 	}
 	if backendConfig.RecordSocketIdentity && i.cgroupOwners.Load() == nil {

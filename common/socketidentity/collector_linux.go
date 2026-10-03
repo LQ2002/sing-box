@@ -76,6 +76,23 @@ func checkBridge() error {
 	return nil
 }
 
+// checkLegacyCollector refuses to start next to a v1 collector that still
+// has pins: its producer link stays attached and keeps capturing globally.
+// An absent or empty directory is fine (v1's Remove leaves the directory).
+func checkLegacyCollector(path string) error {
+	entries, err := os.ReadDir(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect legacy socket creator pins %s: %w", path, err)
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("legacy v1 socket creator pins remain in %s; remove them with the v1 build before starting v2", path)
+	}
+	return nil
+}
+
 // Open creates or validates and reuses a pinned map and a pinned producer link.
 // It never loads a module, enables capture, mounts bpffs, or replaces partial pins.
 func Open(config Config) (_ *Collector, result error) {
@@ -87,6 +104,11 @@ func Open(config Config) (_ *Collector, result error) {
 	}
 	if err := checkBridge(); err != nil {
 		return nil, err
+	}
+	if config.PinPath == "" || config.PinPath == DefaultPinPath {
+		if err := checkLegacyCollector(LegacyPinPath); err != nil {
+			return nil, err
+		}
 	}
 	bootID, err := readBootID()
 	if err != nil {
