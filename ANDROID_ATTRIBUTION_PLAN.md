@@ -637,6 +637,107 @@ BPF `9b347594bf08e3c77f7de43b3413d56b0b314b180c902fc32101f9218258e9f9`；模块�
 `PID+出生时间` 判断“仍是同一个 task”在非 leader exec 上不成立。本轮未接入 AOSP/真实
 App 或生产 assignment，未验证并发登记原子性、io_uring、长期内存及性能/功耗。
 
+### 创建者存储接入现有 TC（2026-10-03，本机集成与隔离真机验证完成）
+
+用户在确认“不需要自定义内核”的独立原型结果后，授权实施第一轮生产代码集成，
+并要求提交。起初手机撤下，只做本机实现、构建及测试；随后用户重新连接手机，
+本轮继续安排隔离的目标内核验收，仍保留原生产服务。
+这是阶段 3 的后续改进，不增加新阶段，也不把原型实测当作本次生产集成验收。
+
+范围：先采集创建时的 cookie、TGID、TID、UID、leader 出生时间和 comm，保存到
+SK_STORAGE，再通过已有 sing-ebpf TC 的 assignment 交给 sing-box。暂不接入
+TASK_STORAGE/APK token，不变更共享 UID 的包名判据，不新增 TC 挂点或常驻辅助进程。
+配置默认关闭；显式启用后的采集/加载失败必须报错。旧来源保留作迁移期间的回退。
+
+主仓库实现与验收夹具提交：`ee0208de`（`feat: integrate persistent socket creators with TC attribution`）。
+依赖仓库提交：`33964031`（功能）、`74ad17e7`（BPF 比较修复）、`2354018`（真实 producer-to-TC 测试）。
+本轮均为本地提交，未推送。正式 `go.mod` 的依赖版本使用对应 Git 提交生成的标准模块归档
+在本地校验；其他机器拉取此版本前需先发布依赖提交。
+
+- [x] sing-ebpf：48 字节创建者 ABI、外借 SK_STORAGE map、现有 TC 变体和 assignment 扩展。
+- [x] sing-box：直接消费创建者快照，保留普通 App 快路径、proc/Manifest 解析及缺失诊断。
+- [x] 持久采集器：map 与 producer link 同时保留，启动校验后复用，显式卸载与正常停止分开。
+- [x] 桥接模块：增加显式全量采集开关，保留实验 TGID 过滤；严格 CRC/BTF 构建检查。
+- [x] 本机：ABI、归因边界、资源所有权、加载失败和重启复用校验逻辑的测试及构建。
+- [x] WSL：8 组真实 TC 数据面测试通过；创建记录通过 socket FD 合成，不代表 Android producer。
+- [x] 真机隔离：真实 producer → 现有 TC 的 IPv4 TCP/UDP 首包和 TCP delivery；另通过上述 8 组合成 storage 数据面测试。
+- [x] 真机隔离：活 socket、关闭期间新 socket、独立采集进程退出及重开、并发使用和显式移除。
+- [ ] 真机：真实 App、IPv6 完整转发、shared 路径，以及无旧来源时的完整服务归因/回退。
+- [ ] 真机：完整 sing-box 服务重启、正式部署与生产流量观察。
+- [ ] 真机：仅旧方案与仅新方案的配对性能、内存和长期观察。
+
+**已完成实现**：外借 map 的生命周期由采集器持有，TC 关闭后才释放本实例引用；正常停止
+保留 map、producer link 和冻结 metadata。启动复用校验 boot ID、ABI、producer 对象哈希、
+map/link/program ID、类型和实际关联，拒绝不完整或不兼容对象。维护命令
+`tools socket-creator-remove` 单独移除经过校验的对象，活跃采集器持有目录共享锁时拒绝移除。
+逐层使用 root ownership 与 no-follow 校验，最终目录 `0700`；root 拥有的 sticky 父目录
+可接受，兼容 Android 默认 `01777` bpffs，同时拒绝可被普通用户替换的父目录与子目录。
+
+TC 把创建者 UID 与 socket 记账 UID 分开；fchown 不改创建快照。已有有效快照保持，
+cookie 变化、shared 转交会清掉旧创建者。只有当前包确实取得 full socket 且其 storage
+不存在时才记“已查无记录”，避免每包重复查询；无 full socket 或无效非空记录不缓存为不存在。
+用户态直接使用合法快照，仍校验 proc 出生时间和 Manifest，不把 comm、TGID 或记账 UID
+当成精确包名；共享 UID 的既有证据要求保持。缺少记录时保留旧来源回退。
+
+**本机证据**：依赖仓库功能提交 `33964031`，随后修复 `74ad17e7`。首次真实内核测试
+发现 clang 将结构比较生成外部 `memcmp`，导致程序无法加载；改为显式字段比较并重新生成
+大小端 BPF，新回归检查在旧对象检出 9 个未解析调用，在新对象通过。WSL 内核
+`6.18.33.2-microsoft-standard-WSL2` 下 8 组真实用例全部通过：首包、首份快照保留、确认缺失、
+拒绝无效 storage、五元组复用、delivery、外借 map 的正常/失败释放、错误 map 的提前拒绝。
+测试在独立 netns 内运行；另通过变体隔离与宿主 C 状态转换测试。最终接口/路由前后精确相同。
+首轮 dummy 驱动自动加载产生了主命名空间默认 dummy0；后续运行明确以 `numdummies=0`
+预载，避免该副作用，原始首轮失败日志另行保留，未把其清理比较误报为通过。
+
+真实 producer-to-TC 用例在依赖仓库另提交为 `2354018`；主仓库使用正式 `go.mod` 固定版本
+`v0.1.0-alpha.11.0.20261003114235-74ad17e7ec35`，无提交的本地路径替换。
+`protocol/ebpf`、`common/socketidentity`、`common/androidpackages`、`common/androidmanifest`、
+`option` 的 race 与 vet 通过，完整 Android arm64 构建通过。模块 15/15 传统与扩展 CRC
+均匹配，14 个导入覆盖，socket BTF 仍解析到真实 base ID 2886。
+
+**目标内核实测**：重新连接的设备 `8b97939c`，内核及 base BTF 与上节相同。
+新版模块以 `capture_all=1` 加载；外层使用私有 mount/net namespace 和新建 bpffs，
+以 `01777` 挂载根目录验证 Android 默认权限语义，collector 子目录保持 `0700`。
+第一次运行因 Toybox 的挂载传播参数没有生效而拒绝继续；换用设备 BusyBox 后，第二次
+运行又因内核自动创建的默认关闭隧道接口被旧“只有 lo”断言拒绝。两次均在测试前退出，
+`cleanup_rc=0`，没有把未运行用例当作通过。最终脚本检查递归私有挂载，精确允许 lo 和
+默认隧道接口，要求其全部 DOWN、没有非 loopback 地址，IPv4/IPv6 所有路由表均为空。
+
+第三次运行完整通过，结果目录 `run-20261003-200332-15455`：
+
+- 上述 8 组真实 TC 数据面用例在 Android 上全部通过，其 storage 值由测试通过 socket FD 合成。
+- 独立真实 producer 用例没有写入模拟记录：TCP 首包、UDP 首包、TCP delivery 的 3 个
+  socket 在首次 send/connect 前均已有创建记录；TC assignment 的全部 48 字节与其一致。
+  创建者 UID 为 0，随后 fchown 的记账 UID 为 9050，分别保持正确；path 为 `0/0/2`。
+- `TestDeviceCollectorPersistence` 核对 16 个 root 创建的 IPv4/IPv6 × TCP/UDP socket：
+  初次打开、所有采集器关闭期间、独立采集进程退出后、重开后各 4 个。PID/TID/UID/comm
+  与现场一致，出生时间按 `/proc` USER_HZ ticks 交叉校验；早于 producer 安装的 1 个
+  socket 始终无记录，未被补采。重开后原 12 个快照逐字段不变。
+- map/link/program ID 始终为 `5304/583/1562`。独立进程 15741 实际打开复用后直接
+  `os.Exit(0)`，由内核释放其 FD；父进程保留 socket，之后的新 socket 仍立即有创建记录。
+  两个及一个采集器存活时 Remove 均为 Busy；全部关闭后显式 Remove 成功，pins 为 0。
+- `PRIVATE_CLEANUP run_rc=0 cleanup_rc=0`，最终 `CLEANUP run_rc=0 cleanup_rc=0`。
+  原生产进程始终为 PID 11765/start ticks 14670767；boot ID、taint 4608、原模块列表、
+  接口、地址、IPv4/IPv6 路由和规则全部一致（仅规范化自然寿命倒计时）。测试模块已卸载。
+
+全部日志与前后快照保存于 `build/socket-creator-integration/device-results/`，不入库；
+外层完整输出为 `device-run0{1,2,3}.txt`，失败轮次也保留。
+共取回 156 个证据文件，随后已删除本轮专用手机临时目录。独立离线审计
+`device-audit.json` 用精确整数重算 16 个独立快照、29 次观察与 3 组实际传递，并逐字节
+比较 14 份规范化前后状态，均通过；1 个旧 socket 未知的证据来自两处实际断言及测试 PASS，
+日志没有为它单独输出一行，不将其计为新的捕获快照。
+本轮没有替换生产 sing-box，没有执行真实 App 或完整服务重启；原有 TASK_STORAGE 原型
+的 fork/exec/accept 结果也不被混算为这次生产 consumer 的覆盖。
+
+最终 SHA-256：内嵌 BPF `131445b9b10ae061ea3fe84256dfbda97231f9cc7c961128e22fa8c2d5f13b20`；
+模块 `754222c931ad1612fe8fc5b0c0c5d98f84ad740427eb2a1017be7f6fc4ee5530`；
+完整 Android sing-box `f0ced3b8ff5fac65ef424fdef688a9f5c71349ab56b61979668ab8287f4b8904`；
+采集器测试 `d944e80c1d39910e8f3e9acfaa983e7127defa61ee5efd1cd431eea8cc17912a`；
+TC 测试 `bf72ffd5db1abcae82a3784a5fbe1a7019179b46e506e05f6f8694093786f46f`。
+
+本轮尚无性能改善结论：assignment 从 40 增至 88 字节，Android 默认 8192 项仅 value
+容量即增加 384 KiB，尚未包含内核分配开销；创建时 SK_STORAGE 的实测内存和长期成本待测。
+已有 socket 不补采，accept child 保持未知；非 leader exec 的 task 替换边界仍按上节处理。
+
 ## 已移除的设计
 
 不再采用此前提出的独立 TCX 采集、Java 辅助服务、正常更新时临时丢包保护与整体后端
