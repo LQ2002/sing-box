@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 
@@ -222,5 +223,26 @@ func TestCgroupOwnerResolverLogsOncePerInstance(t *testing.T) {
 	}
 	if resolver.markLogged(1<<40, "") {
 		t.Fatal("an unknown cgroup was logged")
+	}
+}
+
+func TestAndroidUserName(t *testing.T) {
+	if runtime.GOOS != "android" {
+		if _, ok := androidUserName(10460); ok {
+			t.Fatal("named an Android UID on a non-Android OS")
+		}
+		return
+	}
+	for uid, want := range map[uint32]string{
+		10460: "u0_a460", 1010460: "u10_a460", 99001: "u0_i9001", 10000: "u0_a0", 19999: "u0_a9999",
+	} {
+		if got, ok := androidUserName(uid); !ok || got != want {
+			t.Fatalf("androidUserName(%d) = %q, %v; want %q", uid, got, ok, want)
+		}
+	}
+	for _, uid := range []uint32{0, 1000, 20050, 9999} {
+		if got, ok := androidUserName(uid); ok {
+			t.Fatalf("androidUserName(%d) = %q, want none", uid, got)
+		}
 	}
 }

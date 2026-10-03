@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -289,12 +290,38 @@ func cachedUserName(uid uint32) string {
 	if name, loaded := userNameCache.Load(uid); loaded {
 		return name.(string)
 	}
-	name := ""
-	if osUser, err := user.LookupId(strconv.FormatUint(uint64(uid), 10)); err == nil {
-		name = osUser.Username
+	name, ok := androidUserName(uid)
+	if !ok {
+		if osUser, err := user.LookupId(strconv.FormatUint(uint64(uid), 10)); err == nil {
+			name = osUser.Username
+		}
 	}
 	userNameCache.Store(uid, name)
 	return name
+}
+
+// androidUserName names app and isolated UIDs the way bionic's getpwuid does
+// (libc/bionic/grp_pwd.cpp print_app_name_from_uid): u<user>_a<n> for app
+// ids 10000-19999 and u<user>_i<n> for isolated ids 90000-99999; other
+// ranges (SDK sandbox included) have no passwd entry there.
+//
+// Go cannot ask bionic: os/user is not implemented on android whether or not
+// cgo is enabled (src/os/user/lookup_android.go; the cgo implementation is
+// built with !android). LookupId only succeeds for the current user, which
+// is why only root ever resolved. The names are a pure function of the UID,
+// so computing them costs nothing.
+func androidUserName(uid uint32) (string, bool) {
+	if runtime.GOOS != "android" {
+		return "", false
+	}
+	user, appID := uid/androidUserRange, uid%androidUserRange
+	switch {
+	case appID >= 10000 && appID <= 19999:
+		return "u" + strconv.FormatUint(uint64(user), 10) + "_a" + strconv.FormatUint(uint64(appID-10000), 10), true
+	case appID >= 90000 && appID <= 99999:
+		return "u" + strconv.FormatUint(uint64(user), 10) + "_i" + strconv.FormatUint(uint64(appID-90000), 10), true
+	}
+	return "", false
 }
 
 // ownerFromIdentity is the stage 3 attribution. It never returns nil: an

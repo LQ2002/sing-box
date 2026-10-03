@@ -14,7 +14,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -147,9 +146,7 @@ func (i *Inbound) resolveThroughProcDir(owner SocketOwner) (*adapter.ConnectionO
 
 func completeOwnerUser(info *adapter.ConnectionOwner) {
 	if info.UserId != -1 && info.UserName == "" {
-		if osUser, err := user.LookupId(strconv.FormatInt(int64(info.UserId), 10)); err == nil {
-			info.UserName = osUser.Username
-		}
+		info.UserName = cachedUserName(uint32(info.UserId))
 	}
 }
 
