@@ -117,7 +117,15 @@ func newCgroupOwnerResolver(root string) *cgroupOwnerResolver {
 // lookup returns the process that created cgroup id, using uidHint (sk_uid)
 // to pick the first directory to look in.
 func (r *cgroupOwnerResolver) lookup(cgroupID uint64, uidHint uint32) cgroupOwner {
+	owner, _ := r.lookupFresh(cgroupID, uidHint)
+	return owner
+}
+
+// lookupFresh also reports whether this call resolved the process for the
+// first time (a cache miss), which is when its attribution is logged.
+func (r *cgroupOwnerResolver) lookupFresh(cgroupID uint64, uidHint uint32) (cgroupOwner, bool) {
 	owner, loaded := r.cache.Get(cgroupID)
+	fresh := !loaded
 	if !loaded {
 		owner = r.scan(cgroupID, uidHint)
 	}
@@ -128,7 +136,7 @@ func (r *cgroupOwnerResolver) lookup(cgroupID uint64, uidHint uint32) cgroupOwne
 		owner.exeLoaded = true
 		r.cache.Add(cgroupID, owner)
 	}
-	return owner
+	return owner, fresh
 }
 
 // processName returns owner's argv[0], reading it once per process instance.
@@ -299,9 +307,10 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 		return &adapter.ConnectionOwner{UserId: int32(identity.uid), UserName: cachedUserName(identity.uid)}
 	}
 	var creator cgroupOwner
+	fresh := false
 	resolver := i.cgroupOwners.Load()
 	if resolver != nil {
-		creator = resolver.lookup(identity.cgroupID, identity.uid)
+		creator, fresh = resolver.lookupFresh(identity.cgroupID, identity.uid)
 	}
 	if !creator.found {
 		i.identityCounters.cgroupGone.Add(1)
@@ -311,6 +320,11 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 		ProcessID: creator.pid,
 		UserId:    int32(creator.uid),
 		UserName:  cachedUserName(creator.uid),
+	}
+	// The router does not log ProcessInfo it did not search for itself, so
+	// log once per process instance, as the procfs path did on a cache miss.
+	if fresh {
+		defer logResolvedOwner(ctx, i.logger, owner)
 	}
 	if creator.executable != "" && !isAndroidApplicationExecutable(strings.TrimSuffix(creator.executable, deletedPathSuffix)) {
 		owner.ProcessPaths = []string{creator.executable}

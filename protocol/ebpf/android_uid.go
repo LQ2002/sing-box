@@ -92,10 +92,15 @@ func (i *Inbound) inspectAndroidPackages(packageManager tun.PackageManager, mode
 			packageID, loaded = packageManager.IDByPackage(packageName)
 		}
 		if !loaded {
-			i.logger.Warn(
-				mode, "_package not found at startup: ", packageName,
-				"; restart sing-box after the package is installed or its UID changes",
-			)
+			if i.localTCEnabled() {
+				// android_uid_update.go applies it once the package appears.
+				i.logger.Info(mode, "_package not installed yet: ", packageName, "; the rule applies when it is installed")
+			} else {
+				i.logger.Warn(
+					mode, "_package not found at startup: ", packageName,
+					"; restart sing-box after the package is installed or its UID changes",
+				)
+			}
 			continue
 		}
 		if _, warned := warnedSharedUID[packageID]; warned {
