@@ -3,7 +3,8 @@ module github.com/sagernet/sing-box
 go 1.25.5
 
 replace github.com/sagernet/tailscale => github.com/LQ2002/tailscale v0.0.0-20260918084915-8f35b78440d7
-replace github.com/CHIZI-0618/sing-ebpf => github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20260930034217-3420ee21d978
+
+replace github.com/CHIZI-0618/sing-ebpf => github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261003060717-3c1b28f0eb65
 
 require (
 	filippo.io/age v1.3.1
@@ -16,6 +17,7 @@ require (
 	github.com/cretz/bine v0.2.0
 	github.com/database64128/tfo-go/v2 v2.3.2
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-chi/render v1.0.3
 	github.com/godbus/dbus/v5 v5.2.2
@@ -109,7 +111,6 @@ require (
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/florianl/go-nfqueue/v2 v2.1.0 // indirect
-	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/gaissmai/bart v0.26.1 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
