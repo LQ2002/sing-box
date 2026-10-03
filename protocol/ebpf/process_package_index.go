@@ -8,7 +8,9 @@ package ebpf
 // ActivityManager keys a running process by (process name, UID)
 // (ProcessList.mProcessNames.get(name, uid)). So when exactly one package of
 // the creator's UID declares the creator's process name, that package owns
-// the process; when several do (com.android.phone hosts eleven packages on
+// the process, provided its identity came from a socket cookie creator
+// record and its name from a birth-time-verified proc directory. When
+// several do (com.android.phone hosts eleven packages on
 // the test device, "system" five), the answer stays unknown. Measured on the
 // phone: 65 of 78 running app processes unique, 7 multi, 0 unexplained
 // (common/androidmanifest TestDeviceProcessNamesMatchManifests).
@@ -18,7 +20,8 @@ package ebpf
 // packages load into the same process (the stage 1 probe saw a second
 // package's connections attributed to the first), so they carry no
 // discriminating power beyond (name, uid), and their PID-only join has no
-// birth token. The cgroup id already identifies the instance.
+// birth token. The optional socket owner source supplies the creator's PID
+// and start_boottime; a cgroup ID alone cannot identify a process instance.
 //
 // Efficiency: parsing manifests costs milliseconds per package (112
 // packages of the running shared/system UIDs took 0.5 s on the phone), so it
@@ -244,10 +247,11 @@ func (x *processPackageIndex) prewarm(root string, unique func(uid uint32) bool)
 	}
 }
 
-// startProcessIndex runs when socket identity is active: without it there is
-// no creator process to look up.
+// startProcessIndex runs only with a cookie owner source. Group labels alone
+// cannot supply a process name, so parsing manifests without a source would
+// waste startup work.
 func (i *Inbound) startProcessIndex() {
-	if i.processIndex.Load() != nil || i.networkManager == nil {
+	if i.processIndex.Load() != nil || i.networkManager == nil || i.processTracker == nil {
 		return
 	}
 	source, loaded := i.networkManager.PackageManager().(interface{ Snapshot() androidpackages.View })
@@ -257,7 +261,7 @@ func (i *Inbound) startProcessIndex() {
 	index := newProcessPackageIndex(func() processPackageTable { return source.Snapshot() }, i.logger)
 	index.start()
 	i.processIndex.Store(index)
-	index.prewarm(cgroupRoot, func(uid uint32) bool { return i.packageForCreatorUID(uid) != "" })
+	index.prewarm(cgroupRoot, func(uid uint32) bool { return i.packageForApplicationUID(uid) != "" })
 }
 
 func (i *Inbound) stopProcessIndex() {

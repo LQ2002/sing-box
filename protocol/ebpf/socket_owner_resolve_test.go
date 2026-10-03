@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/androidpackages"
 	"github.com/sagernet/sing-box/log"
 )
 
@@ -95,7 +96,7 @@ func TestSocketOwnerCacheDoesNotFreezePackageMembership(t *testing.T) {
 	}
 	owner := SocketOwner{ProcessID: 4000000000, UserID: 10100, StartTimeNs: 1234567890}
 	key := socketOwnerCacheKey{ProcessID: owner.ProcessID, UserID: owner.UserID, StartTimeNs: owner.StartTimeNs}
-	cache.Add(key, &adapter.ConnectionOwner{ProcessID: owner.ProcessID, UserId: 10100, ProcessPaths: []string{"/system/bin/app_process64"}})
+	cache.Add(key, &socketOwnerMetadata{ConnectionOwner: &adapter.ConnectionOwner{ProcessID: owner.ProcessID, UserId: 10100, ProcessPaths: []string{"/system/bin/app_process64"}}})
 	defer cache.Remove(key)
 	pm := &testPackageManager{packagesByID: map[uint32][]string{10100: {"package.a"}}, idByPackage: map[string]uint32{"package.a": 10100, "package.b": 10100}}
 	inbound := &Inbound{logger: log.NewNOPFactory().Logger(), networkManager: &testNetworkManager{packageManager: pm}}
@@ -114,6 +115,35 @@ func TestSocketOwnerCacheDoesNotFreezePackageMembership(t *testing.T) {
 	raw, _ := cache.Get(key)
 	if len(raw.PackageNames) != 0 || !slices.Equal(raw.ProcessPaths, []string{"/system/bin/app_process64"}) {
 		t.Fatalf("cache was refined in place: %+v", raw)
+	}
+}
+
+// The coherent snapshot is empty, but the live methods can already expose
+// a new package table. A multi-query decision must use exactly one view.
+type snapshotTestPackageManager struct {
+	*testPackageManager
+	snapshots int
+}
+
+func (m *snapshotTestPackageManager) Snapshot() androidpackages.View {
+	m.snapshots++
+	return androidpackages.View{}
+}
+
+func TestSocketOwnerRefinementUsesOnePackageSnapshot(t *testing.T) {
+	owner := SocketOwner{ProcessID: 4000000002, UserID: 10100, StartTimeNs: 1234567890}
+	key := socketOwnerCacheKey{ProcessID: owner.ProcessID, UserID: owner.UserID, StartTimeNs: owner.StartTimeNs}
+	socketOwnerCache().Add(key, &socketOwnerMetadata{ConnectionOwner: &adapter.ConnectionOwner{
+		ProcessID: owner.ProcessID, UserId: 10100, ProcessPaths: []string{"/system/bin/app_process64"},
+	}})
+	t.Cleanup(func() { socketOwnerCache().Remove(key) })
+	packages := &snapshotTestPackageManager{testPackageManager: &testPackageManager{
+		packagesByID: map[uint32][]string{10100: {"new.package"}}, idByPackage: map[string]uint32{"new.package": 10100},
+	}}
+	inbound := &Inbound{logger: log.NewNOPFactory().Logger(), networkManager: &testNetworkManager{packageManager: packages}}
+	info := inbound.resolveSocketOwner(context.Background(), owner)
+	if len(info.PackageNames) != 0 || packages.snapshots != 1 {
+		t.Fatalf("refinement mixed live package methods with snapshot: %+v, snapshots=%d", info, packages.snapshots)
 	}
 }
 

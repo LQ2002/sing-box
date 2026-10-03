@@ -355,12 +355,10 @@ func (i *Inbound) startProcessTracker() error {
 		return nil
 	}
 	if i.recordsSocketIdentity() {
-		// The TC program records each flow's socket UID and creating cgroup,
-		// which identifies the process (socket_identity.go). The cgroup
-		// socket hooks would record the same thing again for every socket on
-		// the system, so they are not attached. The module above, when
-		// present, is kept: it is the only source naming a root-cgroup
-		// process.
+		// TC supplies UID/group-level package attribution, not a creator
+		// PID. Keep the module above when available for precise creator and
+		// shared/system attribution. Without it these cases stay unknown;
+		// do not attach additional system-wide hooks just to infer names.
 		i.logger.Debug("eBPF socket owner from TC socket identity; cgroup socket tracking not attached: ", moduleErr)
 		return nil
 	}

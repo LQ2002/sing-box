@@ -21,11 +21,20 @@ type fakeUIDPolicyBackend struct {
 	failures        int
 	requiresRebuild bool
 	holding         uidPolicyDecisions
+	updateStarted   chan struct{}
+	resumeUpdates   <-chan struct{}
 }
 
 func (b *fakeUIDPolicyBackend) UpdateUIDPolicy(decisions []commonEBPF.UIDDecision, defaultAction commonEBPF.Decision) (bool, error) {
 	b.access.Lock()
 	defer b.access.Unlock()
+	if b.resumeUpdates != nil {
+		select {
+		case b.updateStarted <- struct{}{}:
+		default:
+		}
+		<-b.resumeUpdates
+	}
 	next := uidPolicyDecisions{decisions: slices.Clone(decisions), defaultAction: defaultAction}
 	b.calls = append(b.calls, next)
 	if b.failures > 0 {
@@ -175,12 +184,29 @@ func TestAndroidUIDUpdaterCoalescesBursts(t *testing.T) {
 	options := &androidUIDOptions{includePackage: []string{"com.example.app"}}
 	f := newUpdaterFixture(t, packageTable(nil), options, true)
 	f.waitSettled(t)
+	// Hold one actual write while publishing the burst. Without this gate,
+	// the producer and consumer may interleave arbitrarily: a one-slot
+	// notification queue does not promise at most N writes over wall time.
+	entered := make(chan struct{}, 1)
+	resume := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(resume) })
+	t.Cleanup(unblock)
+	f.backend.access.Lock()
+	f.backend.updateStarted, f.backend.resumeUpdates = entered, resume
+	f.backend.access.Unlock()
+	f.publish(packageTable(map[string]uint32{"com.example.app": 10099}))
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first update did not enter backend")
+	}
 	for uid := uint32(10100); uid < 10150; uid++ {
 		f.publish(packageTable(map[string]uint32{"com.example.app": uid}))
 	}
+	unblock()
 	f.waitSettled(t)
-	if calls := f.backend.callCount(); calls > 5 {
-		t.Fatalf("50 notifications produced %d kernel updates", calls)
+	if calls := f.backend.callCount(); calls != 2 {
+		t.Fatalf("one in-flight write plus a pending burst produced %d kernel updates, want 2", calls)
 	}
 	if !interceptsUID(f.backend.last(), 10149) || interceptsUID(f.backend.last(), 10148) {
 		t.Fatalf("final state is not the last table: %+v", f.backend.last())

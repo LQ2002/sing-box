@@ -163,14 +163,17 @@ func TestOwnerFromIdentityUsesProcessIndex(t *testing.T) {
 	tree := newFakeCgroupTree(t)
 	securityCenter := tree.addProcess(t, "system", 1000, 400, "/system/bin/app_process64")
 	systemServer := tree.addProcess(t, "system", 1000, 401, "/system/bin/app_process64")
-	writeCmdline(t, tree, 400, "com.miui.securitycenter.remote")
-	writeCmdline(t, tree, 401, "system_server")
+	// The directory PIDs are only group labels. A different process creates
+	// each socket and is identified by its cookie record.
+	securityCreator := tree.addCreator(t, 1000, 410, "/system/bin/app_process64", "com.miui.securitycenter.remote", 1234567)
+	systemCreator := tree.addCreator(t, 1000, 411, "/system/bin/app_process64", "system_server", 1234568)
 	packages := &testPackageManager{
 		idByPackage:     map[string]uint32{"android": 1000, "com.miui.securitycenter": 1000},
 		packagesByID:    map[uint32][]string{1000: {"android", "com.miui.securitycenter"}},
 		sharedPackageID: map[uint32]string{1000: "android.uid.system"},
 	}
 	inbound := newIdentityTestInbound(t, tree, packages)
+	inbound.processTracker = &testCookieOwnerSource{owners: map[uint64]SocketOwner{41: securityCreator, 42: systemCreator}}
 	table := &atomic.Pointer[fakeProcessTable]{}
 	table.Store(&fakeProcessTable{
 		packages: map[uint32][]string{1000: {"android", "com.miui.securitycenter"}},
@@ -185,14 +188,14 @@ func TestOwnerFromIdentityUsesProcessIndex(t *testing.T) {
 	inbound.processIndex.Store(index)
 	ctx := context.Background()
 
-	inbound.ownerFromIdentity(ctx, socketIdentity{valid: true, uid: 1000, cgroupID: securityCenter})
+	inbound.ownerFromIdentity(ctx, socketIdentity{valid: true, cookie: 41, uid: 1000, cgroupID: securityCenter})
 	waitLookup(t, index, 1000, "com.miui.securitycenter.remote")
-	owner := inbound.ownerFromIdentity(ctx, socketIdentity{valid: true, uid: 1000, cgroupID: securityCenter})
-	if len(owner.PackageNames) != 1 || owner.PackageNames[0] != "com.miui.securitycenter" || owner.ProcessID != 400 {
+	owner := inbound.ownerFromIdentity(ctx, socketIdentity{valid: true, cookie: 41, uid: 1000, cgroupID: securityCenter})
+	if len(owner.PackageNames) != 1 || owner.PackageNames[0] != "com.miui.securitycenter" || owner.ProcessID != 410 {
 		t.Fatalf("securitycenter.remote owner = %+v", owner)
 	}
-	owner = inbound.ownerFromIdentity(ctx, socketIdentity{valid: true, uid: 1000, cgroupID: systemServer})
-	if len(owner.PackageNames) != 0 || owner.ProcessID != 401 {
+	owner = inbound.ownerFromIdentity(ctx, socketIdentity{valid: true, cookie: 42, uid: 1000, cgroupID: systemServer})
+	if len(owner.PackageNames) != 0 || owner.ProcessID != 411 {
 		t.Fatalf("system_server must stay unknown: %+v", owner)
 	}
 	if inbound.identityCounters.resolvedByProcess.Load() != 1 {

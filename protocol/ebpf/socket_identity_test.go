@@ -4,12 +4,14 @@ package ebpf
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"testing"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/log"
 
 	"golang.org/x/sys/unix"
@@ -29,7 +31,11 @@ func newFakeCgroupTree(t *testing.T) *fakeCgroupTree {
 	tree := &fakeCgroupTree{root: filepath.Join(base, "cgroup"), proc: filepath.Join(base, "proc")}
 	previous := procRoot
 	procRoot = tree.proc
-	t.Cleanup(func() { procRoot = previous })
+	socketOwnerCache().Purge()
+	t.Cleanup(func() {
+		procRoot = previous
+		socketOwnerCache().Purge()
+	})
 	return tree
 }
 
@@ -53,6 +59,7 @@ func (f *fakeCgroupTree) addProcess(t *testing.T, kind string, uid, pid uint32, 
 	if err := os.WriteFile(filepath.Join(procDir, "cgroup"), []byte("0::"+filepath.ToSlash(relative)+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	f.addCreator(t, uid, pid, executable, "", 1234567)
 	var stat unix.Stat_t
 	if err := unix.Stat(dir, &stat); err != nil {
 		t.Fatal(err)
@@ -60,7 +67,44 @@ func (f *fakeCgroupTree) addProcess(t *testing.T, kind string, uid, pid uint32, 
 	return stat.Ino
 }
 
-func TestCgroupOwnerResolverFindsCreator(t *testing.T) {
+// addCreator supplies cookie-source truth separately from the group label.
+// More than one creator may belong to the same group.
+func (f *fakeCgroupTree) addCreator(t *testing.T, uid, pid uint32, executable, name string, ticks uint64) SocketOwner {
+	t.Helper()
+	dir := filepath.Join(f.proc, strconv.FormatUint(uint64(pid), 10))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(filepath.Join(dir, "exe"))
+	if err := os.Symlink(executable, filepath.Join(dir, "exe")); err != nil {
+		t.Fatal(err)
+	}
+	stat := fmt.Sprintf("%d (creator) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 %d 0 0", pid, ticks)
+	for file, content := range map[string]string{
+		"stat": stat, "status": fmt.Sprintf("Uid:\t%d\t%d\t%d\t%d\n", uid, uid, uid, uid), "cmdline": name + "\x00",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return SocketOwner{ProcessID: pid, UserID: uid, StartTimeNs: ticks * 10000000}
+}
+
+type testCookieOwnerSource struct {
+	missingSocketOwnerSource
+	owners  map[uint64]SocketOwner
+	lookups int
+}
+
+func (s *testCookieOwnerSource) LookupSocketOwner(cookie uint64) (SocketOwner, error) {
+	s.lookups++
+	if owner, ok := s.owners[cookie]; ok {
+		return owner, nil
+	}
+	return SocketOwner{}, os.ErrNotExist
+}
+
+func TestCgroupOwnerResolverFindsGroup(t *testing.T) {
 	tree := newFakeCgroupTree(t)
 	appID := tree.addProcess(t, "apps", 10050, 100, "/system/bin/app_process64")
 	sibling := tree.addProcess(t, "apps", 10050, 101, "/system/bin/app_process64")
@@ -68,7 +112,7 @@ func TestCgroupOwnerResolverFindsCreator(t *testing.T) {
 	resolver := newCgroupOwnerResolver(tree.root)
 
 	owner := resolver.lookup(appID, 10050)
-	if !owner.found || owner.uid != 10050 || owner.pid != 100 || owner.system || owner.executable != "" {
+	if !owner.found || owner.uid != 10050 {
 		t.Fatalf("app owner = %+v", owner)
 	}
 	// The sibling was cached by the same directory scan: it still resolves
@@ -76,14 +120,15 @@ func TestCgroupOwnerResolverFindsCreator(t *testing.T) {
 	if err := os.Remove(filepath.Join(tree.root, "apps", "uid_10050", "pid_101")); err != nil {
 		t.Fatal(err)
 	}
-	if owner = resolver.lookup(sibling, 10050); !owner.found || owner.pid != 101 {
+	if owner = resolver.lookup(sibling, 10050); !owner.found || owner.uid != 10050 {
 		t.Fatalf("sibling not cached by the first scan: %+v", owner)
 	}
 
 	// sk_uid says 10050 (netd fchown()ed the DNS socket to the app), but the
-	// socket was created in netd's cgroup: the creator wins.
+	// socket was created in a different UID's group. That is not creator
+	// evidence, even if its directory happens to name netd's PID.
 	owner = resolver.lookup(netd, 10050)
-	if !owner.found || owner.uid != 0 || owner.pid != 200 || !owner.system || owner.executable != "/system/bin/netd" {
+	if !owner.found || owner.uid != 0 {
 		t.Fatalf("netd owner = %+v", owner)
 	}
 
@@ -92,20 +137,17 @@ func TestCgroupOwnerResolverFindsCreator(t *testing.T) {
 	}
 }
 
-// A PID reused between the directory scan and the exe read lives in another
-// cgroup; its executable must not be attributed to the old process.
-func TestCgroupOwnerResolverRejectsReusedPID(t *testing.T) {
+// Even if the directory PID is reused, a group label cannot expose its new
+// executable as the old socket's sender.
+func TestGroupPIDCannotSupplyProcessMetadata(t *testing.T) {
 	tree := newFakeCgroupTree(t)
 	id := tree.addProcess(t, "system", 1000, 300, "/system/bin/old_daemon")
 	// PID 300 now belongs to a different process in a different cgroup.
 	tree.addProcess(t, "system", 1001, 300, "/system/bin/new_daemon")
-	resolver := newCgroupOwnerResolver(tree.root)
-	owner := resolver.lookup(id, 1000)
-	if !owner.found || owner.uid != 1000 {
-		t.Fatalf("owner = %+v", owner)
-	}
-	if owner.executable != "" {
-		t.Fatalf("executable of a reused PID was attributed: %q", owner.executable)
+	inbound := newIdentityTestInbound(t, tree, nil)
+	owner := inbound.ownerFromIdentity(context.Background(), socketIdentity{valid: true, uid: 1000, cgroupID: id})
+	if owner.ProcessID != 0 || len(owner.ProcessPaths) != 0 || len(owner.PackageNames) != 0 {
+		t.Fatalf("directory PID supplied process metadata: %+v", owner)
 	}
 }
 
@@ -139,12 +181,12 @@ func TestOwnerFromIdentity(t *testing.T) {
 	ctx := context.Background()
 
 	owner := inbound.ownerFromIdentity(ctx, socketIdentity{valid: true, uid: 10050, cgroupID: app})
-	if len(owner.PackageNames) != 1 || owner.PackageNames[0] != "com.example.app" || owner.UserId != 10050 || owner.ProcessID != 100 || len(owner.ProcessPaths) != 0 {
+	if len(owner.PackageNames) != 1 || owner.PackageNames[0] != "com.example.app" || owner.UserId != 10050 || owner.ProcessID != 0 || len(owner.ProcessPaths) != 0 {
 		t.Fatalf("unique app owner = %+v", owner)
 	}
 
 	owner = inbound.ownerFromIdentity(ctx, socketIdentity{valid: true, uid: 10060, cgroupID: shared})
-	if len(owner.PackageNames) != 0 || owner.UserId != 10060 || owner.ProcessID != 110 {
+	if len(owner.PackageNames) != 0 || owner.UserId != 10060 || owner.ProcessID != 0 {
 		t.Fatalf("a shared-UID process must stay unknown, got %+v", owner)
 	}
 
@@ -158,22 +200,22 @@ func TestOwnerFromIdentity(t *testing.T) {
 		t.Fatalf("system_server (app_process) owner = %+v", owner)
 	}
 
-	// netd's DNS socket chowned to the app: attributed to netd (the sender).
+	// Without a cookie source, neither netd's directory PID nor the app's
+	// accounting UID can be asserted as the sender.
 	owner = inbound.ownerFromIdentity(ctx, socketIdentity{valid: true, uid: 10050, cgroupID: netd})
-	if len(owner.PackageNames) != 0 || owner.UserId != 0 || owner.ProcessID != 200 ||
-		len(owner.ProcessPaths) != 1 || owner.ProcessPaths[0] != "/system/bin/netd" {
-		t.Fatalf("delegated DNS must follow the sender, got %+v", owner)
+	if len(owner.PackageNames) != 0 || owner.UserId != -1 || owner.ProcessID != 0 || len(owner.ProcessPaths) != 0 {
+		t.Fatalf("delegated DNS without creator evidence must stay unknown, got %+v", owner)
 	}
 
-	// Root cgroup (KernelSU/init processes): socket UID only, no package.
+	// Root cgroup (KernelSU/init processes): no corroborating creator evidence.
 	owner = inbound.ownerFromIdentity(ctx, socketIdentity{valid: true, uid: 0, cgroupID: rootCgroupID})
-	if owner == nil || owner.UserId != 0 || len(owner.PackageNames) != 0 {
+	if owner == nil || owner.UserId != -1 || len(owner.PackageNames) != 0 {
 		t.Fatalf("root cgroup owner = %+v", owner)
 	}
 
-	// Gone before lookup: UID kept, no package, never nil.
+	// Gone before lookup: unknown, never nil.
 	owner = inbound.ownerFromIdentity(ctx, socketIdentity{valid: true, uid: 10050, cgroupID: 1 << 40})
-	if owner == nil || owner.UserId != 10050 || len(owner.PackageNames) != 0 {
+	if owner == nil || owner.UserId != -1 || len(owner.PackageNames) != 0 {
 		t.Fatalf("vanished creator owner = %+v", owner)
 	}
 
@@ -184,7 +226,7 @@ func TestOwnerFromIdentity(t *testing.T) {
 	}
 
 	counters := &inbound.identityCounters
-	if counters.resolvedPackage.Load() != 2 || counters.unknownPackage.Load() != 3 ||
+	if counters.resolvedPackage.Load() != 2 || counters.unknownPackage.Load() != 5 || counters.creatorUnavailable.Load() != 5 || counters.uidMismatch.Load() != 1 ||
 		counters.rootCgroup.Load() != 1 || counters.cgroupGone.Load() != 1 || counters.noIdentity.Load() != 1 {
 		t.Fatalf("counters: resolved=%d unknownPackage=%d root=%d gone=%d none=%d",
 			counters.resolvedPackage.Load(), counters.unknownPackage.Load(), counters.rootCgroup.Load(),
@@ -243,6 +285,33 @@ func TestAndroidUserName(t *testing.T) {
 	for _, uid := range []uint32{0, 1000, 20050, 9999} {
 		if got, ok := androidUserName(uid); ok {
 			t.Fatalf("androidUserName(%d) = %q, want none", uid, got)
+		}
+	}
+}
+
+type identityTestRouter struct {
+	adapter.Router
+	need bool
+}
+
+func (r identityTestRouter) NeedFindProcess() bool { return r.need }
+
+func TestRecordsSocketIdentityPreservesNonAndroidTracker(t *testing.T) {
+	base := Inbound{localEnabled: true, localDataPlane: "tc", router: identityTestRouter{need: true}}
+	if got := base.recordsSocketIdentity(); got != (runtime.GOOS == "android") {
+		t.Fatalf("Android-specific identity selected on %s: %v", runtime.GOOS, got)
+	}
+	for _, configure := range []func(*Inbound){
+		func(i *Inbound) { i.localEnabled = false },
+		func(i *Inbound) { i.localDataPlane = "cgroup" },
+		func(i *Inbound) { i.router = nil },
+		func(i *Inbound) { i.router = identityTestRouter{} },
+		func(i *Inbound) { i.usePlatformProcessFinder = true },
+	} {
+		inbound := &Inbound{localEnabled: true, localDataPlane: "tc", router: identityTestRouter{need: true}}
+		configure(inbound)
+		if inbound.recordsSocketIdentity() {
+			t.Fatal("identity enabled without the required local Android TC process lookup")
 		}
 	}
 }

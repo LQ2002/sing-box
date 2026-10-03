@@ -6,8 +6,9 @@ package ebpf
 // process-start package is not necessarily the package behind every later
 // socket: two APKs can execute inside one shared-UID process.
 //
-// Only verified application runtimes with ordinary, non-shared UIDs mapped to
-// one installed package receive PackageNames. Other cases retain PID/UID.
+// Verified application runtimes may also use the manifest process index for
+// shared/system UIDs. The name must come from the cookie creator's proc dir,
+// never from a cgroup directory PID or the truncated kernel comm hint.
 
 import (
 	"bytes"
@@ -20,6 +21,8 @@ import (
 	"sync"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/androidmanifest"
+	"github.com/sagernet/sing-box/common/androidpackages"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/contrab/freelru"
@@ -39,10 +42,19 @@ type socketOwnerCacheKey struct {
 	StartTimeNs uint64
 }
 
+// procRoot is replaceable only by tests. Every metadata read uses one open
+// directory FD so PID reuse cannot redirect subsequent reads to a new task.
+var procRoot = "/proc"
+
+type socketOwnerMetadata struct {
+	*adapter.ConnectionOwner
+	processName string
+}
+
 // Only verified procfs metadata is cached. Package membership is checked on
 // each lookup; incomplete reads are retried instead of cached indefinitely.
-var socketOwnerCache = sync.OnceValue(func() *freelru.Cache[socketOwnerCacheKey, *adapter.ConnectionOwner] {
-	cache, err := freelru.New[socketOwnerCacheKey, *adapter.ConnectionOwner](
+var socketOwnerCache = sync.OnceValue(func() *freelru.Cache[socketOwnerCacheKey, *socketOwnerMetadata] {
+	cache, err := freelru.New[socketOwnerCacheKey, *socketOwnerMetadata](
 		socketOwnerCacheCapacity, maphash.NewHasher[socketOwnerCacheKey]().Hash32, true,
 	)
 	if err != nil {
@@ -56,10 +68,15 @@ var socketOwnerCache = sync.OnceValue(func() *freelru.Cache[socketOwnerCacheKey,
 func (i *Inbound) resolveSocketOwner(ctx context.Context, owner SocketOwner) *adapter.ConnectionOwner {
 	key := socketOwnerCacheKey{ProcessID: owner.ProcessID, UserID: owner.UserID, StartTimeNs: owner.StartTimeNs}
 	cache := socketOwnerCache()
-	var rawInfo *adapter.ConnectionOwner
+	var rawInfo *socketOwnerMetadata
 	var cached bool
 	if owner.StartTimeNs != 0 && cache != nil {
 		rawInfo, cached = cache.Get(key)
+	}
+	if cached && i.processIndex.Load() != nil && rawInfo.processName == "" &&
+		len(rawInfo.ProcessPaths) > 0 && isAndroidApplicationExecutable(strings.TrimSuffix(rawInfo.ProcessPaths[0], deletedPathSuffix)) {
+		// An index may have started after this raw entry was cached.
+		cached = false
 	}
 	verified := cached
 	if !cached {
@@ -69,13 +86,26 @@ func (i *Inbound) resolveSocketOwner(ctx context.Context, owner SocketOwner) *ad
 		}
 	}
 	// Refinement must not mutate the cache's raw executable classification.
-	info := *rawInfo
+	info := *rawInfo.ConnectionOwner
 	if verified {
 		var packageManager tun.PackageManager
 		if i.networkManager != nil {
 			packageManager = i.networkManager.PackageManager()
 		}
+		if snapshotter, ok := packageManager.(interface{ Snapshot() androidpackages.View }); ok {
+			packageManager = snapshotter.Snapshot()
+		}
 		refineConnectionOwner(&info, owner, packageManager)
+		if len(info.PackageNames) > 0 {
+			i.identityCounters.resolvedPackage.Add(1)
+		}
+		if index := i.processIndex.Load(); index != nil && len(info.PackageNames) == 0 && rawInfo.processName != "" {
+			name := androidmanifest.ProcessRecordName(rawInfo.processName)
+			if packageName := index.lookup(owner.UserID%androidUserRange, name); packageName != "" {
+				info.PackageNames = []string{packageName}
+				i.identityCounters.resolvedByProcess.Add(1)
+			}
+		}
 	}
 	if !cached {
 		logResolvedOwner(ctx, i.logger, &info)
@@ -108,40 +138,57 @@ func logResolvedOwner(ctx context.Context, logger log.ContextLogger, info *adapt
 // One proc directory FD keeps stat/status/exe reads on the same process
 // instance; later PID reuse does not retarget that FD. The proc start time is
 // only available in USER_HZ ticks, not nanoseconds.
-func (i *Inbound) resolveThroughProcDir(owner SocketOwner) (*adapter.ConnectionOwner, bool) {
-	if owner.StartTimeNs == 0 {
-		return ownerFromCommOnly(owner), false
+func (i *Inbound) resolveThroughProcDir(owner SocketOwner) (*socketOwnerMetadata, bool) {
+	unknown := func() (*socketOwnerMetadata, bool) {
+		return &socketOwnerMetadata{ConnectionOwner: ownerFromCommOnly(owner)}, false
 	}
-	dir, err := os.Open(filepath.Join("/proc", strconv.FormatUint(uint64(owner.ProcessID), 10)))
+	if owner.StartTimeNs == 0 {
+		return unknown()
+	}
+	dir, err := os.Open(filepath.Join(procRoot, strconv.FormatUint(uint64(owner.ProcessID), 10)))
 	if err != nil {
 		i.logger.Trace("open eBPF socket owner proc dir: ", err)
-		return ownerFromCommOnly(owner), false
+		return unknown()
 	}
 	defer dir.Close()
 	dirFD := int(dir.Fd())
 	raw, err := readFileAt(dirFD, "stat")
 	if err != nil {
-		return ownerFromCommOnly(owner), false
+		return unknown()
 	}
 	ticks, ok := parseStartTicks(raw)
 	if !ok || !startTicksMatch(ticks, owner.StartTimeNs) {
 		i.logger.Trace("eBPF socket owner pid ", owner.ProcessID, " start time no longer matches")
-		return ownerFromCommOnly(owner), false
+		return unknown()
 	}
 	status, err := readFileAt(dirFD, "status")
 	uid, ok := parseProcessUID(status)
 	if err != nil || !ok || uid != owner.UserID {
-		return ownerFromCommOnly(owner), false
+		return unknown()
 	}
 	executable, err := readLinkAt(dirFD, "exe")
 	if err != nil || !filepath.IsAbs(executable) {
-		return ownerFromCommOnly(owner), false
+		return unknown()
 	}
 	info := &adapter.ConnectionOwner{
 		ProcessID: owner.ProcessID, UserId: int32(owner.UserID), ProcessPaths: []string{executable},
 	}
 	completeOwnerUser(info)
-	return info, true
+	metadata := &socketOwnerMetadata{ConnectionOwner: info}
+	if i.processIndex.Load() != nil && isAndroidApplicationExecutable(strings.TrimSuffix(executable, deletedPathSuffix)) {
+		cmdline, err := readFileAt(dirFD, "cmdline")
+		if err != nil {
+			// Keep the creator evidence but retry incomplete metadata on the
+			// next connection; never cache a missing name as authoritative.
+			return unknown()
+		}
+		name, _, terminated := bytes.Cut(cmdline, []byte{0})
+		if !terminated || len(name) == 0 {
+			return unknown()
+		}
+		metadata.processName = string(name)
+	}
+	return metadata, true
 }
 
 func completeOwnerUser(info *adapter.ConnectionOwner) {

@@ -6,10 +6,14 @@ KernelSU/Magisk 模块安装包。现有 `sb_sockowner_probe` 模块的 ABI 未�
 
 ## 行为变化
 
-- 删除从 `cmdline` / `comm` 猜包名的逻辑。仅在 procfs 身份核对通过，且包管理器确认
-  普通应用 UID 唯一对应一个非共享包时填写包名。
-- 共享、隔离、SDK sandbox、系统 UID 或证据不足时，包名保持未知。这些连接不会
-  命中 `package_name` 规则；已有 UID 仍可用于 `user_id` 规则。
+- TC 快路径在 socket UID 与 Android cgroup 的 UID 标签一致，且包表确认唯一非共享
+  应用时归包；SDK sandbox UID 按 Android 规则映射到宿主。这是 UID/应用组级归属，
+  不填写 PID 或进程路径。fork 子进程可以共用 cgroup，目录 `pid_Y` 不是 socket 创建者。
+- 共享/系统 UID 或组与 socket UID 不一致时，按 cookie 查询可选模块提供的创建者。
+  只有在同一 proc 目录 FD 内核验启动时间、UID、应用运行时路径后，才用完整 cmdline
+  查询 Manifest 的进程声明；唯一匹配才给包名，不从截断 `comm` 猜包名。
+- 共享进程对应多个包、隔离 UID、模块不可用或证据不足时保持未知。未知包不会命中
+  `package_name`；UID 信息也有矛盾时不填写 `user_id`。无模块仍支持上述普通应用快路径。
 - 模块查询缺失时明确返回未知，阻止路由器用通用查询重新补入共享 UID 的候选包名。
 - 缓存包含 PID、UID 和启动时间，只缓存已验证的 procfs 信息，生命周期为 1 秒。
   包名映射每次重新查询；不完整的读取不缓存。
@@ -51,5 +55,6 @@ bash release/build-android-ebpf.sh dist/android-arm64-ebpf
 
 脚本从 `.github/workflows/android-ebpf.yml` 和 `release/LDFLAGS` 读取标签与链接参数，
 处理 Windows CRLF，使用 `-mod=readonly`，并写出成品构建信息和校验值。
-发布构建使用 CGO，以保留 bionic 的 Android 用户名解析；不能用纯 Go 诊断程序的
-编译参数直接代替。
+发布构建沿用工作流的 CGO 设置；Android 普通应用与隔离 UID 的用户名由代码按
+bionic 的 UID 公式生成（Go 的 os/user 在 Android 上没有完整实现）。不能用纯 Go
+诊断程序的编译参数直接代替发布配置。
