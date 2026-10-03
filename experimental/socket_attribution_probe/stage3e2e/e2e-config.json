@@ -1,0 +1,29 @@
+{
+  "log": {"level": "debug", "output": "/data/local/tmp/sbe2/e2e/e2e.log", "timestamp": true},
+  "dns": {"servers": [{"type": "local", "tag": "local"}]},
+  "inbounds": [
+    {
+      "type": "ebpf",
+      "tag": "ebpf-in",
+      "network": ["tcp", "udp"],
+      "udp_timeout": "5m",
+      "tc_priority": 1,
+      "local": {
+        "enabled": true,
+        "data_plane": "tc",
+        "dns_mode": "respect_policy",
+        "ipv6": true,
+        "bypass_private_address": true,
+        "exclude_package": ["dev.sbo.firstconnection.single"]
+      }
+    }
+  ],
+  "outbounds": [{"type": "direct", "tag": "direct"}],
+  "route": {
+    "rules": [
+      {"package_name": ["com.android.chrome", "com.miui.securitycenter"], "outbound": "direct"}
+    ],
+    "final": "direct",
+    "default_domain_resolver": "local"
+  }
+}
