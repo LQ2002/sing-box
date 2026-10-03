@@ -111,6 +111,12 @@ func (i *Inbound) startInbound() error {
 		SelfBypass:       i.selfBypass,
 		TrackProcess:     i.processTracker != nil,
 		ICMPEchoReply:    i.fakeIPICMPReply,
+		// The socket UID and creating cgroup of every intercepted local flow
+		// (socket_identity.go). Only when routing needs process information.
+		RecordSocketIdentity: i.recordsSocketIdentity(),
+	}
+	if backendConfig.RecordSocketIdentity && i.cgroupOwners == nil {
+		i.cgroupOwners = newCgroupOwnerResolver(cgroupRoot)
 	}
 	if runtime.GOOS == "android" {
 		backendConfig.AssignmentCapacity = commonEBPF.CompactTCAssignmentCapacity
@@ -119,7 +125,7 @@ func (i *Inbound) startInbound() error {
 	if localTCEnabled || sharedSocketAssignEnabled {
 		backend, err = commonEBPF.PrepareTC(backendConfig)
 	}
-	if err != nil && i.processTracker != nil {
+	if err != nil && (i.processTracker != nil || backendConfig.RecordSocketIdentity) {
 		trackingErr := err
 		var closeErr error
 		i.processTracker, closeErr = closeProcessTrackerOwner(i.processTracker)
@@ -128,6 +134,9 @@ func (i *Inbound) startInbound() error {
 		}
 		trackingErr = E.Errors(trackingErr, closeErr)
 		backendConfig.TrackProcess = false
+		// The identity variant needs bpf_skb_cgroup_id; a kernel without
+		// CONFIG_SOCK_CGROUP_DATA rejects it. Fall back to the light variant.
+		backendConfig.RecordSocketIdentity = false
 		backend, err = commonEBPF.PrepareTC(backendConfig)
 		if err == nil {
 			i.logger.Debug("eBPF cgroup process tracking unavailable; using userspace process search: ", trackingErr)
@@ -136,6 +145,7 @@ func (i *Inbound) startInbound() error {
 	if err != nil {
 		return err
 	}
+	i.socketIdentityActive.Store(backend != nil && backendConfig.RecordSocketIdentity)
 	if backend != nil {
 		if err = i.listeners.registerTCTCPListeners(backend); err != nil {
 			i.setTCDataPlane(newUnstartedTCRuntime(backend))
@@ -341,6 +351,16 @@ func (i *Inbound) startProcessTracker() error {
 		i.processTracker = module
 		return nil
 	}
+	if i.recordsSocketIdentity() {
+		// The TC program records each flow's socket UID and creating cgroup,
+		// which identifies the process (socket_identity.go). The cgroup
+		// socket hooks would record the same thing again for every socket on
+		// the system, so they are not attached. The module above, when
+		// present, is kept: it is the only source naming a root-cgroup
+		// process.
+		i.logger.Debug("eBPF socket owner from TC socket identity; cgroup socket tracking not attached: ", moduleErr)
+		return nil
+	}
 	uidDecisions, defaultAction := i.compileProcessUIDPolicy()
 	if i.followsAndroidPackageChanges() {
 		// The tracker's UID filter is fixed when it attaches; sing-ebpf has no
@@ -384,6 +404,12 @@ func (i *Inbound) processTrackingMode() string {
 	}
 	if !i.localEnabled || !i.router.NeedFindProcess() {
 		return "off"
+	}
+	if i.socketIdentityActive.Load() {
+		if i.processTracker != nil {
+			return "tc_socket_identity+" + i.processTracker.TrackingMode()
+		}
+		return "tc_socket_identity"
 	}
 	if i.processTracker != nil {
 		// 来源自己报告模式，调用方不再硬编码某一种实现的名字。

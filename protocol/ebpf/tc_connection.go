@@ -43,7 +43,7 @@ func (i *Inbound) newTCConnection(
 	metadata.InboundType = i.Type()
 	metadata.Source = M.SocksaddrFromNetIP(source)
 	metadata.Destination = M.SocksaddrFromNetIP(destination)
-	metadata.ProcessInfo = i.lookupProcessInfo(ctx, assignment.SocketCookie)
+	metadata.ProcessInfo = i.ownerFromIdentity(ctx, identityFromAssignment(assignment))
 	if assignment.Path == commonEBPF.TCPathShared && assignment.SourceMACValid != 0 {
 		metadata.SourceMACAddress = net.HardwareAddr(assignment.SourceMAC[:])
 	}
@@ -90,7 +90,13 @@ func (i *Inbound) newTCPacket(
 		SocketCookie:   assignment.SocketCookie,
 		InterfaceIndex: assignment.InterfaceIndex,
 	}
-	i.udpClientTable.setDirectBinding(key, destination, sourceMAC, assignment.SocketCookie)
+	identity := socketIdentity{cookie: assignment.SocketCookie}
+	if assignment.Path != commonEBPF.TCPathShared {
+		// Shared-path flows come from other hosts; their assignment never
+		// carries a local identity (sing-ebpf build_assignment).
+		identity = identityFromAssignment(assignment)
+	}
+	i.udpClientTable.setDirectBindingWithIdentity(key, destination, sourceMAC, identity)
 	if takeOwnership {
 		i.udpNat.NewPacketBuffer(key, buffer, source, M.SocksaddrFromNetIP(destination), nil)
 		return true

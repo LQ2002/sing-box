@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
@@ -89,6 +90,9 @@ type Inbound struct {
 	compiledPolicy            commonEBPF.CompiledPolicy
 	androidUIDOptions         *androidUIDOptions
 	androidUIDUpdater         *androidUIDUpdater
+	cgroupOwners              *cgroupOwnerResolver
+	socketIdentityActive      atomic.Bool
+	identityCounters          identityCounters
 	androidUIDUpdaterAccess   sync.Mutex
 	sharedOptions             option.EBPFSharedOptions
 	sharedEnabled             bool
