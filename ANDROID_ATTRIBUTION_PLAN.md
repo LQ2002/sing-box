@@ -182,6 +182,146 @@ PID/出生 ticks/内核/boot ID；不要把历史 PID 11765 或 boot ID 当常�
 `first_connection_probe`、`mainline_validation`、`process_identity_probe`，均在 `experimental/`
 下；保留它们，尤其其中被下文引用的证据，不执行全量清理或顺手批量提交。
 
+## Claude 目标设计（2026-10-03，分支 `claude/attribution-target-design`）
+
+本节回答上面“请 Claude 完成的设计决策”1–6，是后续实施与验收的依据。分支：主仓库与
+`E:\sing-ebpf` 均为 `claude/attribution-target-design`，分别从 `b7d7f230` 与 `2354018` 切出。
+每条结论标注依据：**[源码]** 已读到的 AOSP/Linux 源码位置；**[实测]** 已有真机或本机测量；
+**[待验证]** 设计假设，必须在下文验收矩阵中实测后才能改为已证实；**[未实现]** 尚无代码。
+
+### 选定架构：创建现场固化 + 内核已有记账来源 + 用户态纯函数解析
+
+不改 AOSP、不改 netd、不用自定义内核；沿用 GPT 已实现并实测的桥接模块 typed tracepoint
+与持久 SK_STORAGE producer，扩充创建现场写入的事实，再由已有 TC 一次交给 sing-box。
+
+```text
+__sock_create 末尾 trace_android_vh_sock_create        [源码] net/socket.c:1602
+  → sbo_identity_bridge typed tracepoint → BPF producer（创建线程上下文）
+      v1 已有：cookie、TGID、TID、创建者 UID、leader 出生时间、线程 comm
+      v2 新增：argv[0] 哈希（进程记录名）、exe inode、标志位            [未实现]
+  → SK_STORAGE（不可改写、随 socket 释放）
+  → 已有 TC 首包/刷新时复制到 assignment
+      另读：sk_uid、socket cgroup id（已有）；netd cookie_tag_map 记账 UID/标签 [未实现]
+  → sing-box：纯函数解析，按证据等级给出包名或明确未知
+```
+
+**为何不采用 AOSP/zygote 启动登记（TASK_STORAGE token）**：
+- 这台设备 bootloader 锁定（`ro.boot.verifiedbootstate=green`、`vbmeta.device_state=locked`），
+  netd 的 BPF 程序在签名的 mainline APEX `com.android.tethering/etc/bpf/mainline/netd.o` 中
+  [实测]，无法修改 system_server/zygote/netd；唯一可行入口是 Zygisk 向每个 App 注入，
+  用户此前不接受这条路。
+- 启动登记能得到的是“进程为哪个包启动”。对多包共享进程，这与 `am_proc_start` 同源，
+  后续载入同一进程的其他包无法区分（阶段 1 探针 B 被误认为 A）[实测]。因此它对
+  真正剩余的歧义没有额外区分力，只能缩短事后查询。
+- 事后查询可在创建现场直接固化进程记录名来消除：zygote 在任何 App 代码运行前用
+  `Process.setArgV0(niceName)` 设定 argv[0] [源码] `ZygoteConnection.java:514`、
+  `Zygote.java:920`；App 必须先运行代码才能建 socket，所以创建时的 argv[0] 就是 AMS 的记录名
+  （system_server 的 `system_server`→`system` 已按 `ZygoteInit.java:728` 与
+  `ActivityManagerService.setSystemProcess` 处理）。tracing 程序可用
+  `bpf_get_current_task_btf` 与 `bpf_probe_read_user_str` [源码] `kernel/trace/bpf_trace.c:1448,1474`，
+  `mm->arg_start`、`mm->exe_file` 在 BTF 结构中 [源码] `include/linux/mm_types.h:968,1001`。
+- 结论：用“创建现场 argv[0] 哈希 +（UID, 进程名）唯一 Manifest 声明”得到与 AMS 同键的归包，
+  不依赖创建者仍存活，也不受创建后 exec 影响；多包共享进程仍判未知。
+
+### 决策 1：归属对象与输出
+
+| 对象 | 来源 | 何时可信 | 用途 |
+|---|---|---|---|
+| 创建者 task | v1/v2 快照：TGID、TID、UID、leader 出生时间、comm、argv[0] 哈希、exe inode | 快照有效且 cookie 等于当前 socket cookie [源码] `tc.bpf.c:186` | 路由主体（用户决定按发送者分流）；`ProcessID`、`UserId` |
+| socket 记账 UID | `sk_uid` | 内核事实；可被持有 `CAP_CHOWN` 的进程 fchown（netd 代发 DNS）[实测] 研究结论 28 | 推断代发请求方，不作发送者 |
+| 进程组 UID | socket cgroup id → `/apps|system/uid_X` | 仅组标签；fork 子进程继承、可迁入 [实测] 3 个非组首进程持有网络 socket | 与 sk_uid 一致时的应用级快路径与无快照回退 |
+| 包/宿主 | 由上面三者推导 | 见证据等级 | `PackageNames` |
+| 代发请求方 | netd 记账 UID（≠ 创建者时）或 sk_uid（≠ 创建者时） | 跨 UID 记账要求 `UPDATE_DEVICE_STATS` [源码] Connectivity `BpfHandler.cpp:344`；fchown 要求特权 | 仅记录与诊断；不参与路由 |
+
+**包名证据等级**（只有 E1–E3 才填 `PackageNames`，其余返回非 nil 未知并记原因）：
+- **E1**：普通应用 UID 且当前包表只有一个包；创建者 UID（无快照时用组 UID 且与 sk_uid 一致）决定。
+- **E2**：共享/系统 UID，快照 argv[0] 哈希在该 appId 的 Manifest 声明进程名中唯一。
+- **E3**：SDK 沙箱 UID → 宿主 UID−10000 的 E1 [源码] `Process.getAppUidForSdkSandboxUid`。
+- 未知原因：`multi_package_process`、`undeclared_process`、`no_creator_snapshot`、
+  `name_unavailable`、`index_pending`、`index_failed`、`native_process`、`root_cgroup`、`uid_mismatch`。
+
+`ProcessPaths` 只在快照 exe inode 与 `/proc/<pid>/exe` 的 inode 相同、且 `(pid, 出生时间)` 吻合时
+填写；否则不填，避免 exec 或 PID 复用后报错路径。请求方以独立字段写入本地诊断与日志，
+不加入上游 `adapter.ConnectionOwner`（遵守不改主线类型的约束）。
+
+### 决策 2：可信包身份来源
+
+见上节。保留 proc/Manifest 细化，但输入改为创建现场固化的进程名哈希；`/proc` 只用于
+native 进程的可执行路径展示，并用 exe inode 校验。Manifest 索引增加“进程名哈希 → 包”的
+映射，按 `codePath + ut + version` 失效（沿用已有机制）。
+
+### 决策 3：生命周期语义
+
+| 情形 | 语义 | 依据 |
+|---|---|---|
+| 新 socket | 创建时快照，之后不改写 | [实测] GPT 隔离真机 16 快照/重开不变 |
+| fork 后子进程新建 socket | 记录子进程自身（生产 producer 取当前 task，不用 TASK_STORAGE） | 由构造保证；[待验证] 生产链路真机 |
+| fork 继承的父 socket | 保留父进程快照（创建者语义） | [实测] 原型 |
+| exec（leader 或非 leader）后 | 旧 socket 保留 exec 前的名称哈希与 exe inode；新 socket 记录新程序 | v2 设计；[待验证] |
+| accept 子 socket | 无快照（TC 拒绝克隆来的 listener cookie）；组 UID 与 sk_uid 由 `sk_clone` 自 listener 复制，E1 仍可用 | [源码] `sock.c:2485`、`bpf_sk_storage.c:175`；[实测] 原型 accept 无身份 |
+| producer 安装前已存在的 socket | 无快照，回退到 E1 组级或可选旧模块 | [实测] 1 个旧 socket 保持未知 |
+| 创建者退出 | 快照仍在；E2 仍可归包；native 路径不可得 | v2 设计；[待验证] |
+| PID 复用 | `(pid, 出生时间)` 不符则拒绝 /proc | [实测] 单元测试 |
+| io_uring 建 socket | io-wq 线程 `CLONE_THREAD` 属提交者线程组，记录提交者 | [源码] `kernel/fork.c:2757` |
+| FD 转交 | 仍是创建者，不是当前使用者 | 用户“按发送者”的定义以创建者近似；已知边界 |
+| 包升级 | 索引按 codePath+stamp 重读；哈希映射重建 | [实测] 阶段 3 单元测试 |
+| 卸载后 UID | 当前包表无该 UID → 未知 | 阶段 1 机制 |
+| Framework 重启 | 包表重读；重启后 appId 分配器重置，跨重启存活的长连接可能被新包占用同一 UID → 该 socket 可能误归属 | [源码] `AppIdSettingMap`（研究结论）；已知风险，[待验证] 频度 |
+
+### 决策 4：特殊来源
+
+| 来源 | 归属 |
+|---|---|
+| 共享 UID、进程名唯一 | E2 |
+| 多包共享进程（如 `com.android.phone` 承载 11 个包） | 未知 `multi_package_process`；需要进程内请求级钩子才能区分，超出本设计 |
+| isolated 进程 | SELinux 禁止其创建 inet socket [实测] 研究结论 62；宿主传入的 socket 带宿主快照 → 宿主 |
+| SDK 沙箱 | E3 |
+| 系统 native（netd、daemon） | 无包名；exe 路径经 inode 校验；`UserId` |
+| netd 代发 DNS | 发送者 = netd；请求方 = sk_uid（fchown 的 App UID） |
+| GMS/DownloadProvider 等代发 | 发送者 = 服务进程；请求方 = netd 记账 UID |
+| HTTP/2、QUIC 多来源复用 | 请求方只代表打标签时的来源，是 socket 级而非请求级；不覆盖创建者 |
+
+### 决策 5：兼容与失效
+
+- 默认关闭；显式启用而模块/BTF/producer 缺失时启动报错（GPT 已实现）。
+- v2 使用新 pin 目录 `/sys/fs/bpf/sing-box/socket-creator-v2`；发现 v1 pins 仍在时拒绝启动并
+  提示先用旧版维护命令移除，避免两个 producer 同时全局采集。[未实现]
+- TC 只认 64 字节 v2 快照；v1 map 不能借给 v2 TC（大小校验拒绝）。[未实现]
+- netd `cookie_tag_map` 不存在或不可读：请求方未知，不报错、不影响路由。[未实现]
+- 正常停止、禁用配置、升级、显式卸载沿用 GPT 已证实的持久化契约。
+
+### 决策 6：开销模型（实测前为估算）
+
+| 阶段 | 新增工作 | 量级 |
+|---|---|---|
+| 进程启动 | 无 | 0 |
+| socket 创建（全机 inet socket） | tracepoint + 一次 SK_STORAGE 分配 + ≤128 字节用户态读与哈希 + exe inode 读 | 每次数百 ns 量级 [待验证] |
+| 首包/刷新 | sk_storage_get + netd 表查找 + assignment 写 | 每 socket 一次 [待验证] |
+| 每包 | 已有 creator 变体的有效性判断 | 阶段 2 量级 [待验证] |
+| 每连接（用户态） | 缓存命中的 map 查找；E2 为哈希表查找，无 /proc | 微秒以下 [待验证] |
+| 内存 | SK_STORAGE 每 socket 约 64 B 数据 + 元素开销；assignment 88→112 B × 8192 项 ≈ +192 KiB | [待验证] |
+
+### 实施落点与顺序
+
+1. `E:\sing-ebpf`：creator ABI v2（64 B）与 assignment 扩展；可选外借 netd `cookie_tag_map`，
+   在记录时读取记账 UID/标签；C/Go 布局断言、生成物、集成测试。
+2. `common/socketidentity`：producer v2（argv[0] FNV-1a 64 哈希、exe inode、标志位）、
+   v2 pin 目录、v1 残留检测；Go ABI 与 BTF 布局测试。
+3. `protocol/ebpf`：E2 走哈希索引、exe inode 校验、请求方记录、未知原因计数；单元测试。
+4. 文档与验收：按下方矩阵在真机执行，逐项记录。
+
+### 验收矩阵（全部为 [待验证]，执行后在此逐项填写）
+
+- 本机：两仓库 race/vet；C/Go ABI；BPF 加载（WSL）；哈希一致性（BPF 与 Go 对同一名称）。
+- 真机 producer：创建时哈希与 `/proc/<pid>/cmdline` 一致；exe inode 一致；fork、exec、
+  accept、创建者退出、io_uring 各一组。
+- 真机完整服务：真实 App 冷/热启动，普通/共享 UID、多包进程、native、netd DNS、
+  GMS 代发；与 `dumpsys activity processes` 的 `packageList` 逐条比对，统计正确/错误/未知/漏采。
+- 完整 sing-box 入口 TCP/UDP、IPv4/IPv6、delivery/shared，校验实际载荷回包。
+- 无模块、半套 pins、v1 残留、netd 表缺失的预期行为。
+- 仅旧方案与仅新方案交替配对：建连与回包尾延迟、CPU、内核与用户态内存、吞吐、
+  长时间持有/释放。
+
 ## 仓库与范围
 
 - 主实施仓库：`E:\ebpf_sing-box`。
