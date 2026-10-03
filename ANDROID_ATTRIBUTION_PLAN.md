@@ -589,6 +589,54 @@ boot ID 未变，生产 sing-box 始终 PID 11765/start ticks 14670767，cmdline
 登记切换通过屏障串行执行，未验证创建 socket 时并发更新 TASK_STORAGE 的原子性；内核
 出生时间只以 `/proc` 的 USER_HZ ticks 交叉核验，root/shell 夹具不代表 App SELinux 场景。
 
+**后续生命周期与异常路径验证（2026-10-03）**：用户要求继续验证。本轮保持同一现有
+内核和隔离边界，模块与生产服务均未修改；新增原生 C 夹具执行真实 fork/exec/accept，
+而非用 Go 的 fork+exec 代替纯 fork。夹具以 UID 2000 运行，父子与 exec 前后通过私有
+SOCK_SEQPACKET 屏障同步；自身 pidfd 经 SCM_RIGHTS 交给登记者，另用 fdinfo 的内核 PID
+核对该 FD 的绑定，未根据数字 PID 重新打开登记对象。
+
+验证扩展代码提交：`6f29b413`（`experiment: verify identity carrier lifecycle boundaries`）。
+
+最终 15 组测试通过：原有 7 组继续通过，新增 8 组如下。**“通过”指行为与实际边界一致，
+不表示缺失身份的场景已有自动归属能力。**
+
+| 新增场景 | 已验证结果 |
+|---|---|
+| UID / TGID 不匹配登记（各一组） | 初次 socket 不复制错误 token；修正登记后新 socket 正常，原 socket 仍保持未知 |
+| 删除登记 | 旧 socket 保留创建时身份；删除后创建的 socket 为未知 |
+| 迟到的登记 | 登记前 socket 不被追补重标；登记后新 socket 正常 |
+| 单线程原生 fork | 子 task 不继承父 task 登记；继承的父 socket 保留父身份，新建 socket 先为未知，子进程重新登记后恢复 |
+| leader 执行 exec | task 登记保留，旧、新 socket 都使用原进程实例 token；不代表可执行文件元数据会自动更新 |
+| 非 leader 执行 exec | PID 与 kernel `StartNS` 均保持，但原 leader 的 TASK_STORAGE 丢失；旧 socket 保留身份，新 socket 为未知，重新登记后新建 socket 恢复 |
+| 原生 accept | listener 有身份；accept child 的 SK_STORAGE 为 ENOENT。实际发送载荷被对端完整收到，TC 仍无该 child 的身份记录，证实当前不覆盖此路径 |
+
+最终共核对 35 个创建路径 socket 的存储，34 个首次发送观察与创建快照逐字段完全一致；
+剩余一个是未发送的 listener。另核对 1 个缺少身份的 accepted child，未把它算成首包
+归属成功。统计为 `hook_calls=35, registered=28, unregistered=7, registration_mismatch=2`；
+后者是两个明确注入的错误登记，其余存储/插入/出生时间/重复创建/cookie 错误均为 0。
+
+首次扩展运行的所有用例已通过，但旧汇总把一次非 INET socket 的正常过滤当成错误。
+补充只读地址族直方图后重跑，实测为 `AF_UNIX=1`；仍核对其总数与过滤计数完全相等，
+没有静默忽略额外计数。最终 `run_result=pass`，`CLEANUP run_rc=0 cleanup_rc=0`。
+`audit-log.py` 使用 Python 精确整数独立重算日志：15 组、35 个创建快照、34 个首包匹配、
+19 个不同随机登记 token；fork 实际发送者与原 socket 创建者不同；非 leader exec 的
+三份创建记录有相同 PID/内核 StartNS，registered 状态为 `1→0→1`，验证了缺失与补登记。
+
+本地 Go 1.26.6 race、vet、arm64 构建通过；原生夹具以 NDK r29、`-Wall -Wextra -Werror`
+构建通过。原始记录位于原型 `results/lifecycle-run0{1,2}.txt`、对应 `*-state/`、
+`lifecycle-final-local-checks.txt`、`lifecycle-audit.json` 和 `lifecycle-cleanup.txt`（均不入库）。
+
+最终 runner SHA-256 `aa778acc509701619a7400e45d15cd8ab4a3c1b910b845c1d72c347f6b0143f0`；
+native helper `1d04f30c40fb94acb726c2d892db0fbae2c14771e5d2cac0b873016d63b479d9`；
+BPF `9b347594bf08e3c77f7de43b3413d56b0b314b180c902fc32101f9218258e9f9`；模块哈希与上轮一致。
+设备 boot ID、taint 4608、生产 PID 11765/start ticks 14670767、接口及路由检查均保持；
+测试模块已卸载，原生父子进程与 Go worker 均退出；日志取回后专用手机临时目录已删除。
+
+这些结果缩小了可用范围：可信启动登记必须覆盖新的 fork 实例及非 leader exec 的 task
+替换，accept 要另行定义 listener/acceptor 的身份语义并验证克隆或新采集入口；仅用
+`PID+出生时间` 判断“仍是同一个 task”在非 leader exec 上不成立。本轮未接入 AOSP/真实
+App 或生产 assignment，未验证并发登记原子性、io_uring、长期内存及性能/功耗。
+
 ## 已移除的设计
 
 不再采用此前提出的独立 TCX 采集、Java 辅助服务、正常更新时临时丢包保护与整体后端
