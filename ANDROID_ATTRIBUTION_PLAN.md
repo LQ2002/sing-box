@@ -18,11 +18,11 @@
 
 | 阶段 | 交付内容 | 状态 | 代码提交 / 验收证据 |
 |---|---|---|---|
-| 1 | 修复包表刷新与查询一致性 | 实现与本地测试完成；**真机验收未执行** | 见下方“阶段 1 实施记录” |
+| 1 | 修复包表刷新与查询一致性 | **已完成**（本地测试与真机验收均通过） | 代码 `35624e63`；记录见“阶段 1 实施记录” |
 | 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | 待执行，依赖阶段 1 | 尚无实施提交 |
 | 3 | sing-box 接入新归属路径并完成整链路验收 | 待执行，依赖阶段 2 | 尚无实施提交 |
 
-阶段 1 的生产代码已实现并通过本地测试，真机验收（10 轮安装/卸载等）因手机未连接尚未执行；阶段 2、3 未开始。
+阶段 1 已完成并通过真机验收；阶段 2、3 未开始。
 
 ## 执行纪律
 
@@ -54,12 +54,11 @@
 
 ### 验收
 
-- [ ] 连续至少 10 轮安装/卸载，包含升级和共享 UID 集合 A→A+B→A，包表始终正确刷新。
-  **未执行**（手机未连接）。测试已写好：`common/androidpackages/device_test.go`。
+- [x] 连续至少 10 轮安装/卸载，包含升级和共享 UID 集合 A→A+B→A，包表始终正确刷新。
+  （“升级”以 `pm install -r` 覆盖重装模拟，见记录。）
 - [x] 原子替换、突发通知、截断 ABX/XML、失败恢复和关闭期间回调均有针对性测试。
-- [~] 并发查询/发布的 race 检查通过（本地，见记录）；反复更新后 watcher、FD、goroutine
-  无持续增长：本地已测 goroutine，**设备上的 FD/goroutine 检查未执行**。
-- [~] Android 构建与相关既有回归检查通过（本地）；**设备结果未执行**。
+- [x] 并发查询/发布的 race 检查通过；反复更新后 watcher、FD、goroutine 无持续增长。
+- [x] Android 构建与相关既有回归检查通过，记录实际运行的命令和设备结果。
 
 交付边界：该阶段完成后，新包可被最新包表查到；如果它此前被 TC 的静态 UID 条件排除，
 不能据此宣称其流量已被自动接管。该能力由阶段 2、3 完成。
@@ -99,9 +98,21 @@
 - `go test -tags with_ebpf ./protocol/ebpf/`：通过；`go vet` 通过；
   `CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -tags <BASE_TAGS> ./common/androidpackages/ ./route/ ./protocol/ebpf/`：通过。
 
-**未执行**：`device_test.go` 的两项真机测试（与 sing-tun 解析结果逐项对照；10 轮安装/卸载，
-含覆盖重装和共享 UID A→A+B→A，并检查 FD/goroutine）。注意测试包只有一个版本，“升级”以
-`pm install -r` 覆盖重装模拟，它走包替换流程、保留 UID，但不是版本号升高的升级。
+**真机验收**（2026-10-03，设备 `8b97939c`，Android 17 / 内核 6.12.69；以 root 运行
+`device_test.go` 交叉编译出的测试程序，命令见该文件头部注释；原始输出
+`experimental/socket_attribution_probe/results/stage1-device-acceptance.txt`，被 git 忽略）：
+
+- `TestDeviceParityWithSingTun`：通过。对真实 `/data/system/packages.xml`，本地解析与
+  sing-tun 解析器在 533 个包、462 个 UID、26 个共享用户上逐项一致，`PackageByID` 的首项也一致。
+- `TestDeviceRefreshAcrossInstalls`：通过，46.8 s。10 轮，每轮：安装独立 UID 包 → 覆盖重装
+  （UID 不变、包仍在）→ 卸载（旧 UID 不再映射到该包）；安装 A → 安装 B（两包同属一个共享
+  UID）→ 卸载 B（只剩 A）→ 卸载 A（包与共享用户都消失）。每步都与 `pm list packages -U`
+  的同步查询核对。60 次变化中，从 `pm` 返回到管理器可见：最短 23 µs、中位 52 µs、最长 55 ms。
+  测试前后 goroutine 4→4、FD 9→9。回调 61 次（初始 1 次 + 每次变化 1 次；覆盖重装内容不变，
+  不产生回调）。
+- 测试前确认三个测试包均未安装，测试后均已卸载、临时目录已删除。
+- 测试包只有一个版本，“升级”以 `pm install -r` 覆盖重装模拟：它走包替换流程、保留 UID，
+  但不是版本号升高的升级。
 
 ## 阶段 2：在已有 sing-ebpf fork 中补齐两项能力
 
