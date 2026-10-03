@@ -10,16 +10,8 @@ filippo.io/edwards25519 v1.2.0/go.mod h1:xzAOLCNug/yB62zG1bQ8uziwrIqIuxhctzJT18Q
 filippo.io/hpke v0.4.0 h1:p575VVQ6ted4pL+it6M00V/f2qTZITO0zgmdKCkd5+A=
 filippo.io/hpke v0.4.0/go.mod h1:EmAN849/P3qdeK+PCMkDpDm83vRHM5cDipBJ8xbQLVY=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.10.0.20260925091429-c3e95b329d35 h1:W6N4YntzvirPNwShvIzQnkdoEUrgyzgZs+4WVBVvsTI=
-github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.10.0.20260925091429-c3e95b329d35/go.mod h1:noENq0RSnhNW/vdmnup6PjAq5JawD0RhCwSigQgcTeI=
-github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.11 h1:fDUXZ8ySpM34KO1XyuLqHwTeQ2cH7bsHkIbjR9Gm7Cw=
-github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.11/go.mod h1:Peh0/3ZjpAR42h69jPXPOXRKsNpIRhEdmn/E3Ahov1o=
-github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.11.0.20260930003748-c8f7f2ca12de h1:7zcS8DKIvR4h8Ggsz0iyXNww8OVJVlHal7DrpJlVqSg=
-github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.11.0.20260930003748-c8f7f2ca12de/go.mod h1:g3bnlr6wM8A1BnEi2jPZwVTDgdBPtF3+zhhwsdOzqfM=
-github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261003060717-3c1b28f0eb65 h1:+MlA5g8WzvyTZ3qHxFve6y2jmhliA+uJyYZSuAcnMVs=
-github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261003060717-3c1b28f0eb65/go.mod h1:g3bnlr6wM8A1BnEi2jPZwVTDgdBPtF3+zhhwsdOzqfM=
-github.com/LQ2002/sing-ebpf v0.1.0-alpha.11.0.20261003114235-74ad17e7ec35 h1:EMGvgzw1Vppq7w2karK3AkQdLTJpGz+jSgQRZaYHj5s=
-github.com/LQ2002/sing-ebpf v0.1.0-alpha.11.0.20261003114235-74ad17e7ec35/go.mod h1:g3bnlr6wM8A1BnEi2jPZwVTDgdBPtF3+zhhwsdOzqfM=
+github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261003133000-6ab9da713e93 h1:4mmVNZASqK3TfSnkt7P9D1dOlGTYYATjeWLmIlbTGJo=
+github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261003133000-6ab9da713e93/go.mod h1:g3bnlr6wM8A1BnEi2jPZwVTDgdBPtF3+zhhwsdOzqfM=
 github.com/LQ2002/tailscale v0.0.0-20260918084915-8f35b78440d7 h1:I8tMtnQ8dA1tK0tv3z7bXluQzE0atuHn/kjl30ECx6w=
 github.com/LQ2002/tailscale v0.0.0-20260918084915-8f35b78440d7/go.mod h1:xGiEZax5sZ6gHJcwQxp0GmJVtDHGUXPXTgr6Ksm+yIc=
 github.com/RyuaNerin/go-krypto v1.3.0 h1:smavTzSMAx8iuVlGb4pEwl9MD2qicqMzuXR2QWp2/Pg=
@@ -366,8 +358,6 @@ github.com/sagernet/sing-vmess v0.2.8 h1:xd5nnDOMlC76RgrLksS4jlk3eMt3c3CvQY3NsjW
 github.com/sagernet/sing-vmess v0.2.8/go.mod h1:P11scgTxMxVVQ8dlM27yNm3Cro40mD0+gHbnqrNGDuY=
 github.com/sagernet/smux v1.5.50-sing-box-mod.1 h1:XkJcivBC9V4wBjiGXIXZ229aZCU1hzcbp6kSkkyQ478=
 github.com/sagernet/smux v1.5.50-sing-box-mod.1/go.mod h1:NjhsCEWedJm7eFLyhuBgIEzwfhRmytrUoiLluxs5Sk8=
-github.com/sagernet/tailscale v1.102.1-sing-box-1.14-mod.5.0.20260925112514-35e61219dedd h1:PzEFeBqDaSUdoWE77NptloLTd1sNT1JAiFThgGq5rlo=
-github.com/sagernet/tailscale v1.102.1-sing-box-1.14-mod.5.0.20260925112514-35e61219dedd/go.mod h1:Z8Eql5l0q6mQ+etunojfaZxNJVhEkpbKGS/nnx9ZQpE=
 github.com/sagernet/wireguard-go v0.0.8-0.20260925112423-da3fb928cdc1 h1:Dsp0Pi6oZk8tNF9jJo2IInDopLx6GHRUBlR6sm7osYs=
 github.com/sagernet/wireguard-go v0.0.8-0.20260925112423-da3fb928cdc1/go.mod h1:er10sELpmzLXq7S7Pbc1Zsbyapcr+/gxNAHKTo6fzVA=
 github.com/sagernet/ws v0.0.0-20231204124109-acfe8907c854 h1:6uUiZcDRnZSAegryaUGwPC/Fj13JSHwiTftrXhMmYOc=
