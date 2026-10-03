@@ -19,10 +19,10 @@
 | 阶段 | 交付内容 | 状态 | 代码提交 / 验收证据 |
 |---|---|---|---|
 | 1 | 修复包表刷新与查询一致性 | **已完成**（本地测试与真机验收均通过） | 代码 `35624e63`；记录见“阶段 1 实施记录” |
-| 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | **实现与真机验收完成**；仅剩远程推送待确认 | sing-ebpf `3c1b28f`（未推送）；记录见“阶段 2 实施记录” |
+| 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | **已完成**（本地、真机与真实 App 验收均通过） | sing-ebpf `3c1b28f`（已推送）；应用依赖 `6252b171`；记录见“阶段 2 实施记录” |
 | 3 | sing-box 接入新归属路径并完成整链路验收 | 待执行，依赖阶段 2 | 尚无实施提交 |
 
-阶段 1 已完成并通过真机验收；阶段 2 代码已提交并完成真机验收（含真实 App 真值），仅剩远程推送；阶段 3 未开始。
+阶段 1 已完成并通过真机验收；阶段 2 已完成；阶段 3 进行中。
 
 ## 执行纪律
 
@@ -165,12 +165,13 @@
 - [x] 实际数据面核对新增字段与应用真值；提供与原 TC 程序配对的开销测量。
   已有约 1.5 ns 是单项 helper 微基准，不是新增结构和整段代码的最终成本。
   （配对开销、内核层真值、真实 App 真值（Chrome、Via）均已在真机完成，见记录。）
-- [ ] 记录可获取的远程依赖提交；应用仓库不留下本机路径 replace。
-  （sing-ebpf 本地提交 `3c1b28f`，尚未推送到 `LQ2002/sing-ebpf`，推送需用户确认。）
+- [x] 记录可获取的远程依赖提交；应用仓库不留下本机路径 replace。
+  （`LQ2002/sing-ebpf` 分支 `android-attribution`，提交 `3c1b28f0eb65`；应用仓库 replace 为
+  `v0.1.0-alpha.10.0.20261003060717-3c1b28f0eb65`，提交 `6252b171`。）
 
 实施记录（2026-10-03）：
 
-**提交**：`E:\sing-ebpf` 分支 `android-attribution`（基于 `3420ee2`，即应用当前 pin 的
+**提交**：`E:\sing-ebpf` 分支 `android-attribution`（基于 `3420ee2`，即阶段 2 前应用 pin 的
 alpha11 重放提交）上的 `3c1b28f`
 “tc: hot-update the UID policy and record socket identity in assignments”。
 提交信息里有完整的设计理由与验证记录。应用仓库 go.mod 未改；尚未推送。
@@ -221,8 +222,7 @@ alpha11 重放提交）上的 `3c1b28f`
   androidpackages 测试通过；两个仓库的 go.mod 均未改动。
 
 **未完成**：
-- 推送 `android-attribution` 到 `LQ2002/sing-ebpf` 并在应用仓库更新 replace 到
-  该远程伪版本：属于外部发布动作，等待用户确认。
+- 远程依赖：经用户确认已推送并更新 replace（见验收最后一项）。
 
 **真实 App 真值**（真机解锁、App 在前台；`tc_android_app_identity_integration_test.go`，
 驱动方式见文件头注释）：在主网络命名空间只加测试 veth `idta`/`idtb`、dummy `idtd`
