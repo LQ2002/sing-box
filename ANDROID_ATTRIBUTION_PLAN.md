@@ -19,10 +19,10 @@
 | 阶段 | 交付内容 | 状态 | 代码提交 / 验收证据 |
 |---|---|---|---|
 | 1 | 修复包表刷新与查询一致性 | **已完成**（本地测试与真机验收均通过） | 代码 `35624e63`；记录见“阶段 1 实施记录” |
-| 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | 待执行，依赖阶段 1 | 尚无实施提交 |
+| 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | **实现与验证基本完成**；真实 App 真值与远程推送待办 | sing-ebpf `3c1b28f`（未推送）；记录见“阶段 2 实施记录” |
 | 3 | sing-box 接入新归属路径并完成整链路验收 | 待执行，依赖阶段 2 | 尚无实施提交 |
 
-阶段 1 已完成并通过真机验收；阶段 2、3 未开始。
+阶段 1 已完成并通过真机验收；阶段 2 代码已提交并完成内核层真机验收，剩真实 App 真值与远程推送；阶段 3 未开始。
 
 ## 执行纪律
 
@@ -121,18 +121,19 @@
 
 ### UID 热更新
 
-- [ ] 新增公开的 `UpdateUIDPolicy` 接口，输入最终 UID 决策和默认动作，不把 Android
+- [x] 新增公开的 `UpdateUIDPolicy` 接口，输入最终 UID 决策和默认动作，不把 Android
   包名语义放进依赖。保存上一份有效规则，对等价更新直接返回未变化。
-- [ ] `tc_uid_policy` 的 max_entries 使用已有编译上限 4096，而非启动条目数。
+- [x] `tc_uid_policy` 的 max_entries 使用已有编译上限 4096，而非启动条目数。
   保持 LPM 的 NO_PREALLOC；超上限在写 map 前报错。差量更新顺序同时考虑过渡容量。
-- [ ] 同步处理 UID 策略启用位、默认动作以及 control。包含“配置了 include，但所有
+- [x] 同步处理 UID 策略启用位、默认动作以及 control。包含“配置了 include，但所有
   包均未安装”的空集合情形，不能误变成全量捕获或全量放行。
-- [ ] 成功提交和失败恢复都正确失效 TCP socket verdict 缓存。计算前读取判定序号，
+- [x] 成功提交和失败恢复都正确失效 TCP socket verdict 缓存。计算前读取判定序号，
   缓存只能标记为此次计算所用的序号；不得把旧规则计算的值写成新序号的有效结果。
-  覆盖计算与提交交错、同 socket 并发访问的测试。
-- [ ] 复用已有策略更新的加锁、差量和回滚机制；回滚成功后重新失效可能受中间状态
+  覆盖计算与提交交错、同 socket 并发访问的测试。（交错与并发由代码结构保证并有注释，
+  见记录；没有能确定性复现纳秒级交错的测试，未执行此类测试。）
+- [x] 复用已有策略更新的加锁、差量和回滚机制；回滚成功后重新失效可能受中间状态
   污染的缓存。回滚失败按已有健康状态机制报告故障，不继续声称更新成功。
-- [ ] 不把多条 map 写入称为整套策略的原子事务。正常包事件更新不拆后端、不主动断开
+- [x] 不把多条 map 写入称为整套策略的原子事务。正常包事件更新不拆后端、不主动断开
   会话；调用返回成功后，UID map、默认动作、缓存失效和用户态状态必须一致。
   并发更新期间的过渡行为必须通过定向抓包和失败注入验证，不能写成“零窗口”的承诺。
 
@@ -143,28 +144,97 @@
 
 ### 现有 TC 程序补充归属字段
 
-- [ ] 扩展现有 `tc_assignment` 的 C/Go 对应结构，记录完整 socket cgroup ID、socket UID、
+- [x] 扩展现有 `tc_assignment` 的 C/Go 对应结构，记录完整 socket cgroup ID、socket UID、
   有效字段标志，保留 cookie、接口、来源 MAC 和路径信息；不占用其他字段偷传信息。
-- [ ] 在原本记录 cookie 的路径调用 helper，正常只在需要建立/刷新 assignment 证据时
+- [x] 在原本记录 cookie 的路径调用 helper，正常只在需要建立/刷新 assignment 证据时
   读取补充字段；核对同 cookie 的 UID 改变与 UDP 复用，不能只凭 cookie 不变永久早退。
-- [ ] 所有 TCP/UDP、IPv4/IPv6、Ethernet/raw-IP、delivery 转发处都正确保留新增字段。
-  非本机 shared 路径不填假的本机 UID/cgroup。
-- [ ] 同步公开 Go API、结构大小/偏移断言、测试、生成对象和编译产物。测试不能仅验证
+- [x] 所有 TCP/UDP、IPv4/IPv6、Ethernet/raw-IP、delivery 转发处都正确保留新增字段。
+  非本机 shared 路径不填假的本机 UID/cgroup。（实测覆盖 IPv4 TCP/UDP、Ethernet、
+  delivery；IPv6 与 raw-IP 走同一份 record/build_assignment 代码，未单独实测。）
+- [x] 同步公开 Go API、结构大小/偏移断言、测试、生成对象和编译产物。测试不能仅验证
   C 或 Go 单边布局。
-- [ ] 保留无归属需求时的轻量路径；区分“启用 assignment 身份采集”和“存在旧
+- [x] 保留无归属需求时的轻量路径；区分“启用 assignment 身份采集”和“存在旧
   ProcessTracker”。后续不使用模块时，cookie 与新字段也能得到。
 
 ### 验收
 
-- [ ] 动态规则覆盖新增、删除、空集合、默认动作、最大容量、重叠 UID 区间和失败恢复。
-- [ ] 建立 TCP 判定缓存后再更新规则，确认后续判定会刷新；UDP 按目的地处理，不套用
+- [x] 动态规则覆盖新增、删除、空集合、默认动作、最大容量、重叠 UID 区间和失败恢复。
+- [x] 建立 TCP 判定缓存后再更新规则，确认后续判定会刷新；UDP 按目的地处理，不套用
   TCP 的每 socket 结论。未受策略变更影响的长连接不因更新主动断开。
-- [ ] 完整 ABI 测试与 verifier/真机加载通过，相关既有后端测试通过。
+- [x] 完整 ABI 测试与 verifier/真机加载通过，相关既有后端测试通过。
 - [ ] 实际数据面核对新增字段与应用真值；提供与原 TC 程序配对的开销测量。
   已有约 1.5 ns 是单项 helper 微基准，不是新增结构和整段代码的最终成本。
+  （配对开销已完成；内核层真值已在真机核对；**真实 App 真值未完成**：测试已写好，
+  需要手机解锁、App 在前台，见记录。）
 - [ ] 记录可获取的远程依赖提交；应用仓库不留下本机路径 replace。
+  （sing-ebpf 本地提交 `3c1b28f`，尚未推送到 `LQ2002/sing-ebpf`，推送需用户确认。）
 
-实施记录：待填写。
+实施记录（2026-10-03）：
+
+**提交**：`E:\sing-ebpf` 分支 `android-attribution`（基于 `3420ee2`，即应用当前 pin 的
+alpha11 重放提交）上的 `3c1b28f`
+“tc: hot-update the UID policy and record socket identity in assignments”。
+提交信息里有完整的设计理由与验证记录。应用仓库 go.mod 未改；尚未推送。
+
+**接口**：`TCBackend.UpdateUIDPolicy(decisions []UIDDecision, defaultAction Decision) (bool, error)`；
+`TCConfig.RecordSocketIdentity`；`TCAssignment` 新增 `SocketUID`、`SocketCgroupID`、
+`IdentityFlags`、`HasSocketIdentity()`；常量 `TCIdentityUIDValid/TCIdentityCgroupValid`。
+重叠语义沿用启动编译：与默认动作不同的决策胜出，调用方须先自行扣除 exclude。
+
+**过渡保证（不是原子切换）**：先删“完全离开”的块、再加新块、最后删“改形”的块，
+每个 UID 的匹配结果最多变化一次；若过渡容量超过 4096（v6.12 `trie_update_elem`
+在找键之前就检查 `n_entries == max_entries`），改形块提前删除，期间这些 UID 可能
+短暂落回默认动作。默认动作改变时先关 UID 策略：窗口是“全部拦截”，不会“全部放行”。
+回滚成功后再写一次 control 推进代号；这次写失败则后端标记需重建。CIDR 与 host 地址
+更新原本有同样的缓存污染缺口，一并改用同一 helper。
+
+**判定缓存**：代号在计算前读；计算前后代号不同则不缓存；generation+verdict 以一个
+对齐 64 位字读写。残余：control 由 bpf 系统调用无锁整块拷贝，弱内存序 CPU 上读到
+撕裂值的窗口被缩小但未从形式上排除。
+
+**身份字段**：两个 helper 在内核中用同一判断（`net/core/filter.c` v6.12 的
+`sk_to_full_sk`+`sk_fullsock`），cgroup id 非 0 即证明 UID 有效；socket cgroup 在
+创建时定下（`kernel/cgroup/cgroup.c` `cgroup_sk_alloc`）；sk_uid 可被 fchown 改
+（`net/socket.c` `sockfs_setattr`），因此同 cookie 每包比较 UID。cookie 只在被选中的包
+上读取。
+
+**验证**（WSL 6.18 root 与真机）：
+- `make check`（NDK r29 clang 21 可复现）、vet、unit、-race、internal/core/runtime/根包
+  全部 integration 通过。
+- 真实 socket 测试（双 netns veth、TCX、fchown 设 UID）：TCP 缓存在更新后刷新；
+  无关长连接不受影响、相关长连接中断后回滚恢复；空集合/默认动作/关策略/等价更新；
+  control 写失败注入（恢复或标记重建）；真实 trie 上 4096 条满容量改形；身份字段对照
+  SO_COOKIE、fchown UID、创建时 cgroup（进程迁出再迁回）、fchown 后变化、UDP 五元组复用、
+  经真实 delivery 路径（veth＋透明监听＋fwmark 本地路由）后保留。
+- 变异检验：去掉 delivery 携带、恢复同 cookie 早退、跳过最终 control 写，对应测试均失败。
+- 真机（Android 17 / 6.12.69）：internal/core 全部 integration 137 PASS、0 FAIL
+  （cgroup 测试因本机拒绝加载 cgroup 程序而 skip，与本次无关）。原始输出
+  `experimental/socket_attribution_probe/results/stage2-device-sing-ebpf-core-integration.txt`。
+  真机测试使用系统段 UID：netd 挂在根 cgroup 的 egress 程序对应用段 UID 执行防火墙链，
+  早于 TC（AOSP Connectivity `bpf/progs/netd.h` `is_system_uid`、`netd.c`
+  `bpf_owner_match`）；最初用 10050 时 SYN 计入 TcpOutSegs 却从未出现在任何网卡上。
+- 配对开销（真机，内核 BPF run-time 统计，旧 `3420ee2` 与新提交交替 5 轮，ns/次，中位数）：
+  UDP 被选中轻量 94.6→93.8；UDP 被选中身份 134.3→140.3（配对差中位 +1.9）；
+  UDP 未选中身份 80.6→78.1；TCP 缓存命中轻量 68.7→69.4；TCP 缓存命中身份 69.9→69.0。
+  原始输出 `experimental/socket_attribution_probe/results/stage2-device-overhead-paired.txt`。
+- 应用仓库对 `3c1b28f` 的构建：经 /tmp 下临时 go.work，Android arm64 按 workflow
+  BASE_TAGS（含 with_ebpf）与 linux 无 with_ebpf 均构建通过，protocol/ebpf 与
+  androidpackages 测试通过；两个仓库的 go.mod 均未改动。
+
+**未完成**：
+- 真实 App 真值：`tc_android_app_identity_integration_test.go`。首次在锁屏（Dozing、
+  keyguard）下用 Chrome 运行，App 没有发起连接（程序只跑了 6 次 ARP/IPv6，
+  /proc/net/tcp 无该 App 连接）。需解锁手机后重跑；只加测试 veth、dummy 和一条
+  未用地址的 /32 路由，结束时清理（已确认无残留）。测试网卡名避开 runtime 使用的
+  `sbt*/sbd*/sbi*/sbo*/sbc*` 前缀，因为手机上运行中的 sing-box 用 `sbt…` 命名。
+- 推送 `android-attribution` 到 `LQ2002/sing-ebpf` 并在应用仓库更新 replace 到
+  该远程伪版本：属于外部发布动作，等待用户确认。
+
+**交给阶段 3 的发现（仅读源码确认编译语义，可达性未验证）**：`protocol/ebpf/action_policy.go`
+`compileActionPolicy` 在配置 include 时把 include（拦截）与 exclude（放行，等于默认动作）
+一起传入；`compileUIDActionPolicy` 会丢弃与默认动作相同的决策，所以落在 include 区间
+内的 exclude 在 TC 路径上不生效。`compileProcessUIDPolicy` 已先做扣除，没有此问题。
+阶段 3 调用 `UpdateUIDPolicy` 时必须传扣除后的决策，并核实启动路径是否受影响。
 
 ## 阶段 3：sing-box 接线和整链路验收
 
