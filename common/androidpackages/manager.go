@@ -3,7 +3,6 @@ package androidpackages
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,6 +74,10 @@ type Manager struct {
 	closed   bool
 	done     chan struct{}
 	finished chan struct{}
+
+	subscribersAccess sync.Mutex
+	subscribers       map[uint64]func()
+	nextSubscriber    uint64
 }
 
 var _ tun.PackageManager = (*Manager)(nil)
@@ -190,6 +193,7 @@ func (m *Manager) publish(next *snapshot) bool {
 	if m.callback != nil {
 		m.callback.OnPackagesUpdated(len(next.packageByID), len(next.sharedByID))
 	}
+	m.notifySubscribers()
 	return true
 }
 
@@ -299,54 +303,58 @@ func (m *Manager) logWarn(args ...any) {
 }
 
 func (m *Manager) IDByPackage(packageName string) (uint32, bool) {
-	current := m.current.Load()
-	if current == nil {
-		return 0, false
-	}
-	id, loaded := current.idByPackage[packageName]
-	return id, loaded
+	return m.Snapshot().IDByPackage(packageName)
 }
 
 func (m *Manager) IDBySharedPackage(sharedPackage string) (uint32, bool) {
-	current := m.current.Load()
-	if current == nil {
-		return 0, false
-	}
-	id, loaded := current.sharedByPackage[sharedPackage]
-	return id, loaded
+	return m.Snapshot().IDBySharedPackage(sharedPackage)
 }
 
 func (m *Manager) PackageByID(id uint32) (string, bool) {
-	current := m.current.Load()
-	if current == nil {
-		return "", false
-	}
-	names := current.packageByID[id]
-	if len(names) == 0 {
-		return "", false
-	}
-	return names[0], true
+	return m.Snapshot().PackageByID(id)
 }
 
 // PackagesByID returns a copy, so callers cannot modify the published
 // snapshot through the slice.
 func (m *Manager) PackagesByID(id uint32) ([]string, bool) {
-	current := m.current.Load()
-	if current == nil {
-		return nil, false
-	}
-	names, loaded := current.packageByID[id]
-	if !loaded {
-		return nil, false
-	}
-	return slices.Clone(names), true
+	return m.Snapshot().PackagesByID(id)
 }
 
 func (m *Manager) SharedPackageByID(id uint32) (string, bool) {
-	current := m.current.Load()
-	if current == nil {
-		return "", false
+	return m.Snapshot().SharedPackageByID(id)
+}
+
+// Subscribe registers notify to run after every published change, on the
+// manager's own goroutine, after the tun.PackageManagerCallback. notify must
+// not block: it delays the next read of packages.xml. The returned function
+// removes the subscription; after it returns, notify is not called again.
+//
+// This exists beside the callback because the callback slot belongs to the
+// router (route/network.go); consumers inside sing-box that need to react to
+// package changes, such as the eBPF inbound's package-based UID rules,
+// subscribe here instead of taking it over.
+func (m *Manager) Subscribe(notify func()) (cancel func()) {
+	m.subscribersAccess.Lock()
+	defer m.subscribersAccess.Unlock()
+	if m.subscribers == nil {
+		m.subscribers = make(map[uint64]func())
 	}
-	name, loaded := current.sharedByID[id]
-	return name, loaded
+	m.nextSubscriber++
+	id := m.nextSubscriber
+	m.subscribers[id] = notify
+	return func() {
+		m.subscribersAccess.Lock()
+		delete(m.subscribers, id)
+		m.subscribersAccess.Unlock()
+	}
+}
+
+func (m *Manager) notifySubscribers() {
+	// Holding the lock while calling keeps "cancel returned" meaning "never
+	// called again"; notify is required to be non-blocking.
+	m.subscribersAccess.Lock()
+	defer m.subscribersAccess.Unlock()
+	for _, notify := range m.subscribers {
+		notify()
+	}
 }

@@ -194,6 +194,10 @@ type EBPFDiagnostics struct {
 	UDPReplySockets udpReplySocketPoolSnapshot `json:"udp_reply_sockets"`
 
 	Counters EBPFCounters `json:"counters"`
+
+	// AndroidUIDPolicy is present when include_package/exclude_package rules
+	// follow the package table (android_uid_update.go).
+	AndroidUIDPolicy *AndroidUIDPolicyDiagnostics `json:"android_uid_policy,omitempty"`
 }
 
 // tcOutcomeHistory is the small amount of extra bookkeeping Diagnostics
@@ -512,6 +516,7 @@ func (i *Inbound) Diagnostics() EBPFDiagnostics {
 	}
 	if i.localEnabled {
 		diagnostics.LocalDataPlane = i.localDataPlane
+		diagnostics.AndroidUIDPolicy = i.androidUIDPolicyDiagnostics()
 	}
 	if backend := i.cgroupBackendInstance(); backend != nil && !backend.IsClosed() {
 		diagnostics.LocalCgroupAttachMode = backend.AttachMode()

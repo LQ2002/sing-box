@@ -293,3 +293,42 @@ func TestConcurrentLookupsDuringUpdates(t *testing.T) {
 	readers.Wait()
 	require.Eventually(t, func() bool { return hasPackage(manager, "n9.app") }, 3*time.Second, 5*time.Millisecond)
 }
+
+// A View keeps answering from the table it was taken from, even after the
+// manager publishes a new one.
+func TestSnapshotViewIsStable(t *testing.T) {
+	table := newTestTable(t, packagesDocument("a.app"))
+	manager := startManager(t, table.path, &recorder{})
+	view := manager.Snapshot()
+	require.True(t, view.Loaded())
+	table.rewrite(t, packagesDocument("b.app"), 0, false)
+	require.Eventually(t, func() bool { return hasPackage(manager, "b.app") }, 3*time.Second, 5*time.Millisecond)
+	_, loaded := view.IDByPackage("a.app")
+	require.True(t, loaded, "the old view lost its table")
+	_, loaded = view.IDByPackage("b.app")
+	require.False(t, loaded, "the old view sees the new table")
+	require.False(t, View{}.Loaded())
+	_, loaded = View{}.IDByPackage("a.app")
+	require.False(t, loaded)
+}
+
+func TestSubscribeNotifiesOnChangeAndStopsAfterCancel(t *testing.T) {
+	document := packagesDocument("a.app")
+	table := newTestTable(t, document)
+	manager := startManager(t, table.path, &recorder{})
+	var notified atomic.Int32
+	cancel := manager.Subscribe(func() { notified.Add(1) })
+
+	table.rewrite(t, document, 0, false) // semantically unchanged
+	time.Sleep(10 * testQuietPeriod)
+	require.Zero(t, notified.Load(), "an unchanged table notified subscribers")
+
+	table.rewrite(t, packagesDocument("a.app", "b.app"), 0, false)
+	require.Eventually(t, func() bool { return notified.Load() == 1 }, 3*time.Second, 5*time.Millisecond)
+
+	cancel()
+	table.rewrite(t, packagesDocument("a.app"), 0, false)
+	require.Eventually(t, func() bool { return !hasPackage(manager, "b.app") }, 3*time.Second, 5*time.Millisecond)
+	time.Sleep(5 * testQuietPeriod)
+	require.Equal(t, int32(1), notified.Load(), "a cancelled subscription was notified")
+}

@@ -174,7 +174,7 @@
 **提交**：`E:\sing-ebpf` 分支 `android-attribution`（基于 `3420ee2`，即阶段 2 前应用 pin 的
 alpha11 重放提交）上的 `3c1b28f`
 “tc: hot-update the UID policy and record socket identity in assignments”。
-提交信息里有完整的设计理由与验证记录。应用仓库 go.mod 未改；尚未推送。
+提交信息里有完整的设计理由与验证记录。已推送；应用仓库依赖更新为提交 `6252b171`。
 
 **接口**：`TCBackend.UpdateUIDPolicy(decisions []UIDDecision, defaultAction Decision) (bool, error)`；
 `TCConfig.RecordSocketIdentity`；`TCAssignment` 新增 `SocketUID`、`SocketCgroupID`、
@@ -221,8 +221,7 @@ alpha11 重放提交）上的 `3c1b28f`
   BASE_TAGS（含 with_ebpf）与 linux 无 with_ebpf 均构建通过，protocol/ebpf 与
   androidpackages 测试通过；两个仓库的 go.mod 均未改动。
 
-**未完成**：
-- 远程依赖：经用户确认已推送并更新 replace（见验收最后一项）。
+**远程依赖**：经用户确认已推送并更新 replace（见验收最后一项）。
 
 **真实 App 真值**（真机解锁、App 在前台；`tc_android_app_identity_integration_test.go`，
 驱动方式见文件头注释）：在主网络命名空间只加测试 veth `idta`/`idtb`、dummy `idtd`

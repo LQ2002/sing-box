@@ -318,6 +318,11 @@ func (i *Inbound) startInbound() error {
 		", tc_priority=", i.tcPriority,
 	)
 	i.udpReplySockets.startSweeper(i.ctx)
+	if localTCEnabled {
+		i.startAndroidUIDUpdater(backend)
+	} else if i.localCgroupEnabled() {
+		i.startAndroidUIDUpdater(nil)
+	}
 	i.logStartupSummary()
 	return nil
 }
@@ -337,6 +342,15 @@ func (i *Inbound) startProcessTracker() error {
 		return nil
 	}
 	uidDecisions, defaultAction := i.compileProcessUIDPolicy()
+	if i.followsAndroidPackageChanges() {
+		// The tracker's UID filter is fixed when it attaches; sing-ebpf has no
+		// way to update it. With package rules that follow the package table
+		// (android_uid_update.go) a fixed filter would go stale on the first
+		// install and silently stop recording owners for the new app. So it
+		// records every socket instead, and the TC policy alone decides what
+		// is intercepted.
+		uidDecisions, defaultAction = nil, commonEBPF.DecisionIntercept
+	}
 	tracker, err := commonEBPF.AttachProcessTracker(commonEBPF.ProcessTrackerConfig{
 		EnableTCP:    i.enableTCP,
 		EnableUDP:    i.enableUDP,
@@ -514,6 +528,8 @@ func (i *Inbound) cleanupStartFailure() error {
 }
 
 func (i *Inbound) closeResources() error {
+	// First, so no UID update races the backend being taken apart.
+	i.stopAndroidUIDUpdater()
 	monitorErr := i.stopTCInterfaceMonitor()
 	i.stopBypassRuleSets()
 	sharedRewriteErr := error(nil)

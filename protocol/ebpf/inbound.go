@@ -88,6 +88,8 @@ type Inbound struct {
 	localPolicy               localUIDPolicy
 	compiledPolicy            commonEBPF.CompiledPolicy
 	androidUIDOptions         *androidUIDOptions
+	androidUIDUpdater         *androidUIDUpdater
+	androidUIDUpdaterAccess   sync.Mutex
 	sharedOptions             option.EBPFSharedOptions
 	sharedEnabled             bool
 	sharedDataPlane           string

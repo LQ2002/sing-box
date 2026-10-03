@@ -6,9 +6,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/sagernet/sing-box/common/androidpackages"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-tun"
 	E "github.com/sagernet/sing/common/exceptions"
+	"github.com/sagernet/sing/common/logger"
 	"github.com/sagernet/sing/common/ranges"
 )
 
@@ -52,21 +54,35 @@ func (i *Inbound) resolveAndroidUIDPolicy() error {
 		i.androidUIDOptions.configuredExcludeUID = slices.Clone(i.localPolicy.ExcludeUID)
 		i.androidUIDOptions.configuredCaptured = true
 	}
+	// One table for the whole resolution, so a publish in the middle cannot
+	// mix two package tables (androidpackages.View).
+	if snapshotter, loaded := packageManager.(interface{ Snapshot() androidpackages.View }); loaded {
+		packageManager = snapshotter.Snapshot()
+	}
 	warnSharedUID := make(map[uint32]struct{})
 	i.inspectAndroidPackages(packageManager, "include", i.androidUIDOptions.includePackage, warnSharedUID)
 	i.inspectAndroidPackages(packageManager, "exclude", i.androidUIDOptions.excludePackage, warnSharedUID)
+	i.localPolicy.IncludeUID, i.localPolicy.ExcludeUID = resolveAndroidUIDRanges(i.androidUIDOptions, packageManager, i.logger)
+	return nil
+}
+
+// resolveAndroidUIDRanges is the pure part of the Android UID policy: the
+// configured numeric UIDs, users and package names, resolved against one
+// package table. Startup and the package-change updater (android_uid_update.go)
+// both call it, so the rules applied after an install are exactly the rules a
+// restart would produce. logger receives sing-tun's per-package debug lines;
+// the updater passes nil to keep package churn out of the log.
+func resolveAndroidUIDRanges(options *androidUIDOptions, packageManager tun.PackageManager, logger logger.Logger) (include, exclude []uidRange) {
 	tunOptions := tun.Options{
-		IncludeUID:         toTunUIDRanges(i.androidUIDOptions.configuredIncludeUID),
-		ExcludeUID:         toTunUIDRanges(i.androidUIDOptions.configuredExcludeUID),
-		IncludeAndroidUser: slices.Clone(i.androidUIDOptions.includeAndroidUser),
-		IncludePackage:     slices.Clone(i.androidUIDOptions.includePackage),
-		ExcludePackage:     slices.Clone(i.androidUIDOptions.excludePackage),
-		Logger:             i.logger,
+		IncludeUID:         toTunUIDRanges(options.configuredIncludeUID),
+		ExcludeUID:         toTunUIDRanges(options.configuredExcludeUID),
+		IncludeAndroidUser: slices.Clone(options.includeAndroidUser),
+		IncludePackage:     slices.Clone(options.includePackage),
+		ExcludePackage:     slices.Clone(options.excludePackage),
+		Logger:             logger,
 	}
 	tunOptions.BuildAndroidRules(packageManager)
-	i.localPolicy.IncludeUID = fromTunUIDRanges(tunOptions.IncludeUID)
-	i.localPolicy.ExcludeUID = fromTunUIDRanges(tunOptions.ExcludeUID)
-	return nil
+	return fromTunUIDRanges(tunOptions.IncludeUID), fromTunUIDRanges(tunOptions.ExcludeUID)
 }
 
 func (i *Inbound) inspectAndroidPackages(packageManager tun.PackageManager, mode string, packageNames []string, warnedSharedUID map[uint32]struct{}) {

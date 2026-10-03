@@ -29,8 +29,14 @@ func validateActionPolicyScope(policy commonEBPF.ActionPolicy) error {
 // semantics: unmatched sockets use the returned default action, while each
 // decision is the exceptional action to apply to its UID range.
 func (i *Inbound) compileProcessUIDPolicy() ([]commonEBPF.UIDDecision, commonEBPF.Decision) {
-	if i.localPolicy.IncludeUIDConfigured {
-		include := subtractUIDRanges(i.localPolicy.IncludeUID, i.localPolicy.ExcludeUID)
+	return compileUIDDecisions(i.localPolicy)
+}
+
+// compileUIDDecisions is the pure form of compileProcessUIDPolicy, for callers
+// that hold a policy other than the inbound's current one.
+func compileUIDDecisions(policy localUIDPolicy) ([]commonEBPF.UIDDecision, commonEBPF.Decision) {
+	if policy.IncludeUIDConfigured {
+		include := subtractUIDRanges(policy.IncludeUID, policy.ExcludeUID)
 		decisions := make([]commonEBPF.UIDDecision, 0, len(include))
 		for _, uid := range include {
 			decisions = append(decisions, commonEBPF.UIDDecision{
@@ -39,8 +45,8 @@ func (i *Inbound) compileProcessUIDPolicy() ([]commonEBPF.UIDDecision, commonEBP
 		}
 		return decisions, commonEBPF.DecisionPass
 	}
-	decisions := make([]commonEBPF.UIDDecision, 0, len(i.localPolicy.ExcludeUID))
-	for _, uid := range i.localPolicy.ExcludeUID {
+	decisions := make([]commonEBPF.UIDDecision, 0, len(policy.ExcludeUID))
+	for _, uid := range policy.ExcludeUID {
 		decisions = append(decisions, commonEBPF.UIDDecision{
 			Start: uid.Start, End: uid.End, Action: commonEBPF.DecisionPass,
 		})
@@ -131,28 +137,38 @@ var eBPFPrivateDestinationPrefixes = []netip.Prefix{
 }
 
 func (i *Inbound) compileActionPolicy() (commonEBPF.CompiledPolicy, error) {
+	policy := i.buildActionPolicy()
+	i.localInitialDestinations = destinationPassDecisions(policy.Local.DestinationCIDR)
+	i.sharedInitialDestinations = destinationPassDecisions(policy.Shared.DestinationCIDR)
+	if err := validateActionPolicyScope(policy); err != nil {
+		return commonEBPF.CompiledPolicy{}, err
+	}
+	return commonEBPF.CompileActionPolicy(policy)
+}
+
+// buildActionPolicy assembles the uncompiled policy.
+//
+// The local UID decisions come from compileProcessUIDPolicy, the same
+// function the process tracker and UpdateUIDPolicy use, so that "exclude
+// takes precedence over include" (docs/configuration/inbound/ebpf.md,
+// local.exclude_uid) holds on every path. This used to append the include
+// ranges as intercept and the exclude ranges as pass side by side; with an
+// include-configured policy the default is pass, and sing-ebpf's
+// compileUIDActionPolicy drops every decision equal to the default, so an
+// exclusion inside an included range (for example include_uid_range
+// 10000:19999 with exclude_package) was silently intercepted.
+func (i *Inbound) buildActionPolicy() commonEBPF.ActionPolicy {
+	localUID, localDefault := i.compileProcessUIDPolicy()
 	policy := commonEBPF.ActionPolicy{
 		EnableTCP: i.enableTCP,
 		EnableUDP: i.enableUDP,
 		Local: commonEBPF.ActionScope{
-			Default: commonEBPF.DecisionIntercept,
+			Default: localDefault,
+			UID:     localUID,
 		},
 		Shared: commonEBPF.ActionScope{
 			Default: commonEBPF.DecisionIntercept,
 		},
-	}
-	if i.localPolicy.IncludeUIDConfigured {
-		policy.Local.Default = commonEBPF.DecisionPass
-		for _, uid := range i.localPolicy.IncludeUID {
-			policy.Local.UID = append(policy.Local.UID, commonEBPF.UIDDecision{
-				Start: uid.Start, End: uid.End, Action: commonEBPF.DecisionIntercept,
-			})
-		}
-	}
-	for _, uid := range i.localPolicy.ExcludeUID {
-		policy.Local.UID = append(policy.Local.UID, commonEBPF.UIDDecision{
-			Start: uid.Start, End: uid.End, Action: commonEBPF.DecisionPass,
-		})
 	}
 	appendDestinationPolicy(&policy.Local, i.localPolicy.BypassPrivateAddress, i.localBypassPort, i.localDNSMode,
 		i.fakeIPIPv4Prefix, i.fakeIPIPv6Prefix, i.enableTCP, i.enableUDP)
@@ -179,12 +195,7 @@ func (i *Inbound) compileActionPolicy() (commonEBPF.CompiledPolicy, error) {
 	}
 	appendDestinationPolicy(&policy.Shared, i.sharedBypassPrivate, i.sharedBypassPort, i.sharedDNSMode,
 		i.fakeIPIPv4Prefix, i.fakeIPIPv6Prefix, i.enableTCP, i.enableUDP)
-	i.localInitialDestinations = destinationPassDecisions(policy.Local.DestinationCIDR)
-	i.sharedInitialDestinations = destinationPassDecisions(policy.Shared.DestinationCIDR)
-	if err := validateActionPolicyScope(policy); err != nil {
-		return commonEBPF.CompiledPolicy{}, err
-	}
-	return commonEBPF.CompileActionPolicy(policy)
+	return policy
 }
 
 func destinationPassDecisions(decisions []commonEBPF.CIDRDecision) []commonEBPF.CIDRDecision {
