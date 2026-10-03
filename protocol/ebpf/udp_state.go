@@ -79,12 +79,12 @@ func udpSessionKeyFromContext(ctx context.Context) (udpSessionKey, bool) {
 }
 
 type udpClientState struct {
-	access          sync.RWMutex
-	sourceMAC       net.HardwareAddr
-	socketCookie    uint64
+	access       sync.RWMutex
+	sourceMAC    net.HardwareAddr
+	socketCookie uint64
 	// identity is the TC socket identity of the client socket (stage 3);
 	// zero, with valid false, on the cgroup data plane.
-	identity socketIdentity
+	identity        socketIdentity
 	bindings        map[netip.AddrPort]udpRedirectBinding
 	replyAliasCount uint16
 	closed          bool
@@ -273,6 +273,9 @@ func (t *udpClientTable) setDirectBindingWithIdentity(
 	sourceMAC net.HardwareAddr,
 	identity socketIdentity,
 ) {
+	if key.Scope == udpSessionScopeSharedTC || key.Scope == udpSessionScopeSharedRewrite {
+		identity = socketIdentity{}
+	}
 	state := t.loadOrCreate(key)
 	state.access.Lock()
 	defer state.access.Unlock()
@@ -766,7 +769,7 @@ func (s *udpClientState) processSocketCookie() uint64 {
 func (s *udpClientState) processIdentity() socketIdentity {
 	s.access.RLock()
 	defer s.access.RUnlock()
-	if s.identity.valid {
+	if s.identity.valid || s.identity.creator.Flags != 0 {
 		return s.identity
 	}
 	return socketIdentity{cookie: s.socketCookie}

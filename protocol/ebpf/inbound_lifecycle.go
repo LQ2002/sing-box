@@ -56,6 +56,9 @@ func (i *Inbound) startInbound() error {
 	if err := i.checkKernelCapabilities(); err != nil {
 		return err
 	}
+	if err := i.startSocketCreator(); err != nil {
+		return err
+	}
 	if err := i.startProcessTracker(); err != nil {
 		return err
 	}
@@ -115,6 +118,10 @@ func (i *Inbound) startInbound() error {
 		// (socket_identity.go). Only when routing needs process information.
 		RecordSocketIdentity: i.recordsSocketIdentity(),
 	}
+	if i.socketCreator != nil {
+		backendConfig.SocketCreatorMap = i.socketCreator.Map()
+		backendConfig.RecordSocketIdentity = true
+	}
 	if backendConfig.RecordSocketIdentity && i.cgroupOwners.Load() == nil {
 		i.cgroupOwners.Store(newCgroupOwnerResolver(cgroupRoot))
 	}
@@ -125,7 +132,7 @@ func (i *Inbound) startInbound() error {
 	if localTCEnabled || sharedSocketAssignEnabled {
 		backend, err = commonEBPF.PrepareTC(backendConfig)
 	}
-	if err != nil && (i.processTracker != nil || backendConfig.RecordSocketIdentity) {
+	if err != nil && backendConfig.SocketCreatorMap == nil && (i.processTracker != nil || backendConfig.RecordSocketIdentity) {
 		trackingErr := err
 		var closeErr error
 		i.processTracker, closeErr = closeProcessTrackerOwner(i.processTracker)
@@ -146,6 +153,7 @@ func (i *Inbound) startInbound() error {
 		return err
 	}
 	i.socketIdentityActive.Store(backend != nil && backendConfig.RecordSocketIdentity)
+	i.socketCreatorActive.Store(backend != nil && backendConfig.SocketCreatorMap != nil)
 	if i.socketIdentityActive.Load() {
 		i.startProcessIndex()
 	}
@@ -403,6 +411,12 @@ func (i *Inbound) processTrackingMode() string {
 	if i.usePlatformProcessFinder {
 		return "platform"
 	}
+	if i.socketCreatorActive.Load() {
+		if i.processTracker != nil {
+			return "tc_socket_creator+" + i.processTracker.TrackingMode()
+		}
+		return "tc_socket_creator"
+	}
 	if !i.localEnabled || !i.router.NeedFindProcess() {
 		return "off"
 	}
@@ -614,7 +628,8 @@ func (i *Inbound) closeResources() error {
 	if i.processTrackerRollback != nil {
 		i.processTrackerRollback, processTrackerRollbackErr = closeProcessTrackerOwner(i.processTrackerRollback)
 	}
-	return E.Errors(monitorErr, sharedRewriteErr, disableErr, listenerErr, udpNATErr, udpReplySocketErr, dataPlaneErr, cgroupErr, routeErr, processTrackerErr, processTrackerRollbackErr, selfBypassErr)
+	socketCreatorErr := i.closeSocketCreator()
+	return E.Errors(monitorErr, sharedRewriteErr, disableErr, listenerErr, udpNATErr, udpReplySocketErr, dataPlaneErr, cgroupErr, routeErr, processTrackerErr, processTrackerRollbackErr, selfBypassErr, socketCreatorErr)
 }
 
 func closeProcessTrackerOwner(tracker processTrackerOwner) (processTrackerOwner, error) {

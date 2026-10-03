@@ -12,6 +12,13 @@ The bridge forwards non-null opaque socket pointers without accessing socket
 fields. The BPF producer must filter non-kernel IPv4/IPv6 sockets before storing
 identity. Writing `0` drains callbacks that may have observed the previous selection.
 
+`capture_all` is a separate root-only (`0600`) boolean parameter, default `false`.
+Explicitly setting it to `true` forwards socket creations from all TGIDs and
+ignores the test TGID selection. Setting it back to `false` drains callbacks that
+may have observed global capture, then leaves the original `target_tgid` behavior.
+This opt-in mode supplies `common/socketidentity`; that package requires the
+bridge to be loaded with `capture_all=1` and never changes module parameters.
+
 ## Build and inspect
 
 Run `sh build.sh` in WSL with an existing prepared Android kernel output tree,
@@ -47,3 +54,15 @@ Stop in this order: write `target_tgid=0`, close BPF links and programs, then un
 the module. The typed tracepoint attachment holds the module while attached, and
 disabling first prevents new forwarded callbacks during cleanup. This experiment
 does not modify the production service, startup scripts, root cgroup, or routing.
+
+For the persistent collector, explicitly prepare the bridge with
+`insmod sbo_identity_bridge.ko capture_all=1` after matching the current kernel
+BTF hash and module ABI. Its map and producer link remain pinned after the
+service closes. To remove it, close all collector instances, run its explicit
+Remove operation, set `capture_all=0` and `target_tgid=0`, then unload the bridge
+if desired. Ordinary service shutdown must preserve capture. The global mode,
+pin/reuse lifecycle and live creator-to-TC path passed the separate
+`run-creator-integration-device.sh` harness on the matched Android 6.12.69 kernel.
+This was an isolated test with the original production service kept running;
+real-app coverage, full-service rollout and performance checks remain pending.
+See the repository's `ANDROID_ATTRIBUTION_PLAN.md` for the actual evidence.

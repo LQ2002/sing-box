@@ -109,6 +109,61 @@ prefers multi-program attachment and falls back to legacy exclusive attachment
 only for compatible errors. Use local `tc` if the device cannot safely share
 the root cgroup hook.
 
+### local.socket_creator
+
+Optional socket-creation collector, disabled by default. Requires arm64 and
+`local.data_plane=tc`, without a platform-provided process finder. The creation
+hook, persistent collector and existing TC programs have passed isolated tests
+on the target Android kernel. Real-app coverage, full-service rollout and
+performance comparisons remain pending; existing package attribution rules
+remain in use.
+
+```json
+{
+  "local": {
+    "enabled": true,
+    "data_plane": "tc",
+    "socket_creator": {
+      "enabled": true,
+      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v1"
+    }
+  }
+}
+```
+
+`pin_path` defaults to the value shown and must be an absolute, dedicated bpffs
+directory owned by root with mode `0700`. Its ancestors must be root-owned;
+writable ancestors must have the sticky bit, as Android's usual `01777` bpffs
+mount does. Symlinks are rejected. An administrator must first load a matching `sbo_identity_bridge`
+kernel module with `capture_all=1`. sing-box neither loads the module nor changes
+its switch. The collector records the creation PID, thread ID, creator UID,
+process birth time and truncated comm, then delivers them through the existing
+TC path. Socket accounting UID and comm are not proof of an exact package.
+
+An explicitly enabled collector failing to load prevents the inbound from
+starting. Sockets without creation records, including older sockets and accepted
+children, retain the existing attribution fallback. Diagnostics count valid
+snapshots (`creator_snapshots`), missing or invalid snapshots
+(`creator_snapshot_missing`, `creator_snapshot_invalid`), and actual legacy
+queries (`creator_cookie_fallbacks`). Ordinary apps do not incur additional
+per-connection `/proc` reads.
+
+Normal shutdown keeps the creation attachment and storage, so sockets created
+while sing-box is stopped can still be recorded. Forwarding TC and routes retain
+their normal cleanup. Restart validates persistent object versions and layouts;
+it refuses to overwrite incompatible objects. Disabling this configuration does
+not remove a previously pinned collector. To remove it, stop every sing-box
+instance using the directory, then run:
+
+```shell
+sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v1
+```
+
+This command does not unload the bridge module. Removal refuses active users.
+For an incompatible upgrade, remove the old collector with the old executable
+before starting the new version. Removal loses existing socket snapshots, which
+cannot be reconstructed after creation.
+
 ### local.dns_mode
 
 | Value | Behavior for destination port 53 |

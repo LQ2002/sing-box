@@ -13,8 +13,9 @@ package ebpf
 //
 // An ordinary app can still be named at UID/group level when the socket UID
 // agrees with the group's UID and that UID maps to one package. This fast
-// path deliberately supplies no PID or executable. Precise creator metadata
-// and shared/system UID refinement require the optional cookie owner source.
+// path supplies a PID only when the assignment carries a creation snapshot;
+// it never reads an executable. Precise creator metadata and shared/system
+// UID refinement use that snapshot or the optional cookie owner source.
 // A disagreement (for example netd fchown()ing an app's DNS socket) never
 // attributes the connection to the socket UID's package without that source.
 //
@@ -62,15 +63,26 @@ type socketIdentity struct {
 	uid      uint32
 	cgroupID uint64
 	valid    bool
+	creator  commonEBPF.SocketCreator
 }
 
 func identityFromAssignment(assignment commonEBPF.TCAssignment) socketIdentity {
+	// Downstream packets do not originate from a local socket. Never consume
+	// even malformed/stale creator fields on the shared path.
+	if assignment.Path == commonEBPF.TCPathShared {
+		return socketIdentity{}
+	}
 	return socketIdentity{
 		cookie:   assignment.SocketCookie,
 		uid:      assignment.SocketUID,
 		cgroupID: assignment.SocketCgroupID,
 		valid:    assignment.HasSocketIdentity(),
+		creator:  assignment.Creator,
 	}
+}
+
+func (identity socketIdentity) hasCreator() bool {
+	return identity.creator.IsValid() && identity.creator.Cookie == identity.cookie
 }
 
 // cgroupOwner is an Android UID group label, never a process identity.
@@ -215,6 +227,10 @@ type identityCounters struct {
 	// which the optional source is absent or has no matching record.
 	creatorUnavailable atomic.Uint64
 	uidMismatch        atomic.Uint64
+	creatorSnapshots   atomic.Uint64
+	creatorMissing     atomic.Uint64
+	creatorInvalid     atomic.Uint64
+	creatorFallbacks   atomic.Uint64
 }
 
 var userNameCache sync.Map // uint32 -> string
@@ -262,9 +278,17 @@ func androidUserName(uid uint32) (string, bool) {
 // Router.searchProcessInfo would fill in the whole candidate package list of
 // a shared UID.
 func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity) *adapter.ConnectionOwner {
+	hasCreator := identity.hasCreator()
+	if hasCreator {
+		i.identityCounters.creatorSnapshots.Add(1)
+	} else if identity.creator.Flags != 0 {
+		i.identityCounters.creatorInvalid.Add(1)
+	} else if i.socketCreatorActive.Load() && identity.cookie != 0 {
+		i.identityCounters.creatorMissing.Add(1)
+	}
 	if !identity.valid {
 		i.identityCounters.noIdentity.Add(1)
-		return i.lookupProcessInfo(ctx, identity.cookie)
+		return i.creatorFromIdentity(ctx, identity)
 	}
 	var group cgroupOwner
 	resolver := i.cgroupOwners.Load()
@@ -278,13 +302,16 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 			i.identityCounters.cgroupGone.Add(1)
 		}
 	}
-	if group.found && group.uid == identity.uid {
+	if group.found && group.uid == identity.uid && (!hasCreator || identity.creator.UserID == group.uid) {
 		if packageName := i.packageForApplicationUID(group.uid); packageName != "" {
-			// UID-level attribution only. In particular, a native child in
-			// this group must not inherit the directory parent's PID/path.
+			// UID-level package attribution. A creation snapshot may supply
+			// the PID; a group directory must never supply PID or executable.
 			owner := &adapter.ConnectionOwner{
 				UserId: int32(group.uid), UserName: cachedUserName(group.uid),
 				PackageNames: []string{packageName},
+			}
+			if hasCreator {
+				owner.ProcessID = identity.creator.ProcessID
 			}
 			i.identityCounters.resolvedPackage.Add(1)
 			if resolver.markLogged(identity.cgroupID, packageName) {
@@ -297,7 +324,7 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 	}
 	// A cgroup is never a fallback for a missing cookie creator. This query
 	// must remain per cookie, since several creators can share one group.
-	owner := i.lookupProcessInfo(ctx, identity.cookie)
+	owner := i.creatorFromIdentity(ctx, identity)
 	if owner.UserId == -1 {
 		i.identityCounters.creatorUnavailable.Add(1)
 		// Preserve only corroborated UID-level information. In particular,
@@ -311,6 +338,22 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 		i.identityCounters.unknownPackage.Add(1)
 	}
 	return owner
+}
+
+// The creation snapshot and UID/group fields are independently valid. In
+// particular, a missing cgroup or fchown'ed sk_uid must not hide a creator.
+func (i *Inbound) creatorFromIdentity(ctx context.Context, identity socketIdentity) *adapter.ConnectionOwner {
+	if identity.hasCreator() {
+		creator := identity.creator
+		return i.resolveSocketOwner(ctx, SocketOwner{
+			ProcessID: creator.ProcessID, UserID: creator.UserID,
+			StartTimeNs: creator.StartTimeNs, Comm: socketOwnerModuleComm(creator.Comm),
+		})
+	}
+	if i.socketCreatorActive.Load() && identity.cookie != 0 && i.processTracker != nil {
+		i.identityCounters.creatorFallbacks.Add(1)
+	}
+	return i.lookupProcessInfo(ctx, identity.cookie)
 }
 
 // packageForApplicationUID names the package only when the UID alone decides it:
@@ -336,7 +379,8 @@ func (i *Inbound) packageForApplicationUID(uid uint32) string {
 // recordsSocketIdentity reports whether the TC program should record socket
 // identity: local interception on TC, and routing that needs process data.
 func (i *Inbound) recordsSocketIdentity() bool {
-	return runtime.GOOS == "android" && i.localTCEnabled() && i.router != nil && i.router.NeedFindProcess() && !i.usePlatformProcessFinder
+	return i.localTCEnabled() && !i.usePlatformProcessFinder &&
+		(i.socketCreator != nil || runtime.GOOS == "android" && i.router != nil && i.router.NeedFindProcess())
 }
 
 // AttributionDiagnostics counts how connections were attributed since start
@@ -357,6 +401,10 @@ type AttributionDiagnostics struct {
 	NoIdentity         uint64 `json:"no_identity"`
 	CreatorUnavailable uint64 `json:"creator_unavailable"`
 	UIDMismatch        uint64 `json:"uid_mismatch"`
+	CreatorSnapshots   uint64 `json:"creator_snapshots"`
+	CreatorMissing     uint64 `json:"creator_snapshot_missing"`
+	CreatorInvalid     uint64 `json:"creator_snapshot_invalid"`
+	CreatorFallbacks   uint64 `json:"creator_cookie_fallbacks"`
 	// Manifest index.
 	IndexedPackages uint64 `json:"indexed_packages"`
 	IndexFailures   uint64 `json:"index_failures"`
@@ -378,6 +426,10 @@ func (i *Inbound) attributionDiagnostics() *AttributionDiagnostics {
 		NoIdentity:         counters.noIdentity.Load(),
 		CreatorUnavailable: counters.creatorUnavailable.Load(),
 		UIDMismatch:        counters.uidMismatch.Load(),
+		CreatorSnapshots:   counters.creatorSnapshots.Load(),
+		CreatorMissing:     counters.creatorMissing.Load(),
+		CreatorInvalid:     counters.creatorInvalid.Load(),
+		CreatorFallbacks:   counters.creatorFallbacks.Load(),
 	}
 	if i.networkManager != nil {
 		if source, loaded := i.networkManager.PackageManager().(interface{ Snapshot() androidpackages.View }); loaded {

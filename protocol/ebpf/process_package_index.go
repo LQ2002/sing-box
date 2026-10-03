@@ -247,11 +247,11 @@ func (x *processPackageIndex) prewarm(root string, unique func(uid uint32) bool)
 	}
 }
 
-// startProcessIndex runs only with a cookie owner source. Group labels alone
+// startProcessIndex runs only with a creator source. Group labels alone
 // cannot supply a process name, so parsing manifests without a source would
 // waste startup work.
 func (i *Inbound) startProcessIndex() {
-	if i.processIndex.Load() != nil || i.networkManager == nil || i.processTracker == nil {
+	if i.processIndex.Load() != nil || i.networkManager == nil || (i.processTracker == nil && !i.socketCreatorActive.Load()) {
 		return
 	}
 	source, loaded := i.networkManager.PackageManager().(interface{ Snapshot() androidpackages.View })

@@ -18,6 +18,8 @@ github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.11.0.20260930003748-c8f7f2ca12de h1
 github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.11.0.20260930003748-c8f7f2ca12de/go.mod h1:g3bnlr6wM8A1BnEi2jPZwVTDgdBPtF3+zhhwsdOzqfM=
 github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261003060717-3c1b28f0eb65 h1:+MlA5g8WzvyTZ3qHxFve6y2jmhliA+uJyYZSuAcnMVs=
 github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261003060717-3c1b28f0eb65/go.mod h1:g3bnlr6wM8A1BnEi2jPZwVTDgdBPtF3+zhhwsdOzqfM=
+github.com/LQ2002/sing-ebpf v0.1.0-alpha.11.0.20261003114235-74ad17e7ec35 h1:EMGvgzw1Vppq7w2karK3AkQdLTJpGz+jSgQRZaYHj5s=
+github.com/LQ2002/sing-ebpf v0.1.0-alpha.11.0.20261003114235-74ad17e7ec35/go.mod h1:g3bnlr6wM8A1BnEi2jPZwVTDgdBPtF3+zhhwsdOzqfM=
 github.com/LQ2002/tailscale v0.0.0-20260918084915-8f35b78440d7 h1:I8tMtnQ8dA1tK0tv3z7bXluQzE0atuHn/kjl30ECx6w=
 github.com/LQ2002/tailscale v0.0.0-20260918084915-8f35b78440d7/go.mod h1:xGiEZax5sZ6gHJcwQxp0GmJVtDHGUXPXTgr6Ksm+yIc=
 github.com/RyuaNerin/go-krypto v1.3.0 h1:smavTzSMAx8iuVlGb4pEwl9MD2qicqMzuXR2QWp2/Pg=

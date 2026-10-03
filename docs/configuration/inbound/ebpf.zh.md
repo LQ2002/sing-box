@@ -102,6 +102,48 @@ cgroup v2 子树。
 Android 厂商的 netd hook 可能造成挂载冲突。sing-box 优先尝试多程序挂载，只在兼容
 错误下回退旧式独占挂载；设备无法安全共享根 cgroup hook 时应使用 local `tc`。
 
+### local.socket_creator
+
+可选的 socket 创建者采集器，默认关闭。仅用于 arm64、`local.data_plane=tc`，且不能
+与平台提供的进程查询器同时启用。创建钩子、持久采集器和现有 TC 已通过目标 Android
+内核上的隔离测试；真实 App 覆盖、完整服务上线和性能对比仍待验证，仍使用既有包名解析规则。
+
+```json
+{
+  "local": {
+    "enabled": true,
+    "data_plane": "tc",
+    "socket_creator": {
+      "enabled": true,
+      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v1"
+    }
+  }
+}
+```
+
+`pin_path` 可省略，默认如上；必须是 bpffs 上 root 拥有、权限 `0700` 的专用绝对目录。
+父目录均须属于 root；可写父目录须设置 sticky bit，兼容 Android 常见的 `01777`
+bpffs 挂载目录，不接受符号链接。启用前需由管理员加载
+与运行内核匹配的 `sbo_identity_bridge` 模块，并设置 `capture_all=1`。sing-box 不会
+自动加载模块或修改开关。采集器通过创建事件记录 PID、线程 ID、创建者 UID、进程出生
+时间和截断的 comm，由现有 TC 交付；不会把 socket 记账 UID 或 comm 当作精确包名证据。
+
+显式启用后的加载失败会阻止该入站启动。未采到创建记录的旧 socket、accept child 等
+仍使用既有归因路径；诊断中的 `creator_snapshots`、`creator_snapshot_missing`、
+`creator_snapshot_invalid`、`creator_cookie_fallbacks` 分别记录有效快照、缺失、无效和
+实际回退查询。普通 App 不因此增加逐连接 `/proc` 读取。
+
+正常停止保留创建采集挂载和存储，以继续记录服务停止期间新建的 socket；转发 TC 和
+路由仍按正常流程清理。重启会核对持久对象版本和布局，不兼容时拒绝覆盖。停用配置
+不会删除已持久化的采集器。需要彻底移除时，先停止所有使用该目录的 sing-box 实例，再运行：
+
+```shell
+sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v1
+```
+
+该命令不卸载桥接模块。采集器仍有活跃使用者时拒绝删除；升级导致对象不兼容时应先用
+旧版本命令移除旧采集器，再启动新版。移除会丢失已有 socket 的创建快照，无法事后补采。
+
 ### local.dns_mode
 
 | 值 | 对目标端口 53 的行为 |

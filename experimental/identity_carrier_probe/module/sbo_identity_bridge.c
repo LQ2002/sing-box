@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Isolated experiment: forward selected socket creations to a typed BPF hook. */
+/* Forward selected or explicitly enabled global creations to a typed BPF hook. */
 #include <linux/init.h>
 #include <linux/kstrtox.h>
 #include <linux/module.h>
@@ -23,6 +23,7 @@ struct sk_buff;
 #include "sbo_identity_trace.h"
 
 static unsigned int target_tgid;
+static bool capture_all;
 static bool hook_registered;
 
 static int set_target_tgid(const char *value, const struct kernel_param *parameter)
@@ -47,13 +48,33 @@ static const struct kernel_param_ops target_tgid_ops = {
 	.get = param_get_uint,
 };
 module_param_cb(target_tgid, &target_tgid_ops, &target_tgid, 0600);
-MODULE_PARM_DESC(target_tgid, "Only this init-namespace TGID is traced; 0 disables");
+MODULE_PARM_DESC(target_tgid, "Selected init-namespace TGID when capture_all=false; 0 disables selection");
+
+static int set_capture_all(const char *value, const struct kernel_param *parameter)
+{
+	bool selected;
+	int error = kstrtobool(value, &selected);
+
+	if (error)
+		return error;
+	WRITE_ONCE(*(bool *)parameter->arg, selected);
+	if (!selected && READ_ONCE(hook_registered))
+		tracepoint_synchronize_unregister();
+	return 0;
+}
+
+static const struct kernel_param_ops capture_all_ops = {
+	.set = set_capture_all,
+	.get = param_get_bool,
+};
+module_param_cb(capture_all, &capture_all_ops, &capture_all, 0600);
+MODULE_PARM_DESC(capture_all, "Forward all TGIDs for persistent creator capture; default false");
 
 static void on_socket_create(void *unused, struct sock *sk)
 {
 	unsigned int selected = READ_ONCE(target_tgid);
 
-	if (!selected || task_tgid_nr(current) != selected)
+	if (!READ_ONCE(capture_all) && (!selected || task_tgid_nr(current) != selected))
 		return;
 	if (!sk)
 		return;
@@ -76,6 +97,7 @@ static int __init sbo_identity_bridge_init(void)
 
 static void __exit sbo_identity_bridge_exit(void)
 {
+	WRITE_ONCE(capture_all, false);
 	WRITE_ONCE(target_tgid, 0);
 	unregister_trace_android_vh_sock_create(on_socket_create, NULL);
 	tracepoint_synchronize_unregister();
@@ -85,4 +107,4 @@ static void __exit sbo_identity_bridge_exit(void)
 module_init(sbo_identity_bridge_init);
 module_exit(sbo_identity_bridge_exit);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Test-TGID-only synchronous socket identity tracepoint bridge");
+MODULE_DESCRIPTION("Synchronous socket creator tracepoint bridge with explicit capture scope");

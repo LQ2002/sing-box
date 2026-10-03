@@ -90,12 +90,7 @@ func (i *Inbound) newTCPacket(
 		SocketCookie:   assignment.SocketCookie,
 		InterfaceIndex: assignment.InterfaceIndex,
 	}
-	identity := socketIdentity{cookie: assignment.SocketCookie}
-	if assignment.Path != commonEBPF.TCPathShared {
-		// Shared-path flows come from other hosts; their assignment never
-		// carries a local identity (sing-ebpf build_assignment).
-		identity = identityFromAssignment(assignment)
-	}
+	identity := identityFromAssignment(assignment)
 	i.udpClientTable.setDirectBindingWithIdentity(key, destination, sourceMAC, identity)
 	if takeOwnership {
 		i.udpNat.NewPacketBuffer(key, buffer, source, M.SocksaddrFromNetIP(destination), nil)
