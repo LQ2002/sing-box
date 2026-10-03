@@ -3,6 +3,185 @@
 这是本任务唯一的执行检查表。执行前读本文件，执行后在同一处更新状态、证据和未完成项。
 不另建平行方案，不把源码推断或探针结果写成生产功能已经完成。
 
+## 给 Claude 的接手摘要（2026-10-03）
+
+用户要求把设计目标、已完成、未完成及测试写入文件，由 Claude 接手完成目标设计。
+请先阅读本节，再按下面的代码入口与详细实施记录核对事实；后续设计、实施和验收继续更新
+本文件。当前这轮实现与隔离测试已经结束，接手时无需等待旧测试进程。
+
+### 设计目标与已确认约束
+
+**目标**：在不使用自定义内核的前提下，同时减少 Android 流量归属的查询环节，并提高
+创建进程/应用归属的可靠性。尽量把创建现场已知的事实随 socket 保留，再由现有 TC
+一次交给 sing-box；缺少证据时明确未知。用户希望同时获得少环节与更高精度，尚未接受
+“只能二选一”作为最终设计结论，也没有把当前实现认定为最终架构。
+
+- 不考虑自定义内核；当前已证实匹配现有内核的小桥接模块可行。
+- 主实现位于 `E:\ebpf_sing-box`，依赖改动在已有 `E:\sing-ebpf`。不改 `E:\Ref_sing-box`，
+  不新增 sing/sing-tun/fswatch fork，不提交本机路径 replace。
+- 当前生产集成复用已有 TC，不增加独立 TC/TCX 采集挂点或常驻 Java/app_process 助手。
+  私有 netns 内的 TCX 测试挂载仅用于验收，不是额外生产架构。
+- 保留包表与 UID 规则热更新；正常更新不拆除重建整个后端，不引入临时丢包保护。
+- 创建者 UID、socket 记账 UID、代发请求来源、包名是不同语义。cgroup 目录中的 PID、
+  comm、单个数字 PID、当前包表中的唯一 UID，都不能单独充当所有场景的创建实例/请求包证明。
+- 默认关闭新采集器，显式启用失败要报错；未知不能被路由器再次补成整组候选包，
+  也不能隐式变更为直连或其他出口。
+- 用户允许研究超出既有项目假设的方案。若目标设计需要修改 AOSP 启动/代发链路，
+  应明确列出系统改动、可信来源、部署及维护条件；当前尚未实现这些平台改动。
+
+### 当前架构及其边界
+
+已接通的创建者链路：
+
+```text
+现有 Android socket-create vendor hook
+  → 小模块 sbo_identity_bridge 的同步 typed tracepoint
+  → BPF producer 在 SK_STORAGE 初始化 48 字节创建者快照
+  → 现有 sing-ebpf TC 读取并复制到 assignment
+  → sing-box 消费快照，再按现有证据规则细化进程/包名
+```
+
+快照包括 cookie、TGID、TID、创建者 UID、leader 出生时间和 comm；UID 0 合法。
+创建者事实与可变的 socket 记账身份分开；快照已有效时不改写，换 cookie 或 shared
+路径不沿用旧创建者。只有当前包确实拿到 full socket 且 storage 不存在，才缓存“已查无”。
+普通唯一应用 UID 保留快速归包；共享/系统 UID 等路径仍可能需要 `/proc` 与 Manifest。
+普通快路径可附带快照中的真实创建者 PID，但仍不查询精确 exe；其包名是应用/组级归属，
+不是逐 socket 的可信 APK token。
+进程已经退出时，创建者数值快照仍可存在，但这不保证能恢复其完整 exe/cmdline 或唯一 APK。
+
+producer link、map 和冻结 metadata 都会 pin。正常 Close 只释放本实例 FD/lease，
+停止期间继续采集；重开校验 boot/ABI/对象哈希、对象 ID 及真实关联，拒绝覆盖不兼容对象。
+显式 Remove 与普通停止分开，使用者仍持有 lease 时拒绝移除。升级 producer 前，须用
+匹配旧对象的旧版维护命令移除；已存在且未采集的 socket 不补记创建历史。
+
+生产代码**没有**可信 APK token、TASK_STORAGE 登记器或 AOSP 启动注册通道。另一套
+独立原型验证了“父进程用子进程自身交出的 pidfd 登记 TASK_STORAGE，再复制 token 到
+SK_STORAGE”，其中 token 是随机合成值，不能解释为已经绑定真实包名。
+
+### 已完成与未完成总览
+
+| 工作 | 当前状态 | 证据与限制 |
+|---|---|---|
+| 包表监听、不可变快照、失败保留旧表 | 已完成 | 阶段 1 本机与 10 轮安装/卸载真机验收；升级样本为覆盖重装 |
+| UID 规则热更新及 assignment 基础身份 | 已完成 | 阶段 2 及阶段 3 的规则实际生效验证；不宣称多 map 写入原子无窗口 |
+| 修正把 cgroup 目录 PID 当创建者的错误 | 已完成 | `cae57485` 及相应用例；组身份与每个 cookie 的创建者分开 |
+| 持久创建者 producer、TC 传递、用户态接线 | 第一轮实现完成 | `ee0208de` 与依赖 `33964031`/`74ad17e7`；新功能默认关闭 |
+| 新链路在目标内核加载与隔离真包测试 | 已完成 | 8 组 TC 用例、3 组真实 producer→TC、16 个生命周期快照，详见下表 |
+| 新链路下真实 App 与完整 sing-box 服务验收 | 未完成 | 当前服务未切换到新功能；组件测试不替代完整服务重启及路由验证 |
+| 可信进程实例→APK/请求来源绑定 | 目标设计待完成 | 仅有创建者事实和独立 token 载体原型，没有平台可信登记实现 |
+| accept、exec、代发、异步及复用连接的完整身份语义 | 设计与验证未完成 | 下节列出已经发现的边界；不能按普通 socket 创建场景外推 |
+| 新旧全链路的性能、内存、功耗和长稳对照 | 未完成 | 旧消费端对比数据存在，但不是本次 SK_STORAGE 新方案对比 |
+| 依赖发布、正式部署、移植 | 未完成 | 本轮提交未推送；未修改移植目标仓库 |
+
+### 请 Claude 完成的设计决策
+
+1. **先定义要对谁归属。** 区分创建 socket 的 task、当前使用 socket 的进程、记账对象、
+   Android 包/宿主，以及代理服务的原始请求方。定义输出字段、证据等级、未知原因和路由
+   使用规则；多个包共用同一进程或一条连接承载多来源请求时，不强行选唯一包。
+2. **决定可信包身份从哪里来。** 评估保留当前 proc/Manifest 细化的适用范围，以及是否
+   需要在 AOSP 可信启动路径同步登记进程实例→包/宿主关系。若采用 token，明确注册方、
+   权限、在最早可能建 socket 前的时序、pidfd/实例绑定、元数据字典寿命及撤销规则。
+   迟到事件中的 PID 再去打开 pidfd，不能证明仍是事件原来的 task。
+3. **定义生命周期语义。** 独立原型已观察到：fork 新 task 不继承登记；继承的父 socket
+   保留父身份；非 leader exec 可保持数字 PID 和出生时间，但原 TASK_STORAGE 丢失；
+   当前未开 clone 标志，accepted child 无快照。普通 exec 也可能改变 exe/cmdline。
+   明确新旧 socket、acceptor/listener、exec 代际、启动存量、包升级和 UID/PID 复用的处理。
+   不把 `PID + 出生时间` 当作覆盖所有 exec/task 替换的令牌。
+4. **决定特殊来源的边界。** 为 shared UID、共享进程、isolated/SDK sandbox、系统 native、
+   DNS/netd/DownloadProvider 等代发，以及 io_uring 定义可证明的归属。代发请求方通常
+   需要服务入口的可信上下文；对多来源共用的 HTTP/2、QUIC 等连接，评估请求级路由或
+   按来源拆连接池，不能用最后一次请求覆盖整条 socket 的创建身份。
+5. **明确兼容和失效策略。** 给出模块/producer 缺失、半套 pins、版本不兼容、无旧来源、
+   分配失败、消费者重启、模块停止和设备重启的状态转换与降级结果。保留已证实的
+   持久化契约，区分正常停止、禁用配置、升级与显式卸载。
+6. **以测量决定代价。** 说明每个处理环节发生在进程启动、socket 创建、首包、每连接
+   还是每包。当前 assignment 由 40 增至 88 字节，8192 项仅 value 容量增加 384 KiB；
+   SK_STORAGE 分配、全局 hook、索引和用户态缓存的实际开销仍需测。普通快路径原本
+   已能避开 ioctl/proc，不能把省查询次数直接换算为总体性能提升。
+
+建议交付：在本文件补齐选定架构及候选方案取舍、身份数据模型与信任来源、事件时序、
+生命周期/错误状态转换、兼容与迁移策略、开销模型、实现落点和可复现验收矩阵。
+将“已由证据支持”“待验证假设”“尚未实现”逐项标明，再据此推进阶段 3 的后续工作。
+
+### 测试现状与下一轮验收
+
+| 测试层级 | 已执行结果 | 不能据此推出的结论 |
+|---|---|---|
+| 主仓库本机 | 五个相关包 race、vet 通过；完整 Android arm64 构建通过 | 不代表手机上的完整应用服务已经启用新链路 |
+| producer/模块构建 | 内嵌 BPF ABI 检查；15/15 传统及扩展 CRC、14 个导入覆盖；目标内核实际加载通过 | 不代表其他 Android 内核或 ROM 自动兼容 |
+| WSL/Android 合成 storage→TC | 同一套 8 组真实数据面用例通过：首包、保持、缺失、无效值、tuple 复用、delivery、外借 FD、错误 map | storage 由真实 socket FD 注入，单独这组不验证创建钩子 |
+| Android 真实 producer→TC | IPv4 TCP 首包、UDP 首包、TCP delivery 三组通过；首次发送前已有记录，48 字节完全一致 | 不是实际 App 自主流量，也不是 IPv6/shared 完整转发验收 |
+| Android collector 生命周期 | 四阶段各 4 个 IPv4/IPv6×TCP/UDP，共 16 个快照、29 次观察；另一个旧 socket 始终未知；子进程退出后复用相同对象；Remove 忙/成功均通过 | 是采集器组件重开，不是完整 sing-box 服务重启 |
+| 独立 TASK_STORAGE 原型 | 15 组；35 个创建快照、34 个首次发送匹配，另有 accepted child 缺失的明确结果 | 随机 token 不代表可信 APK 登记；该原型不等于生产方案 |
+| 旧消费端配对实验 | 历史五对真实 echo 检查及详细限制已记录在后文 | 不证明本轮 SK_STORAGE 链路更快、更省内存或更省电 |
+
+下一轮未完成验收应至少包括以下项目，继续沿用阶段 3 的复选框，跑完再勾选：
+
+- 真实 App 自主发流、冷/热启动、普通/共享 UID、共享进程歧义、native/宿主区分；
+  独立 ground truth 与归属结果逐条匹配，分别统计错误归属、正确归属、未知和漏采。
+- 完整 sing-box 入口上的 TCP/UDP、IPv4/IPv6、UDP 多目的地、delivery/shared；
+  对端核验实际业务载荷及回包，不能只用 connect 成功判定转发完成。
+- 新链路无旧模块来源、producer/模块缺失的预期行为；完整服务关闭/重启前后旧、新
+  socket 的身份和实际路由；兼容升级、显式移除与资源清理。
+- 包真实版本升级、进程退出/受控 PID 复用、UID/包表变化、启动存量、Framework 重启。
+  历史“不使用 AM 日志”只使 AM 断连测试不适用，不免除 Framework 变化的验证。
+- accept、fork/exec、FD 转交、io_uring 与多来源连接的目标语义确定后，补生产路径测试。
+- 相同设备/配置/负载、明确模块及 hook 开启状态下，比较仅旧方案与仅新方案；交替多轮，
+  分离建连和回包尾延迟、CPU、用户态/内核内存、吞吐及功耗，补长时间持有/释放与重启循环。
+  阈值和采样办法先在设计里写清，不能剔除变慢轮次或用双来源同时运行的数据称“仅新方案”。
+
+### 仓库、代码和证据入口
+
+| 入口 | 用途 |
+|---|---|
+| `E:\ebpf_sing-box`，分支 `codex/strict-app-attribution` | 主仓库；交接前实现 `ee0208de`，验收记录 `7bc72605` |
+| `E:\sing-ebpf`，分支 `android-attribution` | 依赖；功能 `33964031`，BPF 外部 memcmp 修复 `74ad17e7`，真实 producer 测试 `2354018` |
+| `common/socketidentity/` | 48 字节 ABI、BPF producer、持久对象及 lease、实际设备生命周期测试 |
+| `protocol/ebpf/socket_creator.go`、`inbound_lifecycle.go` | 采集器配置及 TC 借用 map 的启动/关闭顺序 |
+| `protocol/ebpf/socket_identity.go`、`socket_owner_resolve.go`、`process_package_index.go` | 创建者消费、旧来源回退、proc/Manifest 细化与诊断 |
+| `common/androidpackages/`、`common/androidmanifest/`、`protocol/ebpf/android_uid_update.go` | 包表、Manifest 证据、UID 规则热更新 |
+| 依赖的 `api.go`、`internal/core/socket_creator.go`、`internal/core/tc.go`、`native/tc.bpf.c` | 外借 map 接口、assignment ABI 与 TC 读取/失效逻辑；生成物须与 C 同步 |
+| `experimental/identity_carrier_probe/` | 独立 token 原型、桥接模块、隔离生产组件验收脚本；两类实验语义分开 |
+| `docs/configuration/inbound/ebpf.zh.md` 的 `local.socket_creator` | 默认关闭、启用前提、pin 路径、停止/移除/升级约定 |
+| `build/socket-creator-integration/device-audit.json` | 最后一轮独立离线审计：16/29/3、14 份前后状态相同 |
+| `build/socket-creator-integration/device-results/run-20261003-200332-15455/` | 最终 `core.log`、`collector.log`、`inner.log`、输入哈希及前后状态 |
+| `build/socket-creator-integration/device-run0{1,2,3}.txt` | 两轮在测试前安全拒绝的原因，以及最终完整通过/清理输出 |
+| `experimental/identity_carrier_probe/results/lifecycle-*` | 独立 token 原型的 fork/exec/accept 原始证据 |
+
+原始日志、构建工具缓存和产物被 Git 忽略，仅在此工作区存在；跨机器交接须另行带走
+必要证据，不能假设 git clone 含有日志。两个仓库的本轮提交均未推送。主仓库正式依赖
+固定在 `v0.1.0-alpha.11.0.20261003114235-74ad17e7ec35`；本机通过标准 Git 模块归档
+离线校验，其他机器需先能取得该依赖提交。不要把依赖 `2354018` 的测试新增误认为主仓库
+已经升级到它；生产代码所需修复已经包含在当前固定版本中。
+
+可复用的主仓库本机命令（WSL/Linux，已使用 Go 1.26.6；race 需要本机 CGO 工具链）：
+
+```sh
+go test -race -tags with_ebpf ./protocol/ebpf ./common/socketidentity ./common/androidpackages ./common/androidmanifest ./option -count=1
+go vet -tags with_ebpf ./protocol/ebpf ./common/socketidentity ./common/androidpackages ./common/androidmanifest ./option
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -tags integration -o socketidentity.test ./common/socketidentity
+```
+
+完整 Android 构建使用 `.github/workflows/android-ebpf.yml` 的 `BASE_TAGS`、`release/LDFLAGS`
+和 NDK r29；本轮实际脚本及日志在 `build/socket-creator-integration/pinned-checks.sh`、
+`pinned-race.log`、`pinned-vet.log`、`android-build-info.txt`。在依赖仓库构建手机 TC 测试：
+
+```sh
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c -tags 'with_ebpf ebpf_integration' -o core.test ./internal/core
+```
+
+手机入口是 `experimental/identity_carrier_probe/run-creator-integration-device.sh`。
+它要求匹配设备 BTF/CRC 的模块、两个测试二进制、base BTF 哈希，以及当次确认的生产
+PID/出生 ticks/内核/boot ID；不要把历史 PID 11765 或 boot ID 当常量重放。
+模块不能与已有同名桥接模块盲目替换；脚本核验私有 mount/netns、测试清单、无跳过及完整清理。
+模块构建说明在 `experimental/identity_carrier_probe/module/README.md`。
+
+最后一次设备测试后，测试模块已卸载、pins 和私有挂载已清理、专用临时目录已删除；
+生产服务保持原实例。接手时重新检查设备和 Git 状态。主仓库已有 7 个历史未跟踪实验目录：
+`attribution_bench`、`attribution_precision_probe`、`cookie_tag_probe`、`dns_uid_probe`、
+`first_connection_probe`、`mainline_validation`、`process_identity_probe`，均在 `experimental/`
+下；保留它们，尤其其中被下文引用的证据，不执行全量清理或顺手批量提交。
+
 ## 仓库与范围
 
 - 主实施仓库：`E:\ebpf_sing-box`。
@@ -22,7 +201,7 @@
 |---|---|---|---|
 | 1 | 修复包表刷新与查询一致性 | **已完成**（本地测试与真机验收均通过） | 代码 `35624e63`；记录见“阶段 1 实施记录” |
 | 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | **已完成**（本地、真机与真实 App 验收均通过） | sing-ebpf `3c1b28f`（已推送）；应用依赖 `6252b171`；记录见“阶段 2 实施记录” |
-| 3 | sing-box 接入新归属路径并完成整链路验收 | **归属修复与本轮补充验收完成；完整验收仍有未执行项** | 修复 `cae57485`；实际数据面证据与剩余项见阶段 3 |
+| 3 | sing-box 接入新归属路径并完成整链路验收 | **归属修复、持久创建者第一轮集成及隔离真机验证完成；目标设计与完整验收仍有未完成项** | 修复 `cae57485`；创建者集成 `ee0208de`；实际数据面证据与剩余项见阶段 3 |
 
 阶段 1、2 已有实现及验收记录；阶段 3 已修正 cgroup 进程归属假设，并补做真实数据回包验证。
 阶段是否通过以实际证据为准；未执行和不适用的检查分别列出，不用勾选掩盖未完成项。
