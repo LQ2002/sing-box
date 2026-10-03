@@ -437,6 +437,64 @@ cmdline 为包名。
 IPv6 完整转发、真实版本升级、Framework 重启、真机受控 PID 重用及长期内存行为未验证；
 未物理卸载模块。当前成果不能把阶段 3 整张检查表标为全部通过。
 
+### 与旧模块方案的对照复核（2026-10-03）
+
+用户要求查询、实测后比较性能、速度与准确度。本次比较旧基线为 `7c12b1de`＋模块，
+新基线为 `cae57485`（验收工具与记录 `d8edd60b`）＋同一个模块。二者 go.mod 与模块实现
+没有差异，均使用 sing-ebpf `3c1b28f`；旧版 `TrackProcess=true` 和新版
+`RecordSocketIdentity=true` 都选同一 TC process 变体，因此本组数据主要比较消费端逻辑。
+不要与阶段 2 对更老依赖 `3420ee2` 的内核开销实验混为一次整体对照。
+
+**源码可确定的取舍**：
+- 普通唯一应用：旧版每条连接/新 UDP 会话查模块 cookie，proc 元数据缓存 1 s；新版组缓存
+  命中时不做 ioctl 或 procfs 查询，直接从当前包表返回包名，但 PID 为 0、无可执行路径。
+  组缓存未命中仍需目录扫描，不能仅凭热路径结构推导首次连接必然更快。
+  归属查询主要发生在建连/新会话，不能把省一次 ioctl 按每个数据包计算吞吐收益。
+- 共享/系统 UID：旧版保守不填包名；新版有 cookie 创建者证据、proc 核验及 Manifest 唯一
+  声明后能归包。此路径仍需模块，并增加 cmdline、索引查询和后台 APK 解析成本。
+  79 个运行中进程的历史 Manifest 样本（67 唯一、7 歧义、5 沙箱/隔离）只是声明匹配覆盖，
+  不是 79 条 socket 真值，也不是新方案准确率的分母。
+- 普通 UID 下的原生子进程：旧版保留真实 PID/native 路径；新版快路径按应用组归包。
+  按原生可执行文件名、路径或路径正则的规则因此失去输入；Android `process_path` 用包名
+  匹配的兼容分支仍可工作。按包分流和精确进程分流的收益不能合成一个“准确度提升”。
+- SDK sandbox 新增宿主映射；模块不可用时新版仍能普通应用归包，而特殊创建者保持未知。
+  安装/卸载后 TC 包规则自动跟随也有实际数据面验证；旧基线虽有阶段 1 包表刷新，尚未把
+  该通知接到 TC 规则更新。
+- 模块仍加载时，全局 socket create/free 钩子、分配和哈希维护照常执行。模块
+  `experimental/sb_sockowner_probe/sb_sockowner_probe.c` 没有按查询者需求或普通 App UID
+  停采开关。因此减少 ioctl 不等于消除模块的内核 CPU/内存成本；本次未测卸载模块后的功耗。
+- cgroup PID 误认是阶段 3 中间实现的问题，旧模块方案原本就用真实 cookie 创建者；
+  本轮修复不能重复算作“比旧模块准确”的收益。官方依据：
+  [Linux cgroup 继承/迁移语义](https://docs.kernel.org/admin-guide/cgroup-v2.html#processes)、
+  [Android 多包共享进程语义](https://developer.android.com/guide/topics/manifest/application-element#proc)。
+
+**已有真机配对数据重新核算**：上节五组全部保留。吞吐中位数 95.988→96.940 MiB/s，
+两列差约 +0.99%，逐组差中位数仅 +0.472 MiB/s；数据 p99 有 3 组改善、2 组变慢；
+CPU 中位数 59→60 tick，无稳定降低证据。新版短时 RSS 每组都较高，配对增量中位数
+6464 KiB（约 6.3 MiB）。第五组两版同时明显变慢，不能用五组中位数声称总体显著提速。
+此负载为系统段原生 UID，不验证普通应用快路径的整体收益，未测功耗或最大持续吞吐。
+
+**新增查询微基准准备**：`protocol/ebpf/attribution_query_device_test.go` 可原样放入旧
+`7c12b1de` 源树，直接调用其生产 `lookupProcessInfo`；当前树另加
+`attribution_query_current_device_test.go` 调用 `ownerFromIdentity`。只有同时使用
+`android`、`with_ebpf`、`attribution_query_device` 构建标签并设 `SBO_QUERY_BENCH=1`
+才执行。每轮保存 500 次用户态缓存未命中和 5000 次热查询的原始 ns，五轮，并保存空计时器
+分布。前者不等于 App 冷启动，计时不包含包表初始化、缓存重置或结果校验。
+
+模块输入为测试进程实际创建、保持打开且未 connect 的原生 TCP socket；快路径输入为
+真实已安装普通 App 的 UID/组目录 inode 构成的受控 identity，并非 TC 实际采集的 App
+socket。两种输出的语义和 fixture 不同，只能分别描述函数成本，不能据此计算同一 App
+的整体加速倍数。运行不会加载 BPF、发网络包、迁组、安装 App 或更改用户服务。
+
+本次准备时 `adb devices -l` 为空，新增真机查询耗时尚未取得。上文数字仍来自上一轮
+已完成的配对验收；不能把本次编译准备写成新增真机性能或准确率结果。
+两版最终测试程序均已通过 Android arm64 交叉编译；模块输出逐次核对实际 `/proc/self/exe`
+绝对路径，comm-only 回退不能冒充已核验元数据。产物位于原有 `results/`：
+- `query-current.test`：SHA-256
+  `5701ec28f528e95c41e860b4dd3fe83d4adbabdd67c3842f047439c388f623da`。
+- `query-old.test`（`7c12b1de` 源树＋同一公共测试文件）：SHA-256
+  `bfb5ef749be302a923cdd12eca2dbf08588057de668325f5a29bd267f6ac796f`。
+
 **移植清单（→ `E:\Ref_sing-box`）**：
 - 依赖：`github.com/LQ2002/sing-ebpf` `3c1b28f0eb65`（`UpdateUIDPolicy`、
   `TCConfig.RecordSocketIdentity`、`TCAssignment.SocketUID/SocketCgroupID/IdentityFlags`）。
