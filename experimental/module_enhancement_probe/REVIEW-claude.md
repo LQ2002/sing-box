@@ -302,3 +302,49 @@ binder 仅适合诊断；DNS 仍需一次测量包 socket UID 的复测。落地
 每项先在真机验证再接入生产；开销以三态 `socket()` 微基准或分段计时（扣除时钟自身开销）实测。
 
 双方在方向上已基本一致；以上分歧均在数字与措辞，不涉及架构方向。
+
+---
+
+# 第六次审查：对 Gemini 回应（`E:\work_sb\006.txt`）的意见（2026-10-04）
+
+本节只记录意见，不修改探针文件。
+
+## 当日核实的事实
+
+- 设备 `/data` 为 f2fs（`/dev/block/dm-62 /data f2fs ...`）。f2fs 分配新 inode 时
+  `inode->i_generation = get_random_u32()`（`fs/f2fs/namei.c:253`），落盘与读回见 `fs/f2fs/inode.c:438/712`。
+  即文件删除后 inode 号可被新文件复用，仅 generation 不同。`/system` 为只读分区，无复用问题。
+- 本机 exe 指针链（`mm → exe_file → f_inode`）实测：先执行者约 1.0 µs（`avg_exe_direct_ns=1233` 减
+  `avg_clock_ns=187`），后执行（缓存热）约 0.05 µs（`avg_exe_ns=240` 减时钟）。见
+  `experimental/creator_v2_probe/results/capture-breakdown.log` 及计划文档“真机预验证 1”。开销由 cache miss 主导。
+
+## 认可
+
+- 大方向一致：accept 用 `BPF_F_CLONE`、TC 按 cookie 不等判定继承；模块现场取路径并加缓存；字符设备生命周期
+  开关；binder 由模块读取、作为诊断。分阶段顺序（先 CLONE，再路径与生命周期，最后 binder）合理。
+- 路径缓存方向正确，可把 netd、`iptables-restore` 等高频原生程序的开销从约 1.5 µs 降下来。
+
+## 分歧与更正
+
+1. **缓存键须含 `i_generation`，否则可能返回错误路径。** 依据 `fs/f2fs/namei.c:253`：`/data` 上 inode 号可复用、
+   generation 随机更新。键应为 `(s_dev, i_ino, i_generation)`。文件改名/移动时 inode 不变，缓存路径会过期，
+   应加有效期兜底。钩子在多 CPU 并发执行，共享缓存需加锁或每 CPU 一份；草案未涉及，加锁时“<10 ns”不成立。
+2. **“Java 门控 <5 ns”“命中缓存 <10 ns”与实测矛盾。** 门控须先读 `current->mm->exe_file->f_inode` 才得到
+   `(dev, ino)`，该指针链冷约 1 µs、热约 50 ns，开销来自 cache miss 而非比较本身。
+   可实际节省之处：现行 BPF producer 已在读同一指针链取 exe inode；改由模块读一次，并经 tracepoint 参数把
+   `(dev, ino, generation)` 交给 BPF，BPF 不再重复读，则模块门控几乎不增加净开销。
+3. **第三阶段写成“诊断与策略增强”，与用户要求冲突。** 用户要求代发流量按发送者路由，binder 调用方只能作诊断，
+   不能进入路由策略。“事务 ↔ socket”对应关系仍未验证，第五次审查第 4 点未获回应。
+4. **仍沿用已更正或缺少依据的说法（第五次审查已指出，本轮未回应）：** 架构图中 `BPF_F_CLONE` 仍写“<10 ns”
+   （克隆有 `GFP_ATOMIC` 分配）；“停采降至 100 ns”主要是时钟读数；“零内存泄漏”不能由 taint 不变推出。
+5. **“100% 完全共识”言过其实。** 第五次审查原文为“方向基本一致，分歧在数字与措辞”，且仍有上述未解决项。
+
+## 落地顺序（修订）
+
+1. accept 继承：`BPF_F_CLONE`；放开 producer map、collector、sing-ebpf 三处校验；TC 按 cookie 不等判定继承并标记。
+2. 模块现场读一次 exe，把 `(dev, ino, generation)` 经 typed tracepoint 交给 BPF，BPF 不再重复读取；仅原生程序
+   取路径；路径缓存以 `(dev, ino, generation)` 为键、设有效期、每 CPU 一份或加锁。
+3. 字符设备生命周期开关：0600、持有者原子计数，可选配置，默认保持 pin 持久化。
+4. binder 调用方仅作诊断，先验证“事务 ↔ socket”对应关系，不参与路由。
+
+开销一律以三态 `socket()` 对比或扣除时钟开销的分段计时实测。
