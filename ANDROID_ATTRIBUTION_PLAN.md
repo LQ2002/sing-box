@@ -486,6 +486,20 @@ E1–E3 纯函数解析）。只引用上面已记录的实测；没有测过的
 | 借 BL 改 framework/APEX 打标 | 技术可行，代价高 | 每次 OTA 需重做并处理签名/校验；收益受结论 38 限制，且与“按发送者路由”冲突 |
 | “源码保证”SDK 沙箱、DownloadManager、IPv6、功耗零影响 | 不能替代实测 | E3 已实现但本机 Killswitch 开启；功耗未测 |
 
+**第二版补充核查**（Gemini 联网后的版本；与上表重复的 LSM、TASK_STORAGE、不 pin link、精简 BTF 不再重列）：
+- “fchown 只改 sockfs inode，`sk_uid` 仍是 AID_DNS”：**错误**。`net/socket.c:599-614`
+  `sockfs_setattr` 在 `ATTR_UID` 时执行 `sock->sk->sk_uid = iattr->ia_uid`；研究结论 28 也在真机上用
+  `bpf_get_socket_uid()` 读到了 App UID。`resolv_tag_socket` 同时 `tagSocket(..., TAG_SYSTEM_DNS, uid)`
+  这一点属实，TC 现有的 charge 读取已经覆盖。
+- “Java HTTP 客户端在 connect 之后才打标签，所以首包查不到”：**与源码不符**。libcore
+  `BlockGuardOs.socket()`/`accept()`/`socketpair()` 在 inet socket 创建后立即 `SocketTagger.tag(fd)`，
+  线程标签（`setThreadStatsTag`/`setThreadStatsTagUid`）在 connect 前已写入 `cookie_tag_map`；只有 App
+  事后显式调用 `TrafficStats.tagSocket()` 才可能晚于首包，未见证据。
+- `BPF_F_CLONE`：机制正确（`net/core/bpf_sk_storage.c:175`），但“0 额外代码、100% 继承”不准确：克隆值
+  带着 listener 的 cookie，现有 TC 校验 `creator.cookie == socket cookie` 会拒收，需要改 TC 的接受规则并
+  标记“继承”；继承的是 listener 创建者，对服务进程而言即发送者。
+- 原生子进程路径按 exe inode 按需走 /proc：与上表第 ① 项相同，赞同。
+
 可采纳的后续项（按收益/成本）：① UID 快路径为 App 原生子进程补可执行路径（用户态）；② 查明整服务验收中
 App DNS 请求方缺失的原因；③ 可选“停止即停采”开关；④ accept 子 socket 用 `BPF_F_CLONE` 继承；
 ⑤ 若用户希望去掉模块，先用独立探针评估 `inet_sock_set_state` + `sock_send_length` 的时序与覆盖。
