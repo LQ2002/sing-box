@@ -673,8 +673,16 @@ LSPosed、su shell 在根 cgroup。在模块内计时实测中，建 sk_storage 
 - 真机 producer 门控（`sbo-acceptance producercheck`，生产对象挂桥接模块 `capture_all=1`）：校验器接受
   （263 条指令）；根 cgroup 200/200 有快照、`pid_<自己>` 0/200、`pid_<他人>` 200/200、移回后 200/200；
   桥接模块已卸载、临时 cgroup 已删除、taint 4608。
-- **未执行**：整链路真机验收（新 sing-box + TC + 真实 App 连接，看 `resolved_by_cgroup_process` 与归包
-  正确性、开销）。
+- 整链路真机验收（`experimental/creator_v2_probe/fullservice/fullservice.sh accuracy 150`，仓库编译设置构建的
+  新 sing-box、桥接模块 + 新 producer、测试配置只有 direct 出站，生产 sing-box 保持用户停止的状态；冷启动
+  Chrome、微信、手机管家、哔哩哔哩，dumpsys 进程记录为真值；结果
+  `experimental/module_enhancement_probe/results/cgroup-fullservice/accuracy-analysis.txt`）：53 条归属，
+  **错误 0**；带 PID 的 6 条与 ActivityManager 记录一致（含 uid 1000 的 `com.miui.securitycenter.remote`、
+  `:cache`，uid 6110 的 `com.xiaomi.finddevice`——均在自己的 cgroup，producer 不建快照，经 cgroup 路径归包）；
+  netd 23 条按发送者归 `/system/bin/netd`（pid 2006，原生无 AMS 真值）；普通 App 22 条按 UID；system_server
+  1 条判未知（多包进程，正确）；1 条进程在快照前已退出。之后已移除 collector、卸载桥接模块、关屏，taint 4608。
+- **未执行**：该整链路运行没有导出 `resolved_by_cgroup_process` 计数（诊断只经 API 暴露），上述经 cgroup
+  路径的结论由“进程在自己 cgroup → producer 必然跳过”推得；开销的整链路复测未做（模块内计时见增强模块探针）。
 
 剩余（按顺序）：整链路真机验收；sing-ebpf 放开 `BPF_F_CLONE` 与 TC 继承标记（accept 子连接；其 cgroup
 已随 `cgroup_sk_clone` 继承监听者，App 监听者无快照时已能经 cgroup 归属）；以增强模块替换桥接模块
@@ -701,7 +709,7 @@ LSPosed、su shell 在根 cgroup。在模块内计时实测中，建 sk_storage 
 | 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | **已完成**（本地、真机与真实 App 验收均通过） | sing-ebpf `3c1b28f`（已推送）；应用依赖 `6252b171`；记录见“阶段 2 实施记录” |
 | 3 | sing-box 接入新归属路径并完成整链路验收 | **归属修复、持久创建者第一轮集成及隔离真机验证完成；目标设计与完整验收仍有未完成项** | 修复 `cae57485`；创建者集成 `ee0208de`；实际数据面证据与剩余项见阶段 3 |
 | 目标设计 | creator v2（创建时进程名哈希、exe inode）、netd 请求方、E1–E3 解析 | **实现完成；本机、隔离真机、整服务真实 App（正确 22/错误 0）与新旧配对（稳态无可测差异，内存经 `madvdontneed=1` 持平）均已验收**；sing-ebpf 已推送（`6ab9da7`），`go.mod` 已升级（`6f291cf8`） | 分支 `claude/attribution-target-design`；sing-ebpf `aa849f4`、`6ab9da7`；见“Claude 目标设计”的预验证与验收矩阵 |
-| cgroup 分工 | 创建者在自己的 `pid_<tgid>` cgroup 时不建快照，由 socket cgroup 定位进程 | **producer 与用户态实现完成；本机测试与真机 producer 门控验证通过；整链路真机验收未执行** | 见“cgroup 分工（2026-10-04）” |
+| cgroup 分工 | 创建者在自己的 `pid_<tgid>` cgroup 时不建快照，由 socket cgroup 定位进程 | **实现完成；本机测试、真机 producer 门控、整链路真实 App（错误 0）验收通过** | 见“cgroup 分工（2026-10-04）” |
 
 阶段 1、2 已有实现及验收记录；阶段 3 已修正 cgroup 进程归属假设，并补做真实数据回包验证。
 阶段是否通过以实际证据为准；未执行和不适用的检查分别列出，不用勾选掩盖未完成项。
