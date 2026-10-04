@@ -33,6 +33,7 @@ import (
 	"strconv"
 
 	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
+	"github.com/sagernet/sing-box/common/socketidentity"
 )
 
 const (
@@ -98,6 +99,10 @@ func socketOwnerFromCreator(creator commonEBPF.SocketCreator) SocketOwner {
 	if creator.HasExecutable() && creator.ExeInode != 0 {
 		owner.exeInode, owner.hasExe = creator.ExeInode, true
 	}
+	if creator.Flags&socketidentity.CreatorExeKey != 0 && creator.ExeInode != 0 {
+		owner.exeKey, owner.hasExeKey = creator.ExeInode, true
+	}
+	owner.exeFlags = creator.Flags & (socketidentity.CreatorPathTooLong | socketidentity.CreatorExeDeleted | socketidentity.CreatorKernel)
 	return owner
 }
 

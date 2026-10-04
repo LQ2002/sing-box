@@ -191,6 +191,9 @@ type testSocketCreatorCollector struct {
 }
 
 func (*testSocketCreatorCollector) Map() *ebpf.Map { return nil }
+func (*testSocketCreatorCollector) LookupPath(uint64) (socketidentity.PathValue, bool) {
+	return socketidentity.PathValue{}, false
+}
 func (c *testSocketCreatorCollector) Close() error {
 	c.closes++
 	if c.fail {

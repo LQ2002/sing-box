@@ -1,0 +1,2 @@
+# kernel/sbo_identity is built in WSL: shell, Python, Makefile and C must stay LF
+kernel/** text eol=lf

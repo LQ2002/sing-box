@@ -125,7 +125,7 @@ remain in use.
     "data_plane": "tc",
     "socket_creator": {
       "enabled": true,
-      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v1"
+      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v3"
     }
   }
 }
@@ -134,11 +134,16 @@ remain in use.
 `pin_path` defaults to the value shown and must be an absolute, dedicated bpffs
 directory owned by root with mode `0700`. Its ancestors must be root-owned;
 writable ancestors must have the sticky bit, as Android's usual `01777` bpffs
-mount does. Symlinks are rejected. An administrator must first load a matching `sbo_identity_bridge`
-kernel module with `capture_all=1`. sing-box neither loads the module nor changes
-its switch. The collector records the creation PID, thread ID, creator UID,
-process birth time and truncated comm, then delivers them through the existing
-TC path. Socket accounting UID and comm are not proof of an exact package.
+mount does. Symlinks are rejected. An administrator must first load a matching `sbo_identity`
+kernel module (`kernel/sbo_identity`) with `capture_all=1`. sing-box neither loads the
+module nor changes its switch. Sockets whose creator is the process its Android cgroup
+(`.../uid_X/pid_<pid>`) is named after get no record: the socket's cgroup, which TC
+records, identifies the process and its name and executable come from `/proc`. For
+every other socket the collector records the creation PID, thread ID, creator UID,
+process birth time, truncated comm, an argv[0] hash and the executable path resolved
+in the kernel at creation, then delivers them through the existing TC path; the path
+survives the creator's exit. Socket accounting UID and comm are not proof of an exact
+package.
 
 An explicitly enabled collector failing to load prevents the inbound from
 starting. Sockets without creation records, including older sockets and accepted
@@ -156,7 +161,7 @@ not remove a previously pinned collector. To remove it, stop every sing-box
 instance using the directory, then run:
 
 ```shell
-sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v1
+sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v3
 ```
 
 This command does not unload the bridge module. Removal refuses active users.

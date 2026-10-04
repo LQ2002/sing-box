@@ -688,6 +688,40 @@ LSPosed、su shell 在根 cgroup。在模块内计时实测中，建 sk_storage 
 已随 `cgroup_sk_clone` 继承监听者，App 监听者无快照时已能经 cgroup 归属）；以增强模块替换桥接模块
 （原生程序完整路径，且须保留 argv[0] 哈希）。
 
+### 增强模块 sbo_identity（2026-10-04）
+
+`kernel/sbo_identity`（README 说明参数、构建与加载）取代 `sbo_identity_bridge`。设计与全部测量来自
+`experimental/module_enhancement_probe`（REVIEW-claude.md 第 8–13 次审查、results/）。
+
+实现：
+
+- 模块（C）：`android_vh_sock_create` 中只处理用户 inet socket；创建者在自己的 `pid_<tgid>` cgroup 时直接返回
+  （不运行 BPF、不建快照；cgroup 门控从上一版 producer 移入模块）；其余经 RCU 校验读取可执行文件
+  `(dev, ino, i_generation)`、按 CPU 缓存、未命中时 `get_file_rcu`+`d_path`+`fput`，经 typed tracepoint
+  `sbo_identity_socket(sk, dev, ino, gen, path, path_len, flags)` 交出路径与 TOO_LONG/DELETED/KERNEL/ERROR 标志。
+  socket 与 cgroup 相关字段按真机 BTF 生成的偏移读取（`gen_layout.py`），`verify_btf.py` 校验 tracepoint 的
+  sk 为设备 `struct sock` 及其余所有解引用字段的偏移。参数沿用 `capture_all`（collector 只检查、不修改）。
+- producer v3（`common/socketidentity/bpf/creator.bpf.c`）：仍读 argv[0] 并记 FNV-1a 64 哈希（共享 UID 归包所需）；
+  快照 64 字节 ABI 不变，原 exe inode 字段改存可执行文件键（`ExeKey`，标志位 4 `CreatorExeKey`），路径按键
+  只存一次于 LRU `exe_paths`；新标志位 5–7：路径过长、已删除、内核线程。sing-ebpf 只解释 VALID 位，无需改动。
+- collector：模块名 `sbo_identity`、目录 `socket-creator-v3`、v1/v2 残留 pins 时拒绝启动；新增 `exe-paths` pin、
+  metadata 记录路径表 ID（原 4 字节保留位）；核对 producer 恰好引用 creators、exe_paths 与一个 scratch map。
+- 用户态：快照带 exe key 时直接从路径表取路径，不读 `/proc`（创建者退出后仍有路径）；表中缺失（被淘汰）
+  再回退 `/proc`。诊断新增 `creator_exe_path_from_snapshot`、`creator_exe_path_missing`。
+
+验证（结果：`experimental/module_enhancement_probe/results/sbo-identity-fullservice/`）：
+
+- 本机：vet（android/arm64、本机、integration 标签）、单元、race 全部通过；新增测试：快照路径在创建者退出后仍可得、
+  路径表缺失时回退 `/proc`、app_process 路径仍走 E1、ExeKey 字节布局；collector 校验新增路径表 ID/形状/引用集合用例。
+- 真机 producercheck：校验器接受（305 条指令）；根 cgroup 与他人 pid 目录 200/200 快照，均带 argv 哈希与 exe key，
+  路径表路径等于 `/proc/self/exe`；自有 cgroup 0/200（模块跳过）。
+- 真机整链路（测试配置 direct 出站，生产 sing-box 保持停止）：45 条归属错误 0（带 PID 5 条与 ActivityManager 一致、
+  netd 21、App 按 UID 17、system_server 未知 1）；模块计数 inet 5815，其中自有 cgroup 4427（76%）不发事件，
+  缓存命中 1366/未命中 22，非 inet 10913 在入口返回；`get_file_rcu=fput=22`。根 cgroup 中的原生程序（KernelSU
+  shell 中的 `nc`）4 个连接均归为其路径与 PID。收尾后模块卸载、taint 4608。
+- **未执行**：模块版的长时间运行（与持续内核日志捕获）及整链路开销复测；路径过长/已删除的整链路场景（模块级已在
+  探针 quick 中验证）。
+
 ## 仓库与范围
 
 - 主实施仓库：`E:\ebpf_sing-box`。
@@ -710,6 +744,7 @@ LSPosed、su shell 在根 cgroup。在模块内计时实测中，建 sk_storage 
 | 3 | sing-box 接入新归属路径并完成整链路验收 | **归属修复、持久创建者第一轮集成及隔离真机验证完成；目标设计与完整验收仍有未完成项** | 修复 `cae57485`；创建者集成 `ee0208de`；实际数据面证据与剩余项见阶段 3 |
 | 目标设计 | creator v2（创建时进程名哈希、exe inode）、netd 请求方、E1–E3 解析 | **实现完成；本机、隔离真机、整服务真实 App（正确 22/错误 0）与新旧配对（稳态无可测差异，内存经 `madvdontneed=1` 持平）均已验收**；sing-ebpf 已推送（`6ab9da7`），`go.mod` 已升级（`6f291cf8`） | 分支 `claude/attribution-target-design`；sing-ebpf `aa849f4`、`6ab9da7`；见“Claude 目标设计”的预验证与验收矩阵 |
 | cgroup 分工 | 创建者在自己的 `pid_<tgid>` cgroup 时不建快照，由 socket cgroup 定位进程 | **实现完成；本机测试、真机 producer 门控、整链路真实 App（错误 0）验收通过** | 见“cgroup 分工（2026-10-04）” |
+| 增强模块 | `sbo_identity` 模块取代桥接模块：自有 cgroup 门控移入模块、创建现场解析可执行文件完整路径，producer v3 | **实现完成；本机测试、真机 producer 与整链路（错误 0）验收通过** | 见“增强模块 sbo_identity（2026-10-04）” |
 
 阶段 1、2 已有实现及验收记录；阶段 3 已修正 cgroup 进程归属假设，并补做真实数据回包验证。
 阶段是否通过以实际证据为准；未执行和不适用的检查分别列出，不用勾选掩盖未完成项。

@@ -1,53 +1,41 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Creation-time identity only: no task registration, owner table, or TC program.
+//
+// Attached to sbo_identity_socket, the typed tracepoint of the sbo_identity
+// kernel module (kernel/sbo_identity). The module has already decided:
+//   - the socket is a user inet socket (AF_INET/AF_INET6, !sk_kern_sock);
+//   - its creator is NOT the process its cgroup is named after (those
+//     sockets fire nothing: the socket cgroup, recorded by TC, identifies
+//     the creator and userspace reads the rest from /proc - device probe
+//     5453/5453 app_process sockets in their creator's own cgroup);
+//   - the creator's executable (dev, ino, generation) and its full path,
+//     resolved in the kernel at creation (d_path), so even a process that
+//     exits before userspace looks keeps its path.
+// This program records the snapshot TC copies (64 bytes, ABI unchanged:
+// sing-ebpf native/tc.bpf.c) and stores each executable's path once, in
+// `exe_paths`, keyed by a hash of (dev, ino, generation) that the snapshot
+// carries in place of the inode (CREATOR_EXE_KEY).
 #include <linux/bpf.h>
 #include <bpf_helpers.h>
 #include <bpf_core_read.h>
 #include <bpf_tracing.h>
 
-struct inode {
-    unsigned long i_ino;
-} __attribute__((preserve_access_index));
-
-struct file {
-    struct inode *f_inode;
-} __attribute__((preserve_access_index));
+typedef __u32 dev_t;
 
 // In 6.12 these fields sit inside an anonymous struct of mm_struct; CO-RE
 // member matching descends into anonymous members.
 struct mm_struct {
     unsigned long arg_start;
     unsigned long arg_end;
-    struct file *exe_file;
-} __attribute__((preserve_access_index));
-
-struct kernfs_node {
-    const char *name;
-} __attribute__((preserve_access_index));
-
-struct cgroup {
-    struct kernfs_node *kn;
-} __attribute__((preserve_access_index));
-
-struct css_set {
-    struct cgroup *dfl_cgrp;
 } __attribute__((preserve_access_index));
 
 struct task_struct {
     struct task_struct *group_leader;
     __u64 start_boottime;
     struct mm_struct *mm;
-    struct css_set *cgroups;
 } __attribute__((preserve_access_index));
 
-struct sock_common {
-    __u16 skc_family;
-} __attribute__((preserve_access_index));
-
-struct sock {
-    struct sock_common __sk_common;
-    __u8 sk_kern_sock : 1;
-} __attribute__((preserve_access_index));
+struct sock;
 
 struct socket_creator {
     __u64 cookie;
@@ -58,16 +46,28 @@ struct socket_creator {
     __u32 flags;
     char comm[16];
     __u64 process_name_hash;
-    __u64 exe_inode;
+    __u64 exe_inode; // with CREATOR_EXE_KEY: the exe_paths key, not an inode
 };
 
-// Flag bits, mirrored by sing-ebpf (native/tc.bpf.c) and identity.go.
+// Flag bits, mirrored by sing-ebpf (native/tc.bpf.c, bits 0-3) and
+// identity.go (all). sing-ebpf only interprets CREATOR_VALID.
 #define CREATOR_VALID (1U << 0)
 #define CREATOR_NAME_VALID (1U << 1)
-#define CREATOR_EXE_VALID (1U << 2)
+#define CREATOR_EXE_VALID (1U << 2)      // v2 producer only; never set here
 #define CREATOR_NAME_TRUNCATED (1U << 3)
+#define CREATOR_EXE_KEY (1U << 4)        // exe_inode is an exe_paths key
+#define CREATOR_PATH_TOO_LONG (1U << 5)  // path >= 256 bytes, not stored
+#define CREATOR_EXE_DELETED (1U << 6)    // executable was unlinked
+#define CREATOR_KERNEL (1U << 7)         // creator had no mm (kernel thread)
 #define CREATOR_NAME_LENGTH_SHIFT 8
 #define ARGV_MAX 128
+#define PATH_LEN 256 // PATH_MAX_LEN in kernel/sbo_identity/sbo_identity.c
+
+// Mirrors SBO_EVENT_* in kernel/sbo_identity/sbo_identity_trace.h.
+#define SBO_EVENT_PATH (1U << 0)
+#define SBO_EVENT_TOO_LONG (1U << 1)
+#define SBO_EVENT_DELETED (1U << 2)
+#define SBO_EVENT_KERNEL (1U << 4)
 
 _Static_assert(sizeof(struct socket_creator) == 64, "creator size");
 _Static_assert(__builtin_offsetof(struct socket_creator, cookie) == 0, "cookie offset");
@@ -87,9 +87,38 @@ struct {
     __type(value, struct socket_creator);
 } socket_creators SEC(".maps");
 
-// v2 creation-time facts, each behind its own flag so a failed read leaves
-// only that fact unknown (the snapshot stays valid).
-//
+// One entry per executable; identity.go PathValue mirrors it.
+struct exe_path {
+    __u32 dev;
+    __u32 generation;
+    __u64 inode;
+    __u32 length;
+    __u32 flags; // CREATOR_EXE_DELETED
+    char path[PATH_LEN];
+};
+
+_Static_assert(sizeof(struct exe_path) == 280, "exe path size");
+
+// LRU so a device running many distinct binaries cannot fill it; an evicted
+// executable is stored again on its next socket, since every event carries
+// the path. 1024 entries: an hour on the device saw 13 distinct executables
+// among sockets that get a snapshot.
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u64);
+    __type(value, struct exe_path);
+} exe_paths SEC(".maps");
+
+// Builds an exe_path (280 bytes) off the 512-byte stack, which also holds
+// the snapshot and the 128-byte argv buffer.
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct exe_path);
+} exe_path_scratch SEC(".maps");
+
 // argv[0] is the ActivityManager process record name: zygote's setArgv0 sets
 // it before any app code can run (AndroidRuntime::setArgv0, called from
 // Zygote.setAppProcessName). It is copied with strlcpy into zygote's original
@@ -101,9 +130,7 @@ struct {
 // flag is harmless because no manifest name is involved.
 //
 // Device probe (experimental/creator_v2_probe): 865/865 events matched /proc
-// cmdline and /proc exe inode with zero read failures; this section costs
-// about 2 us per inet socket, dominated by cache misses on the argv page and
-// the mm/exe_file/inode chain, not by hashing.
+// cmdline with zero read failures.
 static __always_inline void record_process_name(struct task_struct *task, struct socket_creator *creator)
 {
     struct mm_struct *mm = BPF_CORE_READ(task, mm);
@@ -127,64 +154,51 @@ static __always_inline void record_process_name(struct task_struct *task, struct
         if (read == ARGV_MAX || (arg_end > arg_start && (__u64)read >= arg_end - arg_start))
             creator->flags |= CREATOR_NAME_TRUNCATED;
     }
-    __u64 inode = BPF_CORE_READ(mm, exe_file, f_inode, i_ino);
-    if (inode) {
-        creator->exe_inode = inode;
-        creator->flags |= CREATOR_EXE_VALID;
-    }
 }
 
-// Division of labour with the socket cgroup (ANDROID_ATTRIBUTION_PLAN.md,
-// "cgroup 分工"): Android gives every process it starts - apps, system-UID
-// apps, init services - its own cgroup v2 directory .../uid_<uid>/pid_<pid>,
-// and the kernel stamps the creator's cgroup on the socket (cgroup_sk_alloc),
-// which TC already records. When the creating process is the one its cgroup
-// is named after, that cgroup identifies it exactly, so no snapshot is
-// needed: userspace resolves the cgroup to the process and reads its name
-// (argv[0]) and executable from /proc. Device probe: 5453/5453 app_process
-// sockets were in their creator's own cgroup. Skipping saves the sk_storage
-// allocation (~570 ns hot) and the argv/exe reads.
-//
-// Everything else still gets a snapshot: native children and app-zygote
-// children inherit a parent's cgroup (pid_<parent>), and KernelSU/zygisk
-// daemons, su shells and sing-box itself all live in the root cgroup.
-#define CGROUP_NAME_MAX 24
-
-static __always_inline int in_own_process_cgroup(struct task_struct *task, __u32 tgid)
+// FNV-1a 64 over (dev, generation, inode) as 16 little-endian bytes; Go's
+// socketidentity.ExeKey computes the same.
+static __always_inline __u64 exe_key(__u32 dev, __u32 generation, __u64 inode)
 {
-    const char *name = BPF_CORE_READ(task, cgroups, dfl_cgrp, kn, name);
-    char buf[CGROUP_NAME_MAX] = {};
-    if (!name || bpf_probe_read_kernel_str(buf, sizeof(buf), name) < 6)
-        return 0;
-    if (buf[0] != 'p' || buf[1] != 'i' || buf[2] != 'd' || buf[3] != '_')
-        return 0;
-    __u64 value = 0;
-    for (int i = 4; i < CGROUP_NAME_MAX; i++) {
-        char c = buf[i];
-        if (c == 0)
-            return i > 4 && value == tgid;
-        if (c < '0' || c > '9')
-            return 0;
-        value = value * 10 + (c - '0');
+    __u64 hash = 0xcbf29ce484222325ULL;
+    __u64 words[2] = {(__u64)dev | ((__u64)generation << 32), inode};
+    for (int w = 0; w < 2; w++) {
+        for (int b = 0; b < 8; b++) {
+            hash ^= (words[w] >> (8 * b)) & 0xff;
+            hash *= 0x100000001b3ULL;
+        }
     }
-    return 0;
+    return hash;
 }
 
-SEC("tp_btf/sbo_identity_socket_create")
-int BPF_PROG(capture_creator, struct sock *sk)
+static __always_inline void remember_path(__u64 key, __u32 dev, __u32 generation, __u64 inode,
+                                          const char *path, __u32 length, __u32 flags)
 {
-    if (!sk || BPF_CORE_READ_BITFIELD_PROBED(sk, sk_kern_sock))
-        return 0;
-    __u16 family = sk->__sk_common.skc_family;
-    if (family != 2 && family != 10)
-        return 0;
-    if (bpf_sk_storage_get(&socket_creators, sk, 0, 0))
+    if (bpf_map_lookup_elem(&exe_paths, &key))
+        return;
+    __u32 zero = 0;
+    struct exe_path *value = bpf_map_lookup_elem(&exe_path_scratch, &zero);
+    if (!value)
+        return;
+    value->dev = dev;
+    value->generation = generation;
+    value->inode = inode;
+    value->length = length;
+    value->flags = flags & SBO_EVENT_DELETED ? CREATOR_EXE_DELETED : 0;
+    if (bpf_probe_read_kernel_str(value->path, sizeof(value->path), path) < 0)
+        return;
+    bpf_map_update_elem(&exe_paths, &key, value, BPF_NOEXIST);
+}
+
+SEC("tp_btf/sbo_identity_socket")
+int BPF_PROG(capture_creator, struct sock *sk, dev_t dev, unsigned long ino, __u32 gen,
+             const char *path, __u32 path_len, __u32 event)
+{
+    if (!sk || bpf_sk_storage_get(&socket_creators, sk, 0, 0))
         return 0;
 
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     struct task_struct *task = bpf_get_current_task_btf();
-    if (in_own_process_cgroup(task, pid_tgid >> 32))
-        return 0;
     struct socket_creator creator = {
         .cookie = bpf_get_socket_cookie(sk),
         .process_id = pid_tgid >> 32,
@@ -199,10 +213,26 @@ int BPF_PROG(capture_creator, struct sock *sk)
     if (bpf_get_current_comm(creator.comm, sizeof(creator.comm)))
         return 0;
     creator.flags = CREATOR_VALID;
-    record_process_name(task, &creator);
+    if (event & SBO_EVENT_KERNEL) {
+        creator.flags |= CREATOR_KERNEL;
+    } else {
+        record_process_name(task, &creator);
+    }
+    if (event & (SBO_EVENT_PATH | SBO_EVENT_TOO_LONG)) {
+        __u64 key = exe_key(dev, gen, ino);
+        creator.exe_inode = key;
+        creator.flags |= CREATOR_EXE_KEY;
+        if (event & SBO_EVENT_DELETED)
+            creator.flags |= CREATOR_EXE_DELETED;
+        if (event & SBO_EVENT_TOO_LONG)
+            creator.flags |= CREATOR_PATH_TOO_LONG;
+        else if (path_len > 0)
+            remember_path(key, dev, gen, ino, path, path_len, event);
+    }
 
     // The helper copies the complete initial value only when creating storage.
-    // It never replaces an existing snapshot. No BPF_F_CLONE: accept is unknown.
+    // It never replaces an existing snapshot. No BPF_F_CLONE: an accepted child
+    // inherits the listener's cgroup (cgroup_sk_clone) instead.
     bpf_sk_storage_get(&socket_creators, sk, &creator, BPF_SK_STORAGE_GET_F_CREATE);
     return 0;
 }

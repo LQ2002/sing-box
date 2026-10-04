@@ -23,6 +23,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/androidmanifest"
 	"github.com/sagernet/sing-box/common/androidpackages"
+	"github.com/sagernet/sing-box/common/socketidentity"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/contrab/freelru"
@@ -72,7 +73,11 @@ var socketOwnerCache = sync.OnceValue(func() *freelru.Cache[socketOwnerCacheKey,
 })
 
 func (i *Inbound) resolveSocketOwner(ctx context.Context, owner SocketOwner) *adapter.ConnectionOwner {
-	key := socketOwnerCacheKey{ProcessID: owner.ProcessID, UserID: owner.UserID, StartTimeNs: owner.StartTimeNs, ExeInode: owner.exeInode}
+	exe := owner.exeInode
+	if owner.hasExeKey {
+		exe = owner.exeKey
+	}
+	key := socketOwnerCacheKey{ProcessID: owner.ProcessID, UserID: owner.UserID, StartTimeNs: owner.StartTimeNs, ExeInode: exe}
 	cache := socketOwnerCache()
 	var rawInfo *socketOwnerMetadata
 	var cached bool
@@ -86,7 +91,12 @@ func (i *Inbound) resolveSocketOwner(ctx context.Context, owner SocketOwner) *ad
 	}
 	verified := cached
 	if !cached {
-		rawInfo, verified = i.resolveThroughProcDir(owner)
+		// A snapshot with a kernel-resolved path needs no /proc read at all:
+		// it holds for a creator that has since exited or exec'd.
+		rawInfo, verified = i.resolveFromSnapshotPath(owner)
+		if !verified {
+			rawInfo, verified = i.resolveThroughProcDir(owner)
+		}
 		if verified && cache != nil {
 			cache.Add(key, rawInfo)
 		}
@@ -190,6 +200,34 @@ func logResolvedOwner(ctx context.Context, logger log.ContextLogger, info *adapt
 // One proc directory FD keeps stat/status/exe reads on the same process
 // instance; later PID reuse does not retarget that FD. The proc start time is
 // only available in USER_HZ ticks, not nanoseconds.
+// resolveFromSnapshotPath builds the owner from a snapshot alone when the
+// sbo_identity module resolved the creator's executable at creation: the
+// path from the collector's path map, the name from the snapshot's argv[0]
+// hash (packageFromSnapshot). false when the snapshot has no exe key or the
+// path is not stored (longer than 256 bytes, or evicted from the LRU map);
+// the caller then falls back to /proc.
+func (i *Inbound) resolveFromSnapshotPath(owner SocketOwner) (*socketOwnerMetadata, bool) {
+	if !owner.hasExeKey || owner.exeFlags&socketidentity.CreatorPathTooLong != 0 || i.socketCreator == nil {
+		return nil, false
+	}
+	value, found := i.socketCreator.LookupPath(owner.exeKey)
+	if !found {
+		i.identityCounters.exePathMissing.Add(1)
+		return nil, false
+	}
+	path := value.String()
+	if path == "" || !filepath.IsAbs(path) {
+		return nil, false
+	}
+	if value.Flags&socketidentity.CreatorExeDeleted != 0 {
+		path += deletedPathSuffix
+	}
+	info := &adapter.ConnectionOwner{ProcessID: owner.ProcessID, UserId: int32(owner.UserID), ProcessPaths: []string{path}}
+	completeOwnerUser(info)
+	i.identityCounters.exePathFromSnapshot.Add(1)
+	return &socketOwnerMetadata{ConnectionOwner: info}, true
+}
+
 func (i *Inbound) resolveThroughProcDir(owner SocketOwner) (*socketOwnerMetadata, bool) {
 	unknown := func() (*socketOwnerMetadata, bool) {
 		return &socketOwnerMetadata{ConnectionOwner: ownerFromCommOnly(owner)}, false

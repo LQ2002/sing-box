@@ -16,7 +16,7 @@ func validMetadata() (metadata, [16]byte) {
 	return metadata{
 		Magic: metadataMagic, Version: abiVersion, ValueSize: ValueSize,
 		BootID: boot, ProducerSHA: producerSHA, TraceSHA: traceSHA,
-		MapID: 10, LinkID: 11, ProgramID: 12, ProgramTag: [8]byte{13},
+		MapID: 10, LinkID: 11, ProgramID: 12, ProgramTag: [8]byte{13}, PathMapID: 14,
 	}, boot
 }
 
@@ -62,7 +62,7 @@ func TestCreatorRejectsIncompleteIdentityButAllowsRoot(t *testing.T) {
 	for _, mutate := range []func(*Creator){
 		func(c *Creator) { c.Cookie = 0 }, func(c *Creator) { c.StartTimeNs = 0 },
 		func(c *Creator) { c.ProcessID = 0 }, func(c *Creator) { c.ThreadID = 0 },
-		func(c *Creator) { c.Flags = 0 }, func(c *Creator) { c.Flags = CreatorValid | 1<<4 },
+		func(c *Creator) { c.Flags = 0 }, func(c *Creator) { c.Flags = CreatorValid | 1<<17 },
 		func(c *Creator) { c.Flags = CreatorValid | 1<<16 }, func(c *Creator) { c.Flags = CreatorNameValid },
 	} {
 		changed := creator
@@ -84,7 +84,7 @@ func TestMetadataRejectsStaleOrForeignIdentity(t *testing.T) {
 		"producer": func(m *metadata) { m.ProducerSHA[0]++ }, "target": func(m *metadata) { m.TraceSHA[0]++ },
 		"map": func(m *metadata) { m.MapID = 0 }, "link": func(m *metadata) { m.LinkID = 0 },
 		"program": func(m *metadata) { m.ProgramID = 0 }, "tag": func(m *metadata) { m.ProgramTag = [8]byte{} },
-		"reserved": func(m *metadata) { m.Reserved[0] = 1 },
+		"path map": func(m *metadata) { m.PathMapID = 0 },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

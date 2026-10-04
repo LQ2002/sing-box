@@ -23,14 +23,19 @@ func TestPinnedObjectsMustReferenceTheSameStorage(t *testing.T) {
 		MapType: ebpf.SkStorage, KeySize: 4, ValueSize: ValueSize, MapFlags: 1, MapName: MapName,
 		ProgramType: ebpf.Tracing, ProgramName: programName, ProgramTag: meta.ProgramTag,
 		ProgramRootOwned: true, ProgramHasBTF: true,
-		ReferencedMaps: []uint32{meta.MapID}, TraceTarget: traceName,
+		PathMapID: meta.PathMapID, PathMapShape: true,
+		ReferencedMaps: []uint32{meta.MapID, meta.PathMapID, 77}, TraceTarget: traceName,
 	}
 	if err := validateKernelObjects(meta, actual); err != nil {
 		t.Fatal(err)
 	}
 	tests := map[string]func(*kernelObjects){
-		"different map":      func(k *kernelObjects) { k.ReferencedMaps = []uint32{meta.MapID + 1} },
-		"extra map":          func(k *kernelObjects) { k.ReferencedMaps = []uint32{meta.MapID, 99} },
+		"different map":      func(k *kernelObjects) { k.ReferencedMaps = []uint32{meta.MapID + 1, meta.PathMapID, 77} },
+		"no path map":        func(k *kernelObjects) { k.ReferencedMaps = []uint32{meta.MapID, 99, 77} },
+		"extra map":          func(k *kernelObjects) { k.ReferencedMaps = []uint32{meta.MapID, meta.PathMapID, 77, 99} },
+		"repeated map":       func(k *kernelObjects) { k.ReferencedMaps = []uint32{meta.MapID, meta.PathMapID, meta.MapID} },
+		"unrelated paths":    func(k *kernelObjects) { k.PathMapID++ },
+		"path map shape":     func(k *kernelObjects) { k.PathMapShape = false },
 		"no map evidence":    func(k *kernelObjects) { k.ReferencedMaps = nil },
 		"unrelated link":     func(k *kernelObjects) { k.LinkID++ },
 		"unrelated map":      func(k *kernelObjects) { k.MapID++ },
@@ -58,10 +63,10 @@ func TestPartialOrForeignPinsAreNotClaimed(t *testing.T) {
 	if empty, err := pinSetState(nil); !empty || err != nil {
 		t.Fatalf("empty directory: %t %v", empty, err)
 	}
-	if empty, err := pinSetState([]string{metadataPin, mapPin, linkPin}); empty || err != nil {
+	if empty, err := pinSetState([]string{metadataPin, mapPin, pathsPin, linkPin}); empty || err != nil {
 		t.Fatalf("complete directory: %t %v", empty, err)
 	}
-	for _, names := range [][]string{{mapPin}, {mapPin, linkPin}, {metadataPin}, {metadataPin, mapPin, "foreign"}, {metadataPin, mapPin, linkPin, "foreign"}} {
+	for _, names := range [][]string{{mapPin}, {mapPin, linkPin}, {metadataPin}, {metadataPin, mapPin, "foreign"}, {metadataPin, mapPin, linkPin}, {metadataPin, mapPin, pathsPin, linkPin, "foreign"}} {
 		if _, err := pinSetState(names); err == nil {
 			t.Fatalf("claimed incomplete or foreign pins: %v", names)
 		}

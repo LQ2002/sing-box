@@ -115,7 +115,7 @@ Android 厂商的 netd hook 可能造成挂载冲突。sing-box 优先尝试多�
     "data_plane": "tc",
     "socket_creator": {
       "enabled": true,
-      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v1"
+      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v3"
     }
   }
 }
@@ -124,9 +124,12 @@ Android 厂商的 netd hook 可能造成挂载冲突。sing-box 优先尝试多�
 `pin_path` 可省略，默认如上；必须是 bpffs 上 root 拥有、权限 `0700` 的专用绝对目录。
 父目录均须属于 root；可写父目录须设置 sticky bit，兼容 Android 常见的 `01777`
 bpffs 挂载目录，不接受符号链接。启用前需由管理员加载
-与运行内核匹配的 `sbo_identity_bridge` 模块，并设置 `capture_all=1`。sing-box 不会
-自动加载模块或修改开关。采集器通过创建事件记录 PID、线程 ID、创建者 UID、进程出生
-时间和截断的 comm，由现有 TC 交付；不会把 socket 记账 UID 或 comm 当作精确包名证据。
+与运行内核匹配的 `sbo_identity` 模块（`kernel/sbo_identity`），并设置 `capture_all=1`。sing-box 不会
+自动加载模块或修改开关。创建者就是其 Android cgroup（`…/uid_X/pid_<pid>`）所对应进程的
+socket 不建记录：TC 记录的 socket cgroup 即可定位该进程，名称与可执行文件取自 `/proc`。
+其余 socket 由采集器在创建时记录 PID、线程 ID、创建者 UID、进程出生时间、截断的 comm、
+argv[0] 哈希，以及内核在创建现场解析出的可执行文件路径，由现有 TC 交付；创建者退出后
+路径仍可得。不会把 socket 记账 UID 或 comm 当作精确包名证据。
 
 显式启用后的加载失败会阻止该入站启动。未采到创建记录的旧 socket、accept child 等
 仍使用既有归因路径；诊断中的 `creator_snapshots`、`creator_snapshot_missing`、
@@ -138,7 +141,7 @@ bpffs 挂载目录，不接受符号链接。启用前需由管理员加载
 不会删除已持久化的采集器。需要彻底移除时，先停止所有使用该目录的 sing-box 实例，再运行：
 
 ```shell
-sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v1
+sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v3
 ```
 
 该命令不卸载桥接模块。采集器仍有活跃使用者时拒绝删除；升级导致对象不兼容时应先用

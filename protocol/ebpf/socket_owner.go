@@ -51,6 +51,13 @@ type SocketOwner struct {
 	hasName  bool
 	exeInode uint64
 	hasExe   bool
+	// sbo_identity snapshots (socketidentity.CreatorExeKey): exeKey names the
+	// creator's executable in the collector's path map, whose path the kernel
+	// resolved at creation; exeFlags keeps CreatorPathTooLong,
+	// CreatorExeDeleted and CreatorKernel.
+	exeKey    uint64
+	hasExeKey bool
+	exeFlags  uint32
 }
 
 // SocketOwnerSource 是数据面查询 socket 归属所依赖的全部契约。

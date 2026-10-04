@@ -153,7 +153,7 @@ func requireDeviceCollectorPath(t *testing.T) string {
 			t.Fatalf("dedicated bpffs contains unrelated entry %q", entry.Name())
 		}
 	}
-	if err := checkBridge(); err != nil {
+	if err := checkModule(); err != nil {
 		t.Fatal(err)
 	}
 	return pinPath

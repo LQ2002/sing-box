@@ -1,13 +1,16 @@
 package main
 
-// producercheck verifies the production producer's cgroup gate on the device
-// (common/socketidentity/bpf/creator.bpf.c, in_own_process_cgroup): the
-// object is loaded and attached to sbo_identity_bridge's tracepoint exactly
-// as the collector does, then this process creates sockets while it sits in
+// producercheck verifies the production chain on the device: the sbo_identity
+// module (kernel/sbo_identity, loaded with capture_all=1) and the producer
+// (common/socketidentity/bpf/creator.bpf.c) loaded and attached exactly as
+// the collector does. This process creates sockets while it sits in
 //
 //	1. its starting cgroup (root "/" for a KernelSU shell)  -> snapshot
 //	2. a cgroup named pid_<its own tgid>                     -> no snapshot
 //	3. a cgroup named pid_<another pid>                      -> snapshot
+//
+// and every snapshot must carry the exe key whose path-map entry equals
+// /proc/self/exe.
 //
 // and reads each socket's snapshot back by fd. The cgroups are created under
 // /sys/fs/cgroup/sbo_producercheck and removed again; the process is moved
@@ -54,6 +57,9 @@ func runProducerCheck(args []string) error {
 	}
 	defer lnk.Close()
 	creators := coll.Maps["socket_creators"]
+	paths := coll.Maps["exe_paths"]
+	self, _ := os.Readlink("/proc/self/exe")
+	fmt.Printf("SELF_EXE %s\n", self)
 
 	start, err := procCgroup(os.Getpid())
 	if err != nil {
@@ -99,11 +105,16 @@ func runProducerCheck(args []string) error {
 				present++
 				cookie, _ := unix.GetsockoptUint64(fd, unix.SOL_SOCKET, unix.SO_COOKIE)
 				var c struct {
-					Cookie, Start uint64
-					PID, TID      uint32
+					Cookie, Start       uint64
+					PID, TID, UID, Flag uint32
+					Comm                [16]byte
+					NameHash, ExeKey    uint64
 				}
 				_ = binary.Read(bytes.NewReader(raw), binary.LittleEndian, &c)
-				if c.Cookie == cookie && c.PID == uint32(tgid) {
+				var path [280]byte
+				pathOK := c.Flag&(1<<4) != 0 && paths.Lookup(&c.ExeKey, &path) == nil &&
+					cString(path[24:24+binary.LittleEndian.Uint32(path[16:20])]) == self
+				if c.Cookie == cookie && c.PID == uint32(tgid) && c.Flag&(1<<1) != 0 && pathOK {
 					valid++
 				}
 			}

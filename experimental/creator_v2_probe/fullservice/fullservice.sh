@@ -13,7 +13,9 @@ set -eu
 DIR=/data/local/tmp/sbo-full
 RUN=$DIR/run
 PROD=/data/adb/services/sing-box
-BRIDGE=sbo_identity_bridge
+# Creation hook module. sbo_identity (kernel/sbo_identity) since the v3
+# collector; earlier runs used sbo_identity_bridge with target_tgid=0.
+BRIDGE=${SBO_MODULE:-sbo_identity}
 fail() { echo "ERROR: $*" >&2; exit 1; }
 ticks() { sed 's/^.*) //' "/proc/$1/stat" | awk '{print $20}'; }
 mkdir -p "$RUN"
@@ -24,7 +26,7 @@ hooks() {
   *) fail "hook state none|old|new" ;;
   esac
   # Remove the creator collector before its bridge can unload.
-  if [ -d /sys/fs/bpf/sing-box/socket-creator-v2 ] && [ -n "$(ls -A /sys/fs/bpf/sing-box/socket-creator-v2 2>/dev/null)" ]; then
+  if [ -d /sys/fs/bpf/sing-box/socket-creator-v3 ] && [ -n "$(ls -A /sys/fs/bpf/sing-box/socket-creator-v3 2>/dev/null)" ]; then
     "$DIR/sing-box-new" tools socket-creator-remove
   fi
   if [ -e /sys/module/$BRIDGE ]; then
@@ -36,7 +38,7 @@ hooks() {
   old) insmod /data/local/tmp/sb_sockowner_probe.ko ;;
   new)
     [ "$(sha256sum /sys/kernel/btf/vmlinux | awk '{print $1}')" = "$(awk '{print $1}' "$DIR/base-btf.sha256")" ] || fail 'kernel BTF differs from bridge build base'
-    insmod "$DIR/$BRIDGE.ko" target_tgid=0 capture_all=1
+    insmod "$DIR/$BRIDGE.ko" capture_all=1
     ;;
   esac
   echo "HOOKS=$1 modules=$(awk '{print $1}' /proc/modules | grep -E 'sbo_|sb_sock' | tr '\n' ' ')"

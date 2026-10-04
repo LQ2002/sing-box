@@ -18,6 +18,7 @@ import (
 
 type resources struct {
 	creators *ebpf.Map
+	paths    *ebpf.Map
 	producer *ebpf.Program
 	attached link.Link
 	meta     *ebpf.Map
@@ -36,6 +37,9 @@ func (r *resources) close() error {
 	}
 	if r.creators != nil {
 		result = errors.Join(result, r.creators.Close())
+	}
+	if r.paths != nil {
+		result = errors.Join(result, r.paths.Close())
 	}
 	return result
 }
@@ -61,17 +65,17 @@ func readBootID() ([16]byte, error) {
 	return id, nil
 }
 
-func checkBridge() error {
+func checkModule() error {
 	data, err := os.ReadFile("/sys/module/" + moduleName + "/parameters/capture_all")
 	if err != nil {
-		return fmt.Errorf("socket creator bridge must already be loaded with capture_all=1: %w", err)
+		return fmt.Errorf("socket creator module %s must already be loaded with capture_all=1: %w", moduleName, err)
 	}
 	value := strings.TrimSpace(string(data))
 	if value != "Y" && value != "1" {
-		return errors.New("socket creator bridge capture_all must be 1; collector does not change module parameters")
+		return fmt.Errorf("socket creator module %s capture_all must be 1; collector does not change module parameters", moduleName)
 	}
 	if _, err := os.Stat("/sys/kernel/btf/" + moduleName); err != nil {
-		return fmt.Errorf("socket creator bridge module BTF is unavailable: %w", err)
+		return fmt.Errorf("socket creator module %s BTF is unavailable: %w", moduleName, err)
 	}
 	return nil
 }
@@ -88,7 +92,7 @@ func checkLegacyCollector(path string) error {
 		return fmt.Errorf("inspect legacy socket creator pins %s: %w", path, err)
 	}
 	if len(entries) != 0 {
-		return fmt.Errorf("legacy v1 socket creator pins remain in %s; remove them with the v1 build before starting v2", path)
+		return fmt.Errorf("legacy socket creator pins remain in %s; remove them with the matching older build before starting v3", path)
 	}
 	return nil
 }
@@ -102,12 +106,14 @@ func Open(config Config) (_ *Collector, result error) {
 	if os.Geteuid() != 0 {
 		return nil, errors.New("socket creator collection requires root")
 	}
-	if err := checkBridge(); err != nil {
+	if err := checkModule(); err != nil {
 		return nil, err
 	}
 	if config.PinPath == "" || config.PinPath == DefaultPinPath {
-		if err := checkLegacyCollector(LegacyPinPath); err != nil {
-			return nil, err
+		for _, legacy := range LegacyPinPaths {
+			if err := checkLegacyCollector(legacy); err != nil {
+				return nil, err
+			}
 		}
 	}
 	bootID, err := readBootID()
@@ -124,7 +130,7 @@ func Open(config Config) (_ *Collector, result error) {
 	defer func() {
 		if !ok {
 			if created {
-				result = errors.Join(result, rollbackPins([]string{directory.objectPath(mapPin), directory.objectPath(linkPin), directory.objectPath(metadataPin)}, os.Remove))
+				result = errors.Join(result, rollbackPins([]string{directory.objectPath(mapPin), directory.objectPath(pathsPin), directory.objectPath(linkPin), directory.objectPath(metadataPin)}, os.Remove))
 			}
 			if opened != nil {
 				result = errors.Join(result, opened.close())
@@ -158,7 +164,7 @@ func Open(config Config) (_ *Collector, result error) {
 		}
 	}
 	ok = true
-	return &Collector{creators: opened.creators, closeFDs: func() error {
+	return &Collector{creators: opened.creators, paths: opened.paths, closeFDs: func() error {
 		return errors.Join(opened.close(), directory.Close())
 	}}, nil
 }
@@ -199,6 +205,7 @@ func Remove(pinPath string) (result error) {
 	return removeOwnedPins([]pinRemoval{
 		{linkPin, opened.attached.Unpin, func() error { return opened.attached.Pin(directory.objectPath(linkPin)) }},
 		{mapPin, opened.creators.Unpin, func() error { return opened.creators.Pin(directory.objectPath(mapPin)) }},
+		{pathsPin, opened.paths.Unpin, func() error { return opened.paths.Pin(directory.objectPath(pathsPin)) }},
 		{metadataPin, opened.meta.Unpin, func() error { return opened.meta.Pin(directory.objectPath(metadataPin)) }},
 	})
 }
@@ -218,12 +225,13 @@ func createResources(directory *pinDirectory, bootID [16]byte) (_ *resources, re
 	}
 	var objects struct {
 		Creators *ebpf.Map     `ebpf:"socket_creators"`
+		Paths    *ebpf.Map     `ebpf:"exe_paths"`
 		Producer *ebpf.Program `ebpf:"capture_creator"`
 	}
 	if err := spec.LoadAndAssign(&objects, nil); err != nil {
 		return nil, fmt.Errorf("load socket creator BPF: %w", err)
 	}
-	r.creators, r.producer = objects.Creators, objects.Producer
+	r.creators, r.paths, r.producer = objects.Creators, objects.Paths, objects.Producer
 	r.attached, err = link.AttachTracing(link.TracingOptions{Program: r.producer, AttachType: ebpf.AttachTraceRawTp})
 	if err != nil {
 		return nil, fmt.Errorf("attach socket creator typed tracepoint: %w", err)
@@ -236,6 +244,7 @@ func createResources(directory *pinDirectory, bootID [16]byte) (_ *resources, re
 		Magic: metadataMagic, Version: abiVersion, ValueSize: ValueSize,
 		BootID: bootID, ProducerSHA: producerSHA, TraceSHA: traceSHA,
 		MapID: actual.MapID, LinkID: actual.LinkID, ProgramID: actual.ProgramID, ProgramTag: actual.ProgramTag,
+		PathMapID: actual.PathMapID,
 	}
 	if err := meta.validate(bootID); err != nil {
 		return nil, err
@@ -254,13 +263,13 @@ func createResources(directory *pinDirectory, bootID [16]byte) (_ *resources, re
 	if err := r.meta.Freeze(); err != nil {
 		return nil, fmt.Errorf("freeze creator metadata: %w", err)
 	}
-	if err := checkBridge(); err != nil {
+	if err := checkModule(); err != nil {
 		return nil, err
 	}
 	for _, object := range []struct {
 		name string
 		pin  func(string) error
-	}{{mapPin, r.creators.Pin}, {linkPin, r.attached.Pin}, {metadataPin, r.meta.Pin}} {
+	}{{mapPin, r.creators.Pin}, {pathsPin, r.paths.Pin}, {linkPin, r.attached.Pin}, {metadataPin, r.meta.Pin}} {
 		path := directory.objectPath(object.name)
 		if err := object.pin(path); err != nil {
 			return nil, fmt.Errorf("pin %s: %w", object.name, err)
@@ -306,6 +315,10 @@ func loadResources(directory *pinDirectory, bootID [16]byte) (_ *resources, resu
 	if err != nil {
 		return nil, err
 	}
+	r.paths, err = ebpf.LoadPinnedMap(directory.objectPath(pathsPin), nil)
+	if err != nil {
+		return nil, err
+	}
 	r.attached, err = link.LoadPinnedLink(directory.objectPath(linkPin), nil)
 	if err != nil {
 		return nil, err
@@ -334,17 +347,20 @@ func loadResources(directory *pinDirectory, bootID [16]byte) (_ *resources, resu
 
 type kernelObjects struct {
 	MapID, LinkID, ProgramID uint32
-	MapType                  ebpf.MapType
-	KeySize, ValueSize       uint32
-	MaxEntries, MapFlags     uint32
-	MapName                  string
-	ProgramType              ebpf.ProgramType
-	ProgramName              string
-	ProgramTag               [8]byte
-	ProgramRootOwned         bool
-	ProgramHasBTF            bool
-	ReferencedMaps           []uint32
-	TraceTarget              string
+	// The path map: ID, and whether its type, sizes and name match.
+	PathMapID            uint32
+	PathMapShape         bool
+	MapType              ebpf.MapType
+	KeySize, ValueSize   uint32
+	MaxEntries, MapFlags uint32
+	MapName              string
+	ProgramType          ebpf.ProgramType
+	ProgramName          string
+	ProgramTag           [8]byte
+	ProgramRootOwned     bool
+	ProgramHasBTF        bool
+	ReferencedMaps       []uint32
+	TraceTarget          string
 }
 
 func validateKernelObjects(meta metadata, actual kernelObjects) error {
@@ -357,8 +373,16 @@ func validateKernelObjects(meta metadata, actual kernelObjects) error {
 	if actual.ProgramType != ebpf.Tracing || actual.ProgramName != programName || actual.ProgramTag != meta.ProgramTag || !actual.ProgramRootOwned || !actual.ProgramHasBTF {
 		return errors.New("pinned producer program identity mismatch")
 	}
-	if len(actual.ReferencedMaps) != 1 || actual.ReferencedMaps[0] != meta.MapID {
-		return errors.New("pinned producer does not reference exactly the pinned creator map")
+	if actual.PathMapID != meta.PathMapID || !actual.PathMapShape {
+		return errors.New("pinned path map ABI, owner or ID mismatch")
+	}
+	// creators, paths and the unpinned per-CPU scratch map.
+	referenced := map[uint32]bool{}
+	for _, id := range actual.ReferencedMaps {
+		referenced[id] = true
+	}
+	if len(actual.ReferencedMaps) != 3 || len(referenced) != 3 || !referenced[meta.MapID] || !referenced[meta.PathMapID] {
+		return errors.New("pinned producer does not reference exactly the pinned creator and path maps")
 	}
 	if actual.TraceTarget != traceName {
 		return errors.New("pinned producer is attached to a different tracepoint")
@@ -380,6 +404,17 @@ func inspectResources(r *resources) (kernelObjects, error) {
 	actual.MapType, actual.MapName = mapInfo.Type, mapInfo.Name
 	actual.KeySize, actual.ValueSize = mapInfo.KeySize, mapInfo.ValueSize
 	actual.MaxEntries, actual.MapFlags = mapInfo.MaxEntries, mapInfo.Flags
+	pathInfo, err := r.paths.Info()
+	if err != nil {
+		return actual, err
+	}
+	pathID, present := pathInfo.ID()
+	if !present || pathID == 0 {
+		return actual, errors.New("kernel did not report the path map ID")
+	}
+	actual.PathMapID = uint32(pathID)
+	actual.PathMapShape = pathInfo.Type == ebpf.LRUHash && pathInfo.KeySize == 8 && pathInfo.ValueSize == PathValueSize &&
+		pathInfo.MaxEntries == PathMapEntries && pathInfo.Flags == 0 && pathInfo.Name == PathMapName
 	programInfo, err := r.producer.Info()
 	if err != nil {
 		return actual, err

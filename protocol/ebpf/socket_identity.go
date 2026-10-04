@@ -282,6 +282,10 @@ type identityCounters struct {
 	indexPendingLookups atomic.Uint64
 	nameUnavailable     atomic.Uint64
 	exeMismatch         atomic.Uint64
+	// sbo_identity snapshots: path taken from the collector's path map, or
+	// the key had no entry (evicted) and /proc was tried instead.
+	exePathFromSnapshot atomic.Uint64
+	exePathMissing      atomic.Uint64
 	// netd cookie_tag_map charge (the requester) as recorded by TC.
 	chargeChecked    atomic.Uint64
 	chargeFound      atomic.Uint64
@@ -577,6 +581,8 @@ type AttributionDiagnostics struct {
 	IndexPendingLookups uint64 `json:"index_pending_connections"`
 	NameUnavailable     uint64 `json:"creator_name_unavailable"`
 	ExeMismatch         uint64 `json:"creator_exe_mismatch"`
+	ExePathFromSnapshot uint64 `json:"creator_exe_path_from_snapshot"`
+	ExePathMissing      uint64 `json:"creator_exe_path_missing"`
 	// netd cookie_tag_map: consulted, found, and requester != sender.
 	ChargeChecked    uint64 `json:"charge_checked"`
 	ChargeFound      uint64 `json:"charge_found"`
@@ -616,6 +622,8 @@ func (i *Inbound) attributionDiagnostics() *AttributionDiagnostics {
 		IndexPendingLookups: counters.indexPendingLookups.Load(),
 		NameUnavailable:     counters.nameUnavailable.Load(),
 		ExeMismatch:         counters.exeMismatch.Load(),
+		ExePathFromSnapshot: counters.exePathFromSnapshot.Load(),
+		ExePathMissing:      counters.exePathMissing.Load(),
 		ChargeChecked:       counters.chargeChecked.Load(),
 		ChargeFound:         counters.chargeFound.Load(),
 		RequesterDiffers:    counters.requesterDiffers.Load(),

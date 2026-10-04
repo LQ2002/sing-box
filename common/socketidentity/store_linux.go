@@ -14,6 +14,7 @@ import (
 
 const (
 	mapPin      = "creators"
+	pathsPin    = "exe-paths"
 	linkPin     = "producer"
 	metadataPin = "metadata"
 )
@@ -132,7 +133,7 @@ func pinSetState(names []string) (empty bool, err error) {
 	}
 	seen := map[string]bool{}
 	for _, name := range names {
-		if name != mapPin && name != linkPin && name != metadataPin {
+		if name != mapPin && name != pathsPin && name != linkPin && name != metadataPin {
 			return false, fmt.Errorf("unrecognized entry %q in collector directory", name)
 		}
 		if seen[name] {
@@ -140,7 +141,7 @@ func pinSetState(names []string) (empty bool, err error) {
 		}
 		seen[name] = true
 	}
-	if len(seen) != 3 {
+	if len(seen) != 4 {
 		return false, errors.New("partial collector pins; refusing to replace storage or guess ownership")
 	}
 	return false, nil

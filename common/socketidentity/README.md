@@ -1,17 +1,24 @@
 # Persistent socket creators
 
 `Open(Config{PinPath: ...})` creates or reopens a root-owned bpffs collector.
-The default directory is `/sys/fs/bpf/sing-box/socket-creator-v2`. While the v1
-directory `/sys/fs/bpf/sing-box/socket-creator-v1` still holds pins, opening the
-default v2 path is refused (two global producers would both run). The bridge module
-must already be loaded with `capture_all=1` and expose its module BTF. The package
-does not load/unload modules, mount bpffs, change bridge parameters, or attach a
-TC program. The embedded producer supports Linux/Android arm64 little-endian.
+The default directory is `/sys/fs/bpf/sing-box/socket-creator-v3`. While the v1 or
+v2 directories (`/sys/fs/bpf/sing-box/socket-creator-v1`, `-v2`) still hold pins,
+opening the default path is refused (two global producers would both run). The
+`sbo_identity` module (`kernel/sbo_identity`) must already be loaded with
+`capture_all=1` and expose its module BTF. The package does not load/unload
+modules, mount bpffs, change module parameters, or attach a TC program. The
+embedded producer supports Linux/Android arm64 little-endian.
 
-The producer attaches to `tp_btf/sbo_identity_socket_create`. For each non-kernel
-IPv4/IPv6 socket, it initializes `socket_creators` (`sb_sk_creator` in the kernel)
-once with the creator's cookie, leader birth time, TGID, TID, UID, current
-thread comm, and (v2) an FNV-1a 64 hash of argv[0] plus the executable's inode.
+The producer attaches to `tp_btf/sbo_identity_socket`. The module fires it only
+for user IPv4/IPv6 sockets whose creator is not the process its cgroup is named
+after (those are resolved through the socket cgroup instead), and passes the
+creator's executable (dev, inode, generation) with its path resolved in the
+kernel. The producer initializes `socket_creators` (`sb_sk_creator` in the
+kernel) once with the creator's cookie, leader birth time, TGID, TID, UID,
+current thread comm, an FNV-1a 64 hash of argv[0], and the executable's key
+(`ExeKey`, flag `CreatorExeKey`, in the field that held the inode in v2). The
+path itself is stored once per executable in `exe_paths` (`sb_sk_exe_path`, LRU,
+1024 entries; `Collector.LookupPath`), so it survives the creator's exit.
 UID zero is valid. Missing cookie/birth/PID/TID leaves identity unknown; a
 failed argv or exe read only leaves that fact unflagged. argv[0] is the
 ActivityManager process record name for zygote children, cut to zygote's
@@ -19,7 +26,8 @@ argument block (99 or 78 bytes measured), so a string that fills the block is
 flagged as possibly truncated with its hashed length in flag bits 8-15. The
 64-byte value is shared with the existing TC consumer; there is no
 TASK_STORAGE map or package-token registration. Existing values are never
-rewritten. There is no clone flag, so accepted children remain unknown.
+rewritten. There is no clone flag: an accepted child has no snapshot, but it
+inherits the listener's cgroup.
 
 `Collector.Map()` borrows the map descriptor until `Close()`. Consumers must stop
 using it before closing the collector. `Close()` releases only this instance's
@@ -27,8 +35,8 @@ descriptors and directory lease: pinned storage and the pinned producer link
 remain alive and continue collecting while the service is stopped. Existing
 socket snapshots survive creator exit and service restarts within the same boot.
 
-The private pin directory contains `creators`, `producer`, and a frozen
-`metadata` Array map. Reopening checks the boot UUID, ABI, exact embedded producer
+The private pin directory contains `creators`, `exe-paths`, `producer`, and a
+frozen `metadata` Array map. Reopening checks the boot UUID, ABI, exact embedded producer
 hash, program tag/type/name/root owner, actual link target, object IDs, and the
 program's actual map references. It refuses partial sets and unexpected entries.
 Every path component is opened without following symlinks and must belong to root.

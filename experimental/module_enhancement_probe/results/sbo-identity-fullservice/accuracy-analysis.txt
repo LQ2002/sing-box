@@ -1,0 +1,46 @@
+ATTRIBUTED_LINES 45 {'group_level': 17, 'no_truth': 21, 'correct': 5, 'no_truth_with_package': 1, 'unknown': 1}
+{"package": "com.baidu.input_mi", "pid": 0, "user": "u0_a384", "path": "", "class": "group_level"}
+{"package": "com.ss.android.ugc.aweme", "pid": 0, "user": "u0_a361", "path": "", "class": "group_level"}
+{"package": "com.android.vending", "pid": 0, "user": "u0_a128", "path": "", "class": "group_level"}
+{"package": "com.android.chrome", "pid": 0, "user": "u0_a309", "path": "", "class": "group_level"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.google.android.gms", "pid": 0, "user": "u0_a136", "path": "", "class": "group_level"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.tencent.mm", "pid": 0, "user": "u0_a356", "path": "", "class": "group_level"}
+{"package": "com.tencent.mm", "pid": 0, "user": "u0_a356", "path": "", "class": "group_level"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.tencent.mm", "pid": 0, "user": "u0_a356", "path": "", "class": "group_level"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "tv.danmaku.bili", "pid": 0, "user": "u0_a460", "path": "", "class": "group_level"}
+{"package": "tv.danmaku.bili", "pid": 0, "user": "u0_a460", "path": "", "class": "group_level"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.miui.securitycenter", "pid": 14314, "user": "1000", "path": "", "truth": [["com.miui.securitycenter.remote", 1000, ["com.miui.securitycenter"]]], "class": "correct"}
+{"package": "com.xiaomi.xmsf", "pid": 0, "user": "u0_a205", "path": "", "class": "group_level"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.miui.securitycenter", "pid": 15352, "user": "1000", "path": "", "class": "no_truth_with_package"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.miui.securitycenter", "pid": 14314, "user": "1000", "path": "", "truth": [["com.miui.securitycenter.remote", 1000, ["com.miui.securitycenter"]]], "class": "correct"}
+{"package": "com.lbe.security.miui", "pid": 0, "user": "u0_a214", "path": "", "class": "group_level"}
+{"package": "com.miui.guardprovider", "pid": 0, "user": "u0_a169", "path": "", "class": "group_level"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.miui.securitycenter", "pid": 14314, "user": "1000", "path": "", "truth": [["com.miui.securitycenter.remote", 1000, ["com.miui.securitycenter"]]], "class": "correct"}
+{"package": "com.miui.securitycenter", "pid": 16855, "user": "1000", "path": "", "truth": [["com.miui.securitycenter:cache", 1000, ["com.miui.securitycenter"]]], "class": "correct"}
+{"package": "com.miui.securitycenter", "pid": 14314, "user": "1000", "path": "", "truth": [["com.miui.securitycenter.remote", 1000, ["com.miui.securitycenter"]]], "class": "correct"}
+{"package": "tv.danmaku.bili", "pid": 0, "user": "u0_a460", "path": "", "class": "group_level"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 3818, "user": "1000", "path": "", "truth": [["system", 1000, ["android", "com.android.providers.settings", "com.android.server.telecom"]]], "class": "unknown"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "com.xiaomi.market", "pid": 0, "user": "u0_a174", "path": "", "class": "group_level"}
+{"package": "com.xiaomi.xmsf", "pid": 0, "user": "u0_a205", "path": "", "class": "group_level"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}
+{"package": "bin.mt.plus.canary", "pid": 0, "user": "u0_a242", "path": "", "class": "group_level"}
+{"package": "", "pid": 2006, "user": "root", "path": "/system/bin/netd", "class": "no_truth"}

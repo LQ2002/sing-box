@@ -18,6 +18,9 @@ import (
 // only the explicit maintenance command removes persistent kernel objects.
 type socketCreatorCollector interface {
 	Map() *ebpf.Map
+	// LookupPath returns an executable path the kernel module resolved at
+	// socket creation, by a snapshot's exe key.
+	LookupPath(key uint64) (socketidentity.PathValue, bool)
 	Close() error
 }
 
