@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* All-in-One Enhanced Kernel Module Feasibility Probe.
- * Demonstrates:
- * 1. Safe RCU fast-path bypass for app_process (<20 ns);
- * 2. get_file_rcu() + d_path() + fput() safe extraction for native children;
- * 3. Dynamic baseline dev/ino resolution (OverlayFS safe);
- * 4. Miscdevice mode 0600 with atomic refcounted lifecycle;
- * 5. TCP accept child socket clone hook (android_vh_inet_csk_clone_lock);
- * 6. Binder IPC caller attribution hook (android_vh_binder_transaction_received).
+/* All-in-One Enhanced Kernel Module Feasibility Probe - Stage 2 Acceptance Implementation.
+ * Features:
+ * 1. Safe RCU fast-path bypass for app_process (null check + pointer validation);
+ * 2. Per-CPU cache (4 slots x 256 bytes) protected by get_cpu_ptr()/put_cpu_ptr();
+ * 3. Cache key: (s_dev, i_ino, i_generation) preventing F2FS inode reuse ambiguity;
+ * 4. d_path() called strictly OUTSIDE preemption-disabled sections;
+ * 5. get_file_rcu() inside RCU read lock paired with fput();
+ * 6. PATH_TRUNCATED flag for paths >= 256 bytes;
+ * 7. Miscdevice mode 0600 with atomic open_count refcounting.
  */
 #include <linux/init.h>
 #include <linux/module.h>
@@ -20,6 +21,7 @@
 #include <linux/dcache.h>
 #include <linux/ktime.h>
 #include <linux/uaccess.h>
+#include <linux/percpu.h>
 #include <linux/tracepoint.h>
 #include <net/sock.h>
 
@@ -28,26 +30,52 @@ struct sk_buff;
 struct request_sock;
 #include <trace/hooks/net.h>
 
-/* Binder structures and hook headers */
 struct binder_proc;
 struct binder_thread;
 struct binder_transaction;
 #include "binder_internal.h"
 #include <trace/hooks/binder.h>
 
-MODULE_DESCRIPTION("SBO All-in-One Enhanced Module Feasibility Probe");
+MODULE_DESCRIPTION("SBO All-in-One Enhanced Module - Stage 2 Acceptance");
 MODULE_LICENSE("GPL");
 
 static bool is_active;
 static atomic_t open_count = ATOMIC_INIT(0);
 static atomic_t fast_sample_count = ATOMIC_INIT(0);
-static atomic_t slow_sample_count = ATOMIC_INIT(0);
+static atomic_t hit_sample_count = ATOMIC_INIT(0);
+static atomic_t miss_sample_count = ATOMIC_INIT(0);
 static atomic_t clone_sample_count = ATOMIC_INIT(0);
 static atomic_t binder_sample_count = ATOMIC_INIT(0);
 static atomic_t inactive_sample_count = ATOMIC_INIT(0);
 
 static dev_t app_process_dev;
 static unsigned long app_process_ino;
+static u32 app_process_gen;
+
+/* --- Per-CPU Path Cache Definitions --- */
+#define PATH_CACHE_SLOTS 4
+#define PATH_MAX_LEN 256
+#define PATH_FLAG_TRUNCATED (1U << 0)
+
+struct path_cache_key {
+	dev_t s_dev;
+	unsigned long i_ino;
+	u32 i_generation;
+};
+
+struct path_cache_entry {
+	struct path_cache_key key;
+	char path[PATH_MAX_LEN];
+	u32 path_len;
+	u8 flags;
+};
+
+struct percpu_cache {
+	struct path_cache_entry slots[PATH_CACHE_SLOTS];
+	u8 next_slot;
+};
+
+static DEFINE_PER_CPU(struct percpu_cache, pcpu_path_cache);
 
 /* 1. Socket Creation Hook */
 static void on_socket_create(void *unused, struct sock *sk)
@@ -57,6 +85,7 @@ static void on_socket_create(void *unused, struct sock *sk)
 	bool is_app_process = false;
 	dev_t dev = 0;
 	unsigned long ino = 0;
+	u32 gen = 0;
 	u64 t_inact_0, t_inact_1;
 
 	t_inact_0 = ktime_get_ns();
@@ -72,7 +101,7 @@ static void on_socket_create(void *unused, struct sock *sk)
 	if (!current->mm)
 		return; /* Kernel thread bypass */
 
-	/* --- Phase 1: RCU Fast-Path Gate (<20 ns) --- */
+	/* --- Phase 1: RCU Fast-Path Gate with Pointer Validation --- */
 	t0 = ktime_get_ns();
 	rcu_read_lock();
 	exe = rcu_dereference(current->mm->exe_file);
@@ -81,9 +110,10 @@ static void on_socket_create(void *unused, struct sock *sk)
 		if (likely(inode && inode->i_sb)) {
 			dev = inode->i_sb->s_dev;
 			ino = inode->i_ino;
-			/* Pointer-validation check: ensure exe_file didn't change concurrently during read */
+			gen = inode->i_generation;
+			/* Pointer-validation check: ensure exe_file didn't change concurrently */
 			if (likely(READ_ONCE(current->mm->exe_file) == exe)) {
-				if (likely(dev == app_process_dev && ino == app_process_ino)) {
+				if (likely(dev == app_process_dev && ino == app_process_ino && gen == app_process_gen)) {
 					is_app_process = true;
 				}
 			}
@@ -95,42 +125,104 @@ static void on_socket_create(void *unused, struct sock *sk)
 	if (likely(is_app_process)) {
 		/* Fast path: 99.9% of Java apps bypass here */
 		if (atomic_inc_return(&fast_sample_count) <= 5) {
-			pr_info("sbo_enh_probe [FAST_BYPASS]: pid=%d comm=%s is_java=true cost_ns=%llu dev=%u ino=%lu\n",
-				current->pid, current->comm, (t1 - t0), (unsigned int)dev, ino);
+			pr_info("sbo_enh_probe [FAST_BYPASS]: pid=%d comm=%s is_java=true cost_ns=%llu dev=%u ino=%lu gen=%u\n",
+				current->pid, current->comm, (t1 - t0), (unsigned int)dev, ino, gen);
 		}
 		return;
 	}
 
-	/* --- Phase 2: Safe Slow Path for Native Children --- */
-	if (atomic_inc_return(&slow_sample_count) <= 10) {
-		char buf[256];
-		char *path_str = NULL;
-		u64 t_get_0, t_get_1, t_dp_0, t_dp_1, t_fp_0, t_fp_1;
+	/* --- Phase 2: Per-CPU Cache Lookup (<5 ns under get_cpu_ptr) --- */
+	{
+		struct percpu_cache *pcpu;
+		bool cache_hit = false;
+		char hit_path[PATH_MAX_LEN];
+		u32 hit_len = 0;
+		u8 hit_flags = 0;
+		int s;
 
-		t_get_0 = ktime_get_ns();
-		rcu_read_lock();
-		exe = get_file_rcu(&current->mm->exe_file);
-		rcu_read_unlock();
-		t_get_1 = ktime_get_ns();
-		if (exe) {
-			t_dp_0 = ktime_get_ns();
-			path_str = d_path(&exe->f_path, buf, sizeof(buf));
-			if (IS_ERR(path_str))
-				path_str = "<err>";
-			if (exe->f_inode && exe->f_inode->i_sb) {
-				ino = exe->f_inode->i_ino;
-				dev = exe->f_inode->i_sb->s_dev;
+		pcpu = get_cpu_ptr(&pcpu_path_cache); /* preempt_disable() */
+		for (s = 0; s < PATH_CACHE_SLOTS; s++) {
+			if (pcpu->slots[s].key.s_dev == dev &&
+			    pcpu->slots[s].key.i_ino == ino &&
+			    pcpu->slots[s].key.i_generation == gen &&
+			    pcpu->slots[s].path_len > 0) {
+				cache_hit = true;
+				hit_len = min_t(u32, pcpu->slots[s].path_len, PATH_MAX_LEN - 1);
+				memcpy(hit_path, pcpu->slots[s].path, hit_len);
+				hit_path[hit_len] = '\0';
+				hit_flags = pcpu->slots[s].flags;
+				break;
 			}
-			t_dp_1 = ktime_get_ns();
-			t_fp_0 = ktime_get_ns();
-			fput(exe); /* Strict refcount release */
-			t_fp_1 = ktime_get_ns();
-			pr_info("sbo_enh_probe [NATIVE_CHILD]: pid=%d comm=%s d_path=%s total_ns=%llu (get_rcu=%llu, d_path=%llu, fput=%llu) dev=%u ino=%lu\n",
-				current->pid, current->comm, path_str,
-				(t_fp_1 - t_get_0), (t_get_1 - t_get_0), (t_dp_1 - t_dp_0), (t_fp_1 - t_fp_0),
-				(unsigned int)dev, ino);
-		} else {
-			pr_info("sbo_enh_probe [NATIVE_CHILD]: pid=%d comm=%s <no_exe_file>\n", current->pid, current->comm);
+		}
+		put_cpu_ptr(&pcpu_path_cache); /* preempt_enable() */
+
+		if (cache_hit) {
+			if (atomic_inc_return(&hit_sample_count) <= 10) {
+				pr_info("sbo_enh_probe [CACHE_HIT]: pid=%d comm=%s path=%s len=%u truncated=%d dev=%u ino=%lu gen=%u\n",
+					current->pid, current->comm, hit_path, hit_len,
+					(hit_flags & PATH_FLAG_TRUNCATED) ? 1 : 0, (unsigned int)dev, ino, gen);
+			}
+			return;
+		}
+
+		/* --- Phase 3: Slow Path outside preemption-disabled section --- */
+		{
+			char buf[PATH_MAX_LEN];
+			char *path_str = NULL;
+			u64 t_get_0, t_get_1, t_dp_0, t_dp_1, t_fp_0, t_fp_1;
+			u8 flags = 0;
+			u32 path_len = 0;
+
+			t_get_0 = ktime_get_ns();
+			rcu_read_lock();
+			exe = get_file_rcu(&current->mm->exe_file);
+			rcu_read_unlock();
+			t_get_1 = ktime_get_ns();
+
+			if (exe) {
+				t_dp_0 = ktime_get_ns();
+				path_str = d_path(&exe->f_path, buf, sizeof(buf));
+				t_dp_1 = ktime_get_ns();
+
+				if (IS_ERR(path_str)) {
+					path_str = "<err>";
+				} else {
+					path_len = strlen(path_str);
+					if (path_len >= PATH_MAX_LEN - 1)
+						flags |= PATH_FLAG_TRUNCATED;
+				}
+
+				if (exe->f_inode && exe->f_inode->i_sb) {
+					ino = exe->f_inode->i_ino;
+					dev = exe->f_inode->i_sb->s_dev;
+					gen = exe->f_inode->i_generation;
+				}
+
+				t_fp_0 = ktime_get_ns();
+				fput(exe); /* Strict refcount release */
+				t_fp_1 = ktime_get_ns();
+
+				if (atomic_inc_return(&miss_sample_count) <= 10) {
+					pr_info("sbo_enh_probe [CACHE_MISS_FILLED]: pid=%d comm=%s path=%s total_ns=%llu (get_rcu=%llu, d_path=%llu, fput=%llu) dev=%u ino=%lu gen=%u\n",
+						current->pid, current->comm, path_str,
+						(t_fp_1 - t_get_0), (t_get_1 - t_get_0), (t_dp_1 - t_dp_0), (t_fp_1 - t_fp_0),
+						(unsigned int)dev, ino, gen);
+				}
+
+				/* Phase 4: Write back to local per-CPU slot */
+				if (!IS_ERR(path_str) && path_len > 0) {
+					u8 slot;
+					pcpu = get_cpu_ptr(&pcpu_path_cache); /* preempt_disable() */
+					slot = pcpu->next_slot++ % PATH_CACHE_SLOTS;
+					pcpu->slots[slot].key.s_dev = dev;
+					pcpu->slots[slot].key.i_ino = ino;
+					pcpu->slots[slot].key.i_generation = gen;
+					pcpu->slots[slot].flags = flags;
+					strscpy(pcpu->slots[slot].path, path_str, PATH_MAX_LEN);
+					pcpu->slots[slot].path_len = path_len;
+					put_cpu_ptr(&pcpu_path_cache); /* preempt_enable() */
+				}
+			}
 		}
 	}
 }
@@ -167,7 +259,8 @@ static int probe_open(struct inode *inode, struct file *file)
 	int count = atomic_inc_return(&open_count);
 	if (count == 1) {
 		atomic_set(&fast_sample_count, 0);
-		atomic_set(&slow_sample_count, 0);
+		atomic_set(&hit_sample_count, 0);
+		atomic_set(&miss_sample_count, 0);
 		atomic_set(&clone_sample_count, 0);
 		atomic_set(&binder_sample_count, 0);
 		WRITE_ONCE(is_active, true);
@@ -208,13 +301,14 @@ static int __init probe_init(void)
 	int err;
 	struct path p;
 
-	/* Dynamic baseline resolution: read real app_process64 dev & ino via kern_path */
+	/* Dynamic baseline resolution: read real app_process64 dev, ino & generation via kern_path */
 	if (kern_path("/system/bin/app_process64", LOOKUP_FOLLOW, &p) == 0) {
 		if (p.dentry && d_inode(p.dentry) && d_inode(p.dentry)->i_sb) {
 			app_process_dev = d_inode(p.dentry)->i_sb->s_dev;
 			app_process_ino = d_inode(p.dentry)->i_ino;
-			pr_info("sbo_enh_probe: baseline resolved dev=%u ino=%lu\n",
-				(unsigned int)app_process_dev, app_process_ino);
+			app_process_gen = d_inode(p.dentry)->i_generation;
+			pr_info("sbo_enh_probe: baseline resolved dev=%u ino=%lu gen=%u\n",
+				(unsigned int)app_process_dev, app_process_ino, app_process_gen);
 		}
 		path_put(&p);
 	} else {
@@ -254,7 +348,7 @@ static int __init probe_init(void)
 		return err;
 	}
 
-	pr_info("sbo_enh_probe: All-in-One module loaded successfully (/dev/%s mode 0600, 3 hooks active)\n",
+	pr_info("sbo_enh_probe: Stage 2 All-in-One module loaded successfully (/dev/%s mode 0600)\n",
 		probe_misc.name);
 	return 0;
 }
