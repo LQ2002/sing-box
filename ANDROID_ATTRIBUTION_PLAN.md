@@ -521,7 +521,7 @@ E1–E3 纯函数解析）。只引用上面已记录的实测；没有测过的
 可采纳的后续项（按收益/成本）：
 - [x] ① **UID 快路径为 App 原生子进程补可执行路径（用户态）[已实现]**：真机探针 `experimental/module_enhancement_probe/` 实测证实 `app_process64` inode（10829601）对 91 个活跃 Java App 命中率 100%、180 个 Native 进程区分率 100%。在 `socket_owner_resolve.go` 中引入 `isAppProcessInode()`，在 `socket_identity.go` 的 UID 快路径中增加判定：当 `hasCreator` 且 `ExeInode != appProcessInode` 时，通过 `resolveSocketOwner`（带 LRU 缓存）按需补齐 `ProcessPaths`，同时保留已归属的 `PackageNames`。单测 `TestOwnerFromIdentityNativeChildProcessPath` 验证通过，包全量单测通过。至此，对比总结中的唯一“退步”项彻底消除。
 - [ ] ② 查明整服务验收中 App DNS 请求方缺失的原因（需停生产服务复测）；
-- [ ] ③ 可选“停止即停采”开关；
+- [x] ③ **可选“停止即停采”开关（`remove_on_stop`）[已实现]**：在 `option/ebpf.go` 的 `EBPFSocketCreatorOptions` 中新增 `RemoveOnStop bool`（`remove_on_stop`，默认 false 保持覆盖重启窗口）；在 `socket_creator.go` 中增加选项校验，并在 `closeSocketCreator()` 中当 `socketCreatorRemoveOnStop` 生效时自动调用 `socketidentity.Remove(pinPath)` 卸载 producer link pin 与 map pin，让 tracepoint 钩子自动脱落，退出后全机 socket 创建开销立即归零。新增单测 `TestSocketCreatorConfiguration/remove_on_stop*`，WSL 全量单测通过。
 - [ ] ④ accept 子 socket 用 `BPF_F_CLONE` 继承；
 - [ ] ⑤ 若用户希望去掉模块，先用独立探针评估 `inet_sock_set_state` + `sock_send_length` 的时序与覆盖。
 

@@ -21,27 +21,30 @@ type socketCreatorCollector interface {
 	Close() error
 }
 
-func normalizeSocketCreator(options *option.EBPFSocketCreatorOptions, localEnabled bool, dataPlane string) (string, error) {
+func normalizeSocketCreator(options *option.EBPFSocketCreatorOptions, localEnabled bool, dataPlane string) (string, bool, error) {
 	if options == nil {
-		return "", nil
+		return "", false, nil
 	}
 	if !options.Enabled {
 		if options.PinPath != "" {
-			return "", E.New("local.socket_creator.pin_path requires enabled=true")
+			return "", false, E.New("local.socket_creator.pin_path requires enabled=true")
 		}
-		return "", nil
+		if options.RemoveOnStop {
+			return "", false, E.New("local.socket_creator.remove_on_stop requires enabled=true")
+		}
+		return "", false, nil
 	}
 	if !localEnabled || dataPlane != localDataPlaneTC {
-		return "", E.New("local.socket_creator requires local.enabled and local.data_plane=tc")
+		return "", false, E.New("local.socket_creator requires local.enabled and local.data_plane=tc")
 	}
 	path := options.PinPath
 	if path == "" {
 		path = socketidentity.DefaultPinPath
 	}
 	if !filepath.IsAbs(path) || filepath.Clean(path) == string(filepath.Separator) {
-		return "", E.New("local.socket_creator.pin_path must be an absolute dedicated directory")
+		return "", false, E.New("local.socket_creator.pin_path must be an absolute dedicated directory")
 	}
-	return filepath.Clean(path), nil
+	return filepath.Clean(path), options.RemoveOnStop, nil
 }
 
 // netdCookieTagMapPath is netd's cookie_tag_map (Connectivity bpf/netd,
@@ -111,6 +114,13 @@ func (i *Inbound) closeSocketCreator() error {
 		// Only our read-only descriptor closes; netd's pinned map is unaffected.
 		_ = i.netdCookieTags.Close()
 		i.netdCookieTags = nil
+	}
+	if i.socketCreatorRemoveOnStop && i.socketCreatorPinPath != "" {
+		if err := socketidentity.Remove(i.socketCreatorPinPath); err != nil {
+			i.logger.Warn("remove socket creator pins on stop: ", err)
+		} else {
+			i.logger.Debug("removed socket creator pins on stop at ", i.socketCreatorPinPath)
+		}
 	}
 	i.socketCreator = nil
 	i.socketCreatorActive.Store(false)

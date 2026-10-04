@@ -49,8 +49,9 @@ type EBPFLocalOptions struct {
 // EBPFSocketCreatorOptions enables the persistent socket-creation collector.
 // Omitted or disabled keeps the existing attribution sources unchanged.
 type EBPFSocketCreatorOptions struct {
-	Enabled bool   `json:"enabled,omitempty"`
-	PinPath string `json:"pin_path,omitempty"`
+	Enabled      bool   `json:"enabled,omitempty"`
+	PinPath      string `json:"pin_path,omitempty"`
+	RemoveOnStop bool   `json:"remove_on_stop,omitempty"`
 }
 
 type EBPFSharedOptions struct {
