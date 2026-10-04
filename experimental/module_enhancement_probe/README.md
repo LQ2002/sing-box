@@ -23,7 +23,7 @@
 本探针验证了全能单模块（All-in-One Kernel Module）的核心支柱，所有代码均严格限制在 `experimental/module_enhancement_probe/` 目录下，不侵入任何生产代码：
 
 1. **两阶段门控与现场安全绝对路径提取（解决原生子程序丢路径与开销问题）：**
-   - 快速门控：模块现场在 `rcu_read_lock()` 保护下解引用一次 `current->mm->exe_file`，首先仅比对三元组 `(dev, ino, gen)`，99.9% 的常规 Java App 快速 bypass；
+   - 快速门控：模块现场在 `rcu_read_lock()` 保护下解引用 `current->mm->exe_file`，首先判空 `f_inode`，并在读后复核 `READ_ONCE(current->mm->exe_file) == exe`（防止并发替换导致空指针 Oops）；比对三元组 `(dev, ino, gen)`，99.9% 的常规 Java App 快速 bypass；
    - BPF 净开销归零：模块将解析的三元组经 typed tracepoint 参数交给 BPF，BPF 彻底省去重复读取指针链；
    - 安全慢路径：针对原生子程序，在显式 `rcu_read_lock()` / `rcu_read_unlock()` 区间内调用内核导出的标准安全函数 `get_file_rcu(&current->mm->exe_file)` 原子增加引用计数，随后调用 `d_path(&exe->f_path, ...)`，最后严格成对调用 `fput(exe)` 释放引用，**100% 杜绝并发 execve / prctl 导致的 Use-After-Free 隐患**；
    - Per-CPU 路径缓存：采用 `get_cpu_ptr()` / `put_cpu_ptr()`（`preempt_disable/enable`）保护本地槽位，`d_path` 移至临界区之外调用，零跨核锁争用；路径槽位扩展为 256 字节（完全覆盖真机 4679 个原生 `.so` 最长 186 字节的实际分布），对超长路径设置 `PATH_TRUNCATED` 标志位。

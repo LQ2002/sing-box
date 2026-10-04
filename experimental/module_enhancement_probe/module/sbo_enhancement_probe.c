@@ -76,11 +76,17 @@ static void on_socket_create(void *unused, struct sock *sk)
 	t0 = ktime_get_ns();
 	rcu_read_lock();
 	exe = rcu_dereference(current->mm->exe_file);
-	if (likely(exe && exe->f_inode && exe->f_inode->i_sb)) {
-		dev = exe->f_inode->i_sb->s_dev;
-		ino = exe->f_inode->i_ino;
-		if (likely(dev == app_process_dev && ino == app_process_ino)) {
-			is_app_process = true;
+	if (likely(exe)) {
+		struct inode *inode = READ_ONCE(exe->f_inode);
+		if (likely(inode && inode->i_sb)) {
+			dev = inode->i_sb->s_dev;
+			ino = inode->i_ino;
+			/* Pointer-validation check: ensure exe_file didn't change concurrently during read */
+			if (likely(READ_ONCE(current->mm->exe_file) == exe)) {
+				if (likely(dev == app_process_dev && ino == app_process_ino)) {
+					is_app_process = true;
+				}
+			}
 		}
 	}
 	rcu_read_unlock();
