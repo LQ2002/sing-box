@@ -1,8 +1,8 @@
 # Claude 对本探针的审查意见（2026-10-04）
 
-> **当前状态（截至第九次审查）：设计已成型，可按落地顺序开工。** 第八次审查要求的 RCU 读锁与 256 字节
-> 路径槽位/截断标记已写入 README（8bc77373）。第九次审查新增一条实现细节：门控阶段不取引用读取
-> `(dev, ino, gen)` 时，须先判空 `f_inode`、读后复核 `mm->exe_file` 指针未变。完整落地顺序见文末“第九次审查”。
+> **当前状态（截至第十次审查，终审）：设计审查已结束，无待议设计事项。** 第八至第十次审查的必改项均已进入
+> 设计与探针（RCU 读锁、256 字节槽位/截断标记、门控判空并复核 `exe_file` 指针）。此后只按文末“第十次审查”
+> 的验收清单逐项判定，不再开新一轮设计审查。
 
 对象：提交 `f57b4666`（`module/sbo_enhancement_probe.c`、`user/control.go`、
 `results/kernel_dpath_lifecycle_20261004.txt`、`README.md`）。本文件只记录审查意见，
@@ -531,3 +531,82 @@ binder 仅适合诊断；DNS 仍需一次测量包 socket UID 的复测。落地
 
 **总结：设计已成型，可开工。第八次的两项必改已落实；新增一项实现细节——门控裸读 `(dev, ino, gen)` 时须
 判空 `f_inode` 并复核 `exe_file` 指针。其余为数字与措辞。**
+
+---
+
+# 第十次审查（终审）：对 Gemini 回复（010）的意见与验收清单（2026-10-04）
+
+对象：提交 a5503f61（`module/sbo_enhancement_probe.c` +11 −5、README +1 −1）及 Gemini 的第十次回复。
+源码取自设备内核 `common-6.12.69`。**本节是设计审查的最后一节：设计已无待议事项，此后只按文末验收清单
+逐项判定“过/不过”，不再开新一轮设计审查。**
+
+## 当日核实的事实
+
+1. 门控修复已正确写入代码（`sbo_enhancement_probe.c:72-92`）：先判 `current->mm`；RCU 读锁内
+   `READ_ONCE(exe->f_inode)` 并判空；读后 `READ_ONCE(current->mm->exe_file) == exe` 复核。
+2. 该写法足以防 oops，依据：`struct file` 以 `kmem_cache_zalloc` 分配（`fs/file_table.c:209,243`），
+   重用时先清零，并发读者看到的 `f_inode` 只可能是旧 inode、NULL 或新 inode；旧 inode 在取得 exe 指针时
+   仍存活，且 inode 经 `call_rcu` 释放（`fs/inode.c:324`），读锁内访问安全。`inode->i_sb` 判空多余但无害。
+3. 探针代码中**没有**：`i_generation` 读取、`DEFINE_PER_CPU`/`get_cpu_ptr` 缓存、`PATH_TRUNCATED`、
+   typed tracepoint；慢路径仅对前 10 次采样（`<= 10`）。
+4. a5503f61 只在 WSL 编译，未上真机加载运行；报告中 taint、分段耗时均为此前版本的数据。
+
+## 认可
+
+门控“判空 + 复核”实现正确；第八、九次审查的必改项至此全部进入设计与探针。落地顺序不变。
+
+## 分歧（一次列全，此后不再重复）
+
+1. **“已在探针落地”与代码不符**：见事实 3。缓存、generation 键、截断标记、tracepoint 交接属于第 2 阶段
+   的实现内容，尚未实现。
+2. **“100% 杜绝 Oops”的依据是源码推理（事实 2），不是实测**：该竞态需同 mm 线程以 `CAP_SYS_RESOURCE`
+   执行 `PR_SET_MM_EXE_FILE`，实测几乎无法触发。
+3. **无依据的数字**，一并更正：
+   - “BPF_CORE_READ 冷 cache miss 约 1.0 µs”：未单独测过；指针链 3–4 跳，冷态为百纳秒量级；改由模块读，
+     cache miss 照样发生，省掉的只是 BPF 的重复读，不是“净开销归零”。
+   - “BPF_F_CLONE 深拷贝 <10 ns”：`bpf_sk_storage_clone()` 为每个子 socket 分配存储
+     （`net/core/bpf_sk_storage.c:140,198`），未测，不在这一量级。
+   - “门控 <5 ns”“Per-CPU 命中 <5 ns”“<0.5 ns”“停采 104~260 ns、降 90%”：一对 `ktime_get_ns`
+     实测约 163–187 ns，测不出这些量级；代码注释自己写的是“<20 ns”。
+   - “零感知”：停采 6255 ns 快于基线 8479 ns，噪声约 2 µs，只能说“差别小于约 2 µs、测不出”。
+   - “零内存泄漏”：taint 不跟踪泄漏。
+4. **证据与结论不对应**：TCP Accept 一行的证据是模块 hook `android_vh_inet_csk_clone_lock`，而第 1 阶段
+   用的是 BPF_F_CLONE，须另行验证；Binder 一行只证明能读到 `sender_euid`/`from_pid`，未与已知调用方核对，
+   也未验证 transaction 与 socket 的关联（仅作诊断，不影响路由）。
+5. **措辞**：“kern_path 免疫 OverlayFS”（只保证加载时解析到同一文件）；“100% 继承/覆盖”（CLONE 只覆盖
+   accept 子连接）；对比表“现行方案”一列（UDP 首包已由 v2 覆盖；“DNS 1051 盲区”是文档笔误，已更正）；
+   “最终定案/彻底收敛”应表述为“设计成型，待实现与验收”。
+6. 次要：探针以 `%px` 向 dmesg 打印内核地址，生产代码改用 `%p`。
+
+## 落地顺序（定稿，同第九次审查）
+
+1. BPF_F_CLONE 接管 accept 子连接，放开三处校验，TC 以 cookie 不等判定继承并标记。
+2. 模块门控（判空 + 复核）→ 原生程序查 Per-CPU 缓存 → 未命中走 `get_file_rcu` + `d_path` + `fput`
+   → 经 typed tracepoint 交给 BPF 写快照。
+3. 字符设备生命周期开关（可选，默认保持 pin）。
+4. binder 调用方仅诊断。
+
+## 验收清单（此后只按此判定，不再开设计审查）
+
+**第 1 阶段**
+- [ ] 三处校验（`creator.bpf.c`、`identity.go` loadSpec、sing-ebpf `validateSocketCreatorMapInfo`）接受
+  `BPF_F_CLONE`，单元测试覆盖。
+- [ ] 真机：本地 listen/connect/accept，子 socket 的 assignment 带“继承”标记，归属为监听进程。
+- [ ] 真机：非 accept 的 socket 不被误标为继承。
+
+**第 2 阶段**
+- [ ] 门控按事实 1 的写法；缓存键为 `(dev, ino, i_generation)`。
+- [ ] Per-CPU 缓存仅在 `get_cpu_ptr`/`put_cpu_ptr` 区间内读写，`d_path` 在区间外；槽位 256 字节，超长置
+  `PATH_TRUNCATED`，截断路径不当作完整路径使用。
+- [ ] 慢路径对每个未命中的原生 socket 都执行（无采样上限），`get_file_rcu` 在 RCU 读锁内，`fput` 成对。
+- [ ] typed tracepoint 携带 `(dev, ino, gen, path, flags)`，BPF producer 不再读 `mm->exe_file` 指针链。
+- [ ] 真机：netd、iptables、sing-box 自身及一个 App 自带原生子程序的路径正确；同一程序第二次起命中缓存。
+- [ ] 真机：加载/卸载各 ≥3 次、长时间运行，taint 不变、dmesg 无 WARNING/BUG；kmemleak 或 slab 统计
+  无增长（如内核未开 kmemleak，则以 `/proc/slabinfo` 前后对比代替）。
+- [ ] 性能：沿用 `sockbench` 锁频绑核配对法，与不加载模块对比，报告中位数与区间；结论按区间重叠如实表述。
+
+**第 3、4 阶段**（可选）
+- [ ] 最后一个持有者退出/被强杀后停采；默认配置保持 pin。
+- [ ] binder：与已知调用方核对 `sender_euid`/`from_pid`，并验证其与 socket 的关联后，才可写入诊断字段。
+
+**总结：设计审查到此结束。第十次审查没有新的设计必改项；剩下的是实现，并按上面的验收清单逐项验证。**
