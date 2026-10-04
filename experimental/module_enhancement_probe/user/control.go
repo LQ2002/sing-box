@@ -121,7 +121,7 @@ func main() {
 		}
 	}
 
-	// 持有者 2 退出，验证最后一个持有者释放时停采
+	// 4. 最后一个持有者已关闭，验证完全停采...
 	h2.Close()
 	time.Sleep(100 * time.Millisecond)
 	fmt.Println("[4] 最后一个持有者已关闭，验证完全停采...")
@@ -130,6 +130,21 @@ func main() {
 		fmt.Printf("  [通过] 内核确认最后一个持有者释放并停采: %s\n", releaseLines[len(releaseLines)-1])
 	} else {
 		fmt.Println("  [未见] 未找到 last holder RELEASED 日志")
+	}
+
+	// 4.1 在停采状态下触发 socket 创建，实测量化停采后已注册 Vendor Hook 的开销
+	fmt.Println("[4.1] 在停采状态下触发 socket 创建，实测 INACTIVE_OVERHEAD 纳秒值...")
+	for i := 0; i < 3; i++ {
+		conn, err := net.Dial("udp", "127.0.0.1:34567")
+		if err == nil {
+			conn.Close()
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	inactiveLines := readDmesgRecent("INACTIVE_OVERHEAD")
+	for _, line := range inactiveLines {
+		fmt.Println("  ", line)
 	}
 
 	// 5. 测试 kill -9 强杀下的原子引用计数自动清零

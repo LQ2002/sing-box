@@ -44,6 +44,7 @@ static atomic_t fast_sample_count = ATOMIC_INIT(0);
 static atomic_t slow_sample_count = ATOMIC_INIT(0);
 static atomic_t clone_sample_count = ATOMIC_INIT(0);
 static atomic_t binder_sample_count = ATOMIC_INIT(0);
+static atomic_t inactive_sample_count = ATOMIC_INIT(0);
 
 static dev_t app_process_dev;
 static unsigned long app_process_ino;
@@ -56,9 +57,17 @@ static void on_socket_create(void *unused, struct sock *sk)
 	bool is_app_process = false;
 	dev_t dev = 0;
 	unsigned long ino = 0;
+	u64 t_inact_0, t_inact_1;
 
-	if (!READ_ONCE(is_active))
+	t_inact_0 = ktime_get_ns();
+	if (!READ_ONCE(is_active)) {
+		t_inact_1 = ktime_get_ns();
+		if (atomic_inc_return(&inactive_sample_count) <= 5) {
+			pr_info("sbo_enh_probe [INACTIVE_OVERHEAD]: pid=%d is_active=false cost_ns=%llu\n",
+				current->pid, (t_inact_1 - t_inact_0));
+		}
 		return;
+	}
 
 	if (!current->mm)
 		return; /* Kernel thread bypass */
@@ -90,13 +99,15 @@ static void on_socket_create(void *unused, struct sock *sk)
 	if (atomic_inc_return(&slow_sample_count) <= 10) {
 		char buf[256];
 		char *path_str = NULL;
-		u64 t_slow_0, t_slow_1;
+		u64 t_get_0, t_get_1, t_dp_0, t_dp_1, t_fp_0, t_fp_1;
 
-		t_slow_0 = ktime_get_ns();
+		t_get_0 = ktime_get_ns();
 		rcu_read_lock();
 		exe = get_file_rcu(&current->mm->exe_file);
 		rcu_read_unlock();
+		t_get_1 = ktime_get_ns();
 		if (exe) {
+			t_dp_0 = ktime_get_ns();
 			path_str = d_path(&exe->f_path, buf, sizeof(buf));
 			if (IS_ERR(path_str))
 				path_str = "<err>";
@@ -104,10 +115,14 @@ static void on_socket_create(void *unused, struct sock *sk)
 				ino = exe->f_inode->i_ino;
 				dev = exe->f_inode->i_sb->s_dev;
 			}
-			t_slow_1 = ktime_get_ns();
-			pr_info("sbo_enh_probe [NATIVE_CHILD]: pid=%d comm=%s d_path=%s cost_ns=%llu dev=%u ino=%lu\n",
-				current->pid, current->comm, path_str, (t_slow_1 - t_slow_0), (unsigned int)dev, ino);
+			t_dp_1 = ktime_get_ns();
+			t_fp_0 = ktime_get_ns();
 			fput(exe); /* Strict refcount release */
+			t_fp_1 = ktime_get_ns();
+			pr_info("sbo_enh_probe [NATIVE_CHILD]: pid=%d comm=%s d_path=%s total_ns=%llu (get_rcu=%llu, d_path=%llu, fput=%llu) dev=%u ino=%lu\n",
+				current->pid, current->comm, path_str,
+				(t_fp_1 - t_get_0), (t_get_1 - t_get_0), (t_dp_1 - t_dp_0), (t_fp_1 - t_fp_0),
+				(unsigned int)dev, ino);
 		} else {
 			pr_info("sbo_enh_probe [NATIVE_CHILD]: pid=%d comm=%s <no_exe_file>\n", current->pid, current->comm);
 		}
