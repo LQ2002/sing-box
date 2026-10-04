@@ -17,10 +17,12 @@ package androidmanifest
 import (
 	"bufio"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/common/androidpackages"
 )
@@ -55,6 +57,12 @@ func TestDeviceColonPrefixRule(t *testing.T) {
 	}
 	file.Close()
 
+	// Cost of the index this shortcut would replace: parse time and the heap
+	// the resulting name -> packages tables keep alive.
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	parseStart := time.Now()
 	// declared[appID][name] = packages declaring that process name
 	declared := map[uint32]map[string][]string{}
 	parseFailures := 0
@@ -148,6 +156,12 @@ func TestDeviceColonPrefixRule(t *testing.T) {
 			}
 		}
 	}
+	parseTime := time.Since(parseStart)
+	runtime.GC()
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(declared)
+	t.Logf("COST parse=%s retained_heap_bytes=%d", parseTime.Round(time.Millisecond), int64(after.HeapAlloc)-int64(before.HeapAlloc))
 	t.Logf("SHARED app_ids=%d packages=%d parse_failures=%d", sharedApps, sharedPackages, parseFailures)
 	report("DECLARED", counts, examples)
 
