@@ -1,0 +1,1 @@
+TIMING round=1 variant=none inet=100107 app=39 hit=100056 miss=12 t_app=1140/39 t_hit=49/100056 t_miss=3042/12 t_kernel=0/0 

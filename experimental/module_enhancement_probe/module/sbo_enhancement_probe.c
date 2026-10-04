@@ -47,6 +47,8 @@
 #include <linux/sched/mm.h>
 #include <linux/dcache.h>
 #include <linux/percpu.h>
+#include <linux/math64.h>
+#include <linux/sched/clock.h>
 #include <linux/tracepoint.h>
 #include <linux/socket.h>
 
@@ -129,13 +131,39 @@ static inline bool is_user_inet(const struct sock *sk)
 	       !((base[SBO_SK_KERN_SOCK_BYTE] >> SBO_SK_KERN_SOCK_SHIFT) & 1);
 }
 
+/* Optional per-path timing of the hook, including the synchronous BPF
+ * consumer run by the tracepoint: the extra cost each socket pays. Off by
+ * default (two local_clock() reads per socket); enable with
+ * /sys/module/sbo_enhancement_probe/parameters/timing. local_clock() ticks at
+ * the 19.2 MHz arch timer (52 ns), so single samples are quantised; the mean
+ * over many sockets is what is reported.
+ */
+enum sbo_path { PATH_APP, PATH_HIT, PATH_MISS, PATH_KERNEL, PATH_KINDS };
+static const char *const path_names[PATH_KINDS] = { "app", "hit", "miss", "kernel" };
+struct path_timing { u64 ns; u64 count; };
+static DEFINE_PER_CPU(struct path_timing [PATH_KINDS], sbo_timing);
+static bool timing;
+module_param(timing, bool, 0600);
+MODULE_PARM_DESC(timing, "Measure per-socket hook cost (default off)");
+
 static int stats_get(char *buffer, const struct kernel_param *kp)
 {
-	int len = 0, i;
+	int len = 0, i, cpu;
 
 	for (i = 0; i < ST_COUNT; i++)
 		len += sysfs_emit_at(buffer, len, "%s%s=%llu", i ? " " : "", stat_names[i], stat_sum(i));
-	len += sysfs_emit_at(buffer, len, " active=%d holders=%d\n", READ_ONCE(is_active), atomic_read(&open_count));
+	len += sysfs_emit_at(buffer, len, " active=%d holders=%d", READ_ONCE(is_active), atomic_read(&open_count));
+	for (i = 0; i < PATH_KINDS; i++) {
+		u64 ns = 0, count = 0;
+
+		for_each_possible_cpu(cpu) {
+			ns += per_cpu(sbo_timing[i], cpu).ns;
+			count += per_cpu(sbo_timing[i], cpu).count;
+		}
+		len += sysfs_emit_at(buffer, len, " t_%s=%llu/%llu", path_names[i],
+				     count ? div64_u64(ns, count) : 0, count);
+	}
+	len += sysfs_emit_at(buffer, len, "\n");
 	return len;
 }
 
@@ -269,8 +297,8 @@ static void resolve_slow(struct sock *sk, struct mm_struct *mm)
 	put_cpu_ptr(&pcpu_path_cache);
 }
 
-/* 1. Socket creation hook (net/socket.c:1602, end of __sock_create) */
-static void on_socket_create(void *unused, struct sock *sk)
+/* Classifies one user inet socket and fires its event. */
+static enum sbo_path handle_inet(struct sock *sk)
 {
 	struct mm_struct *mm;
 	struct file *exe;
@@ -280,18 +308,11 @@ static void on_socket_create(void *unused, struct sock *sk)
 	u32 gen = 0;
 	bool validated = false;
 
-	if (!READ_ONCE(is_active))
-		return;
-	if (!sk || !is_user_inet(sk)) {
-		stat_inc(ST_SKIPPED);
-		return;
-	}
-	stat_inc(ST_INET);
 	mm = current->mm;
 	if (!mm || (current->flags & PF_KTHREAD)) {
 		stat_inc(ST_KERNEL);
 		emit(sk, 0, 0, 0, "", 0, SBO_FLAG_KERNEL);
-		return;
+		return PATH_KERNEL;
 	}
 
 	rcu_read_lock();
@@ -311,16 +332,43 @@ static void on_socket_create(void *unused, struct sock *sk)
 		if (dev == app_process_dev && ino == app_process_ino && gen == app_process_gen) {
 			stat_inc(ST_APP);
 			emit(sk, dev, ino, gen, "", 0, SBO_FLAG_APP_PROCESS);
-			return;
+			return PATH_APP;
 		}
 		if (cache_emit(sk, dev, ino, gen)) {
 			stat_inc(ST_HIT);
-			return;
+			return PATH_HIT;
 		}
 	} else {
 		stat_inc(ST_UNVALIDATED);
 	}
 	resolve_slow(sk, mm);
+	return PATH_MISS;
+}
+
+/* 1. Socket creation hook (net/socket.c:1602, end of __sock_create) */
+static void on_socket_create(void *unused, struct sock *sk)
+{
+	struct path_timing *t;
+	enum sbo_path path;
+	u64 start;
+
+	if (!READ_ONCE(is_active))
+		return;
+	if (!sk || !is_user_inet(sk)) {
+		stat_inc(ST_SKIPPED);
+		return;
+	}
+	stat_inc(ST_INET);
+	if (likely(!READ_ONCE(timing))) {
+		handle_inet(sk);
+		return;
+	}
+	start = local_clock();
+	path = handle_inet(sk);
+	t = get_cpu_ptr(&sbo_timing[path]);
+	t->ns += local_clock() - start;
+	t->count++;
+	put_cpu_ptr(&sbo_timing[path]);
 }
 
 /* 2. Binder caller hook (diagnostic metadata only, never used for routing) */

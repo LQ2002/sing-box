@@ -1,0 +1,29 @@
+PRECHECK taint=4608 file_nr=53257 sing-box=none
+FREQ_LOCKED policy0 min=max=2745600 cur=2745600
+BENCH label=unloaded n=20000 rounds=5 median=6520 min=5534 max=7701 all=[7152 5534 6415 7701 6520]
+BENCH label=loaded_inactive n=20000 rounds=5 median=8001 min=6446 max=8967 all=[8967 8001 8696 7346 6446]
+BENCH label=collecting n=20000 rounds=5 median=6670 min=6206 max=8118 all=[6670 6206 6967 8118 6604]
+HOLDING
+HOLD_DONE bpf=map[duplicate:0 events:100000 path_insert:1 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+BENCH label=unloaded n=20000 rounds=5 median=6961 min=6188 max=7711 all=[6188 6961 6388 7711 7674]
+BENCH label=loaded_inactive n=20000 rounds=5 median=7343 min=5516 max=7803 all=[7324 7436 5516 7803 7343]
+BENCH label=collecting n=20000 rounds=5 median=7299 min=6209 max=8830 all=[7142 7299 6209 7476 8830]
+HOLDING
+HOLD_DONE bpf=map[duplicate:0 events:100002 path_insert:2 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+BENCH label=unloaded n=20000 rounds=5 median=7464 min=5793 max=12187 all=[12187 7008 5793 7464 8330]
+BENCH label=loaded_inactive n=20000 rounds=5 median=7089 min=6123 max=8376 all=[7927 7089 6123 6651 8376]
+BENCH label=collecting n=20000 rounds=5 median=7768 min=7039 max=8705 all=[8705 7082 8534 7039 7768]
+HOLDING
+HOLD_DONE bpf=map[duplicate:0 events:100000 path_insert:1 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+DMESG captured_lines=8639 lines_since_mark=105
+6,2140886,249540301149,-,caller=T15925;sbo_enh_probe: loaded (/dev/sbo_enhancement_probe mode 0600)
+6,2140915,249542965715,-,caller=T16233;sbo_enh_probe: file_ref check: get_file_rcu=1 fput=1 delta=0
+6,2140917,249544749965,-,caller=T16322;sbo_enh_probe: baseline resolved dev=266338314 ino=10829601 gen=0
+6,2140918,249544750924,-,caller=T16322;sbo_enh_probe: loaded (/dev/sbo_enhancement_probe mode 0600)
+6,2140936,249547389928,-,caller=T16575;sbo_enh_probe: file_ref check: get_file_rcu=2 fput=2 delta=0
+6,2140941,249549327065,-,caller=T16653;sbo_enh_probe: baseline resolved dev=266338314 ino=10829601 gen=0
+6,2140942,249549329044,-,caller=T16653;sbo_enh_probe: loaded (/dev/sbo_enhancement_probe mode 0600)
+6,2140963,249552065257,-,caller=T16790;sbo_enh_probe: file_ref check: get_file_rcu=1 fput=1 delta=0
+KERNEL_SPLATS total=0 mentioning_sbo=0
+KERNEL_CHECK_PASS taint=4608
+FREQ_RESTORED min=537600 max=2745600 governor=walt

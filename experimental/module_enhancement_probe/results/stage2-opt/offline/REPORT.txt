@@ -1,0 +1,20 @@
+2026-10-04 19:32:50 OFFLINE_START taint=4608
+2026-10-04 19:34:23 PHASE quick rc=0 3 selftests passed; SELFTEST kind=accept n=200 map[ok_inherited:200]
+SELFTEST kind=accept n=200 map[ok_inherited:200]
+SELFTEST kind=accept n=200 map[ok_inherited:200]
+2026-10-04 19:34:38 PHASE bench rc=0
+BENCH label=unloaded n=20000 rounds=5 median=7196 min=5647 max=8490 all=[8490 5647 7196 7340 6354]
+BENCH label=loaded_inactive n=20000 rounds=5 median=6921 min=5523 max=7758 all=[7758 7695 5523 6056 6921]
+BENCH label=collecting n=20000 rounds=5 median=7089 min=7025 max=8032 all=[7946 7025 8032 7038 7089]
+BENCH label=unloaded n=20000 rounds=5 median=5961 min=5820 max=7653 all=[7653 5926 6722 5820 5961]
+BENCH label=loaded_inactive n=20000 rounds=5 median=6546 min=5504 max=7021 all=[6546 5504 5723 6858 7021]
+BENCH label=collecting n=20000 rounds=5 median=6295 min=6138 max=8009 all=[6457 6295 6166 6138 8009]
+BENCH label=unloaded n=20000 rounds=5 median=7553 min=6323 max=7676 all=[7676 7553 7273 7571 6323]
+BENCH label=loaded_inactive n=20000 rounds=5 median=7155 min=6823 max=7848 all=[7848 7107 7782 7155 6823]
+BENCH label=collecting n=20000 rounds=5 median=8253 min=7636 max=8662 all=[8418 7636 8253 8174 8662]
+2026-10-04 20:34:43 PHASE long rc=1
+WATCH_DONE events=20323 kinds=map[app:14873 native:5450] verdicts=map[app:map[ok:14873] native:map[gone:93 ok:5357]] bpf=map[duplicate:0 events:20323 path_insert:8 path_read_fail:0 ringbuf_drop:0 storage_fail:0] module=inet=20323 skipped=52865 app=14873 hit=5408 miss=42 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=42 put=42 active=1 holders=1 distinct_paths=9 mismatches=0
+STATS_BEFORE_UNLOAD inet=20323 skipped=52865 app=14873 hit=5408 miss=42 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=42 put=42 active=0 holders=0
+ERROR: kernel warning since mark
+6,2133425,249078021153,-,caller=T18649;sbo_enh_probe: file_ref check: get_file_rcu=42 fput=42 delta=0
+2026-10-04 20:34:43 OFFLINE_DONE taint=4608 module_loaded=no

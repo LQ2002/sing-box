@@ -1,0 +1,181 @@
+{
+  "bpf": {
+    "duplicate": 0,
+    "events": 20323,
+    "path_insert": 8,
+    "path_read_fail": 0,
+    "ringbuf_drop": 0,
+    "storage_fail": 0
+  },
+  "events": 20323,
+  "file_nr_end": "46825",
+  "kinds": {
+    "app": 14873,
+    "native": 5450
+  },
+  "mismatches": null,
+  "module": "inet=20323 skipped=52865 app=14873 hit=5408 miss=42 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=42 put=42 active=1 holders=1",
+  "paths": [
+    {
+      "path": "",
+      "kind": "app",
+      "events": 14873,
+      "cache_hits": 0,
+      "uids": {
+        "1000": 9955,
+        "10053": 4,
+        "10106": 15,
+        "10128": 60,
+        "10133": 1,
+        "10136": 167,
+        "10168": 1,
+        "10176": 27,
+        "10193": 35,
+        "10198": 4,
+        "10205": 6,
+        "10242": 7,
+        "10292": 6,
+        "10308": 6,
+        "10309": 48,
+        "10317": 1,
+        "10336": 88,
+        "10356": 2806,
+        "10370": 194,
+        "10384": 10,
+        "10410": 1377,
+        "1073": 51,
+        "6102": 1,
+        "6110": 3
+      },
+      "comms": {
+        "ConnectivitySer": 14,
+        "binder:3818_18": 15,
+        "binder:3818_1A": 1,
+        "binder:3818_1C": 1,
+        "binder:3818_20": 9,
+        "binder:3818_5": 1,
+        "binder:3818_A": 8,
+        "binder:3818_C": 4
+      }
+    },
+    {
+      "path": "/system/bin/netd",
+      "kind": "native",
+      "events": 3167,
+      "cache_hits": 3157,
+      "uids": {
+        "0": 3167
+      },
+      "comms": {
+        "Dns_117_0": 2,
+        "Dns_117_10128": 1,
+        "Dns_117_10136": 83,
+        "Dns_117_10198": 18,
+        "Dns_117_10205": 4,
+        "Dns_117_10356": 284,
+        "Dns_117_10384": 92,
+        "Dns_117_1073": 46
+      }
+    },
+    {
+      "path": "/system/bin/iptables",
+      "kind": "native",
+      "events": 1812,
+      "cache_hits": 1801,
+      "uids": {
+        "0": 1812
+      },
+      "comms": {
+        "ip6tables-resto": 891,
+        "iptables": 30,
+        "iptables-restor": 891
+      }
+    },
+    {
+      "path": "/system/bin/ip",
+      "kind": "native",
+      "events": 440,
+      "cache_hits": 433,
+      "uids": {
+        "10356": 360,
+        "10410": 80
+      },
+      "comms": {
+        "ip": 440
+      }
+    },
+    {
+      "path": "/data/adb/services/sing-box/sing-box",
+      "kind": "native",
+      "events": 15,
+      "cache_hits": 9,
+      "uids": {
+        "0": 15
+      },
+      "comms": {
+        "sing-box": 15
+      }
+    },
+    {
+      "path": "/vendor/bin/nicmd",
+      "kind": "native",
+      "events": 6,
+      "cache_hits": 3,
+      "uids": {
+        "1001": 6
+      },
+      "comms": {
+        "nicmd": 6
+      }
+    },
+    {
+      "path": "/system_ext/bin/hyos_spawner",
+      "kind": "native",
+      "events": 6,
+      "cache_hits": 3,
+      "uids": {
+        "10287": 2,
+        "10295": 4
+      },
+      "comms": {
+        "1.ui": 4,
+        "rt-app-3": 1,
+        "rt-app-4": 1
+      }
+    },
+    {
+      "path": "/system/bin/ping",
+      "kind": "native",
+      "events": 2,
+      "cache_hits": 1,
+      "uids": {
+        "10410": 2
+      },
+      "comms": {
+        "ping": 2
+      }
+    },
+    {
+      "path": "/system/bin/ping6",
+      "kind": "native",
+      "events": 2,
+      "cache_hits": 1,
+      "uids": {
+        "10410": 2
+      },
+      "comms": {
+        "ping6": 2
+      }
+    }
+  ],
+  "seconds": 3600.003968053,
+  "verdicts": {
+    "app": {
+      "ok": 14873
+    },
+    "native": {
+      "gone": 93,
+      "ok": 5357
+    }
+  }
+}

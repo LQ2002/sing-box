@@ -1,0 +1,7 @@
+TIMING round=1 variant=none inet=100059 app=47 hit=100004 miss=8 t_app=1061/47 t_hit=51/100004 t_miss=2519/8 t_kernel=0/0 
+TIMING round=1 variant=v0 inet=100068 app=48 hit=100013 miss=7 t_app=2236/48 t_hit=85/100013 t_miss=5230/7 t_kernel=0/0 
+TIMING round=1 variant=v2 inet=100039 app=37 hit=100000 miss=2 t_app=5781/37 t_hit=641/100000 t_miss=13750/2 t_kernel=0/0 
+TIMING round=2 variant=none inet=100200 app=103 hit=100081 miss=16 t_app=1167/103 t_hit=50/100081 t_miss=4179/16 t_kernel=0/0 
+TIMING round=2 variant=v0 inet=100175 app=140 hit=100025 miss=10 t_app=1601/140 t_hit=86/100025 t_miss=6015/10 t_kernel=0/0 
+TIMING round=2 variant=v2 inet=100093 app=77 hit=100011 miss=5 t_app=6704/77 t_hit=671/100011 t_miss=13396/5 t_kernel=0/0 
+RESTORED min=787200 governor=walt module=unloaded
