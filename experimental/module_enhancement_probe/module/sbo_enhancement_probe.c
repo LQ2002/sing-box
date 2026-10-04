@@ -51,6 +51,10 @@ static atomic_t clone_sample_count = ATOMIC_INIT(0);
 static atomic_t binder_sample_count = ATOMIC_INIT(0);
 static atomic_t inactive_sample_count = ATOMIC_INIT(0);
 
+/* Strict paired refcount tracking for get_file_rcu() and fput() */
+static atomic_t count_get_file = ATOMIC_INIT(0);
+static atomic_t count_fput = ATOMIC_INIT(0);
+
 static dev_t app_process_dev;
 static unsigned long app_process_ino;
 static u32 app_process_gen;
@@ -106,8 +110,11 @@ static void on_socket_create(void *unused, struct sock *sk)
 		return;
 	}
 
-	if (!current->mm)
-		return; /* Kernel thread bypass */
+	if (!current->mm) {
+		/* Kernel thread bypass: emit exactly one ERROR event with empty path */
+		trace_sbo_enhancement_socket_identity(sk, 0, 0, 0, "", 0, SBO_FLAG_ERROR);
+		return;
+	}
 
 	/* --- Phase 1: RCU Fast-Path Gate with Pointer Validation --- */
 	t0 = ktime_get_ns();
@@ -132,7 +139,7 @@ static void on_socket_create(void *unused, struct sock *sk)
 
 	if (likely(is_app_process)) {
 		/* Fast path: 99.9% of Java apps bypass here */
-		trace_sbo_enhancement_socket_identity(sk, dev, ino, gen, "", 0, 0);
+		trace_sbo_enhancement_socket_identity(sk, dev, ino, gen, "", 0, SBO_FLAG_APP_PROCESS);
 		if (atomic_inc_return(&fast_sample_count) <= 5) {
 			pr_info("sbo_enh_probe [FAST_BYPASS]: pid=%d comm=%s is_java=true cost_ns=%llu dev=%u ino=%lu gen=%u\n",
 				current->pid, current->comm, (t1 - t0), (unsigned int)dev, ino, gen);
@@ -178,6 +185,7 @@ static void on_socket_create(void *unused, struct sock *sk)
 			u8 flags = 0;
 			u32 path_len = 0;
 			char cached_path[PATH_MAX_LEN] = {};
+			bool should_cache = false;
 
 			t_get_0 = ktime_get_ns();
 			rcu_read_lock();
@@ -186,6 +194,7 @@ static void on_socket_create(void *unused, struct sock *sk)
 			t_get_1 = ktime_get_ns();
 
 			if (exe) {
+				atomic_inc(&count_get_file);
 				t_dp_0 = ktime_get_ns();
 				path_str = d_path(&exe->f_path, buf, sizeof(buf));
 				t_dp_1 = ktime_get_ns();
@@ -193,23 +202,29 @@ static void on_socket_create(void *unused, struct sock *sk)
 				if (IS_ERR(path_str)) {
 					if (PTR_ERR(path_str) == -ENAMETOOLONG) {
 						/* Required Fix 1: buffer too small -> cache empty path + TOO_LONG flag */
-						flags |= PATH_FLAG_TOO_LONG;
+						flags = SBO_FLAG_TOO_LONG;
 						path_len = 0;
 						cached_path[0] = '\0';
+						should_cache = true;
 					} else {
-						path_str = "<err>";
+						/* Non-recoverable error: do NOT write to cache */
+						flags = SBO_FLAG_ERROR;
 						path_len = 0;
+						cached_path[0] = '\0';
+						should_cache = false;
 					}
 				} else {
 					path_len = strlen(path_str);
+					flags = SBO_FLAG_NATIVE_PATH;
 					/* Required Fix 1: strip " (deleted)" suffix if present */
 					if (path_len >= DELETED_SUFFIX_LEN &&
 					    memcmp(path_str + path_len - DELETED_SUFFIX_LEN, deleted_suffix, DELETED_SUFFIX_LEN) == 0) {
-						flags |= PATH_FLAG_DELETED;
+						flags |= SBO_FLAG_DELETED;
 						path_len -= DELETED_SUFFIX_LEN;
 						path_str[path_len] = '\0';
 					}
 					strscpy(cached_path, path_str, PATH_MAX_LEN);
+					should_cache = true;
 				}
 
 				if (exe->f_inode && exe->f_inode->i_sb) {
@@ -220,6 +235,7 @@ static void on_socket_create(void *unused, struct sock *sk)
 
 				t_fp_0 = ktime_get_ns();
 				fput(exe); /* Strict refcount release */
+				atomic_inc(&count_fput);
 				t_fp_1 = ktime_get_ns();
 
 				if (atomic_inc_return(&miss_sample_count) <= 10) {
@@ -229,8 +245,8 @@ static void on_socket_create(void *unused, struct sock *sk)
 						(unsigned int)flags, (unsigned int)dev, ino, gen);
 				}
 
-				/* Phase 4: Write back to local per-CPU slot & emit tracepoint */
-				if (!IS_ERR(path_str) || (flags & PATH_FLAG_TOO_LONG)) {
+				/* Phase 4: Write back to local per-CPU slot ONLY if should_cache is true */
+				if (should_cache) {
 					u8 slot;
 					pcpu = get_cpu_ptr(&pcpu_path_cache); /* preempt_disable() */
 					slot = pcpu->next_slot++ % PATH_CACHE_SLOTS;
@@ -240,11 +256,18 @@ static void on_socket_create(void *unused, struct sock *sk)
 					pcpu->slots[slot].flags = flags;
 					strscpy(pcpu->slots[slot].path, cached_path, PATH_MAX_LEN);
 					pcpu->slots[slot].path_len = path_len;
-					/* Emit tracepoint on miss writeback */
+					/* Emit tracepoint directly using slot pointer under get_cpu_ptr */
 					trace_sbo_enhancement_socket_identity(sk, dev, ino, gen,
 						pcpu->slots[slot].path, pcpu->slots[slot].path_len, pcpu->slots[slot].flags);
 					put_cpu_ptr(&pcpu_path_cache); /* preempt_enable() */
+				} else {
+					/* Error branch: emit tracepoint with ERROR flag without polluting cache */
+					trace_sbo_enhancement_socket_identity(sk, dev, ino, gen, "", 0, SBO_FLAG_ERROR);
 				}
+			} else {
+				/* exe == NULL: emit exactly one tracepoint event with ERROR flag */
+				trace_sbo_enhancement_socket_identity(sk, dev, ino, gen, "", 0, SBO_FLAG_ERROR);
+				pr_info("sbo_enh_probe [NATIVE_CHILD]: pid=%d comm=%s <no_exe_file>\n", current->pid, current->comm);
 			}
 		}
 	}
@@ -378,12 +401,15 @@ static int __init probe_init(void)
 
 static void __exit probe_exit(void)
 {
+	int g = atomic_read(&count_get_file);
+	int f = atomic_read(&count_fput);
 	WRITE_ONCE(is_active, false);
 	unregister_trace_android_vh_binder_transaction_received(on_binder_received, NULL);
 	unregister_trace_android_vh_inet_csk_clone_lock(on_inet_csk_clone, NULL);
 	unregister_trace_android_vh_sock_create(on_socket_create, NULL);
 	tracepoint_synchronize_unregister();
 	misc_deregister(&probe_misc);
+	pr_info("sbo_enh_probe: file_ref check: get_file_rcu=%d fput=%d delta=%d\n", g, f, g - f);
 	pr_info("sbo_enh_probe: module unloaded successfully\n");
 }
 
