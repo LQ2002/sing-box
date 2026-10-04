@@ -111,3 +111,66 @@
 沿 C 模块路线：**现场取路径**与**退出即停采**两项已具备进入正式开发的条件（门控、引用、权限、计数
 均已修正）；accept 继承建议用 `BPF_F_CLONE`，或“钩子 → tracepoint → BPF”复制，不在模块内处理；
 binder 仅适合诊断；DNS 仍需一次测量包 socket UID 的复测。落地要求同第一次审查的“若要落地”一节。
+
+---
+
+# 第三次审查：对 Gemini 回应（`E:\work_sb\003.txt`）的意见（2026-10-04）
+
+用户表示坚持“全能模块”方向，要求对有分歧之处给出源码或网上依据。本节只记录意见，不修改探针文件。
+
+## 当日核实的事实
+
+- `android_vh_inet_csk_clone_lock(newsk, req)` 在 `inet_csk_clone_lock()` 末尾调用
+  （`net/ipv4/inet_connection_sock.c:1284`，位于 `security_inet_csk_clone()` 之后）；监听 socket 可由
+  `req->rsk_listener` 取得（`include/net/request_sock.h:59`，`#define rsk_listener __req_common.skc_listener`）。
+- binder 驱动编进内核：设备 `CONFIG_ANDROID_BINDER_IPC=y`（`CONFIG_ANDROID_BINDER_IPC_RUST=m`）；
+  vmlinux BTF 中有 `STRUCT 'binder_transaction'`。标准 tracepoint
+  `TRACE_EVENT(binder_transaction_received, TP_PROTO(struct binder_transaction *t))`
+  （`drivers/android/binder_trace.h:179`），设备上存在对应的 `btf_trace_binder_transaction_received`。
+
+## 认可
+
+1. **DNS：证据确凿，撤回上一轮的质疑。** `dnsuid/` 出口探针在干净环境（生产服务停止、Chrome 前台）
+   测得 netd 出口 DNS 包 socket UID 为 `map[10136:2 10309:2]`、1051 为 0；root 查询为 `map[0:2]`。
+   App 的明文 DNS 包带 App UID，`enforceDnsUid` 未开启，与 `res_send.cpp`
+   `uid = statp->enforce_dns_uid ? AID_DNS : statp->uid` 一致。
+   - 仍未证实：“1051 为 netd 自身验证/探测”只是推测，未给出查询域名。
+   - 由此引出本仓库自己的待查问题：既然 App DNS 包带 App UID，整服务验收为何没有出现
+     “netd（创建者 UID 0）的 socket 为 App 工作”的请求方日志，只出现了 1051。
+2. **多包 UDP 数据**（`tc_udp_with_identity=17`、`udp_later_covered=3`，3 单包流 + 2 五包流）补上了
+   `tracepoint_producer_probe` 未完成的测试，结论与预期一致；建议原始输出入库。
+3. **accept 走“钩子 → typed tracepoint → BPF”**：对方已承认模块不能写 SK_STORAGE。既然用户坚持模块方向，
+   此路可行：钩子把 `newsk` 与 `req->rsk_listener` 交给 BPF，BPF 读监听者快照、以子 socket 的**新 cookie**
+   写入子 socket 存储，不需改 TC 的 `creator.cookie == socket cookie` 校验。代价是模块与 BPF 各增代码；
+   `BPF_F_CLONE` 方案的代价是改 TC 一条规则。两者均成立，不再坚持后者。
+
+## 仍不同意及依据
+
+1. **“全能模块对 UDP 降维打击”结论对、但非新发现。** 现行 v2 桥接已挂在 `__sock_create` 末尾
+   （`net/socket.c:1602`）；覆盖由执行顺序保证（`socket()` 返回后程序才能 `sendto()`），
+   “640 µs 余量”的测量对结论不起作用。
+2. **binder 字段不应在模块里读，应放在 BPF。**
+   - 模块读 `t->sender_euid`、`t->from_pid` 依赖编译时头文件的结构体布局。MODVERSIONS 的 CRC 保护导出符号
+     签名；厂商钩子头文件中 `struct binder_transaction` 只是前向声明，字段布局不在校验范围内，内核更新可能
+     悄悄读错字段。
+   - binder 编进内核、类型在 vmlinux BTF 中，标准 tracepoint 可挂：用 BPF CO-RE 读取会按当前内核重定位，
+     更安全，且无需模块。
+3. **binder 与 `cookie_tag_map`“两者结合 100% 穿透”不成立。**
+   “线程处理来自 C 的事务期间新建的 socket 归 C”只对同步处理成立，语义上等同 `Binder.getCallingUid()`
+   （当前正在处理的事务的发送方）。工作交给 Handler/线程池异步执行（system_server 常见）时关联断开；
+   oneway 事务、嵌套调用还需额外事件来判定“处理何时结束”。`cookie_tag_map` 是 v2 已读取的 charge UID，
+   与模块无关，也只覆盖主动打标签的代码。两者合计是部分覆盖。用户按发送者路由，此类信息只作诊断。
+4. **“把模块削成跳板是本末倒置”有硬边界。** 本机内核不向模块导出 `bpf_map_*`，模块写不了 BPF 存储，
+   TC 也读不到模块数据。无论多“全能”，模块只能在现场采集事实、经 tracepoint 交给 BPF，存储与数据面
+   始终在 BPF。合理定义：**模块负责只有内核现场才拿得到的事实（socket 创建、accept 派生、可执行路径）
+   与生命周期开关；BPF 负责存储与逻辑。**
+5. **“<0.3 ns”“0 UAF 风险”“免疫 OverlayFS”仍未实测或证明**，只能算设计目标。
+
+## 按“全能模块”方向的建议落地顺序
+
+1. 桥接模块增加 `inet_csk_clone_lock` 入口：BPF 以子 socket 新 cookie 写快照，不改 TC。
+2. 模块在创建现场附带可执行路径（仅原生程序：`get_file_rcu` + `d_path`），经 tracepoint 参数交给 BPF。
+3. 字符设备生命周期开关（0600、持有者计数），作为可选配置。
+4. binder 调用方作为诊断：BPF 挂标准 tracepoint，不进模块、不参与路由。
+
+每项先用探针在真机验证，再接入生产；测试前后记录 taint，做长时间运行测试。
