@@ -56,3 +56,58 @@
 - 把路径（或其哈希与长度）经 typed tracepoint 参数交给 BPF producer 写入快照，用户态不再读 /proc。
 - 停采开关：设备 0600、按持有者计数；默认仍保持 pin 持久化，停采作为配置选项。
 - 验收：完整设备测试（含 exec 竞争、多持有者）、长时间运行、分段开销测量，并在测试前后记录 taint。
+
+---
+
+# 第二次审查（2026-10-04 下午）
+
+对象：提交 `8395f3e7`（第二轮：RCU 快速门控、`get_file_rcu`、动态基线、原子持有者计数）与
+`2ea23781`（第三轮：增加 `android_vh_inet_csk_clone_lock`、`android_vh_binder_transaction_received`
+两个钩子），以及 Gemini 随附的两份文字结论（用户提供的 `E:\work_sb\001.txt`、`002.txt`）。
+同样只记录意见，不修改探针文件。
+
+## 核实过的事实
+
+- **仓库**：两次提交只改动本文件夹；`module/.module-common.o` 已删除。
+- **设备**：模块已卸载，`/dev/sbo_enhancement_probe` 不存在，taint 仍为 4608（无新增标记）。
+  生产 sing-box 当时未运行，系用户自行停止；配置与二进制的修改时间均早于 10-01，未被改动。
+- **两个新钩子确实存在**：`include/trace/hooks/net.h:46`
+  `DECLARE_HOOK(android_vh_inet_csk_clone_lock, TP_PROTO(struct sock *newsk, const struct request_sock *req))`，
+  调用点 `net/ipv4/inet_connection_sock.c:1284`；`include/trace/hooks/binder.h:52`
+  `android_vh_binder_transaction_received(t, proc, thread, cmd)`，调用点 `drivers/android/binder.c:5360`。
+- **第一次审查的意见已被采纳**：exe_file 改为 `get_file_rcu` + `fput`，非 app_process 才走 `d_path`，
+  设备 0600，按持有者原子计数。这几处修正是对的。
+- **`002.txt` 所述原始数据不在仓库中**：UDP 受控测试（“`tc_udp_with_identity=17`、`udp_later_covered=3`”）、
+  DNS 的 tcpdump 与 `dumpsys dnsresolver` 输出均未入库，无法复核。
+
+## 对 001（“全能单模块”）的意见
+
+1. **accept 克隆只证明了钩子被调用，没有复制任何数据。** 结果日志只有
+   `[TCP_ACCEPT_CLONE]: newsk=... family=2 state=3`。模块无法写 BPF 的 SK_STORAGE（本机内核不向模块
+   导出 `bpf_map_*`），要复制仍需经 tracepoint 交给 BPF；继承来的快照带监听者 cookie，现有 TC 会拒收，
+   “完全不需要改 TC”不成立。同一效果用 `BPF_F_CLONE` 无需模块即可得到。
+2. **binder“穿透 system_server”未被证明。** 日志只显示 binder 线程收到 `client_uid=1000 client_pid=2160`
+   的事务（UID 1000 是系统进程，不是 App）。从“收到事务”到“某个 socket 是替谁建的”这一步完全未测，
+   而 binder 线程复用、联网常交给其他线程异步执行，正是不可靠之处。`binder_transaction` 是驱动内部
+   结构体，其布局不受符号 CRC 保护，内核更新可能悄悄读错字段。且用户要求按发送者路由，
+   此类信息最多用于诊断。
+3. **“停采后 <0.3 ns”仍未实测。**
+4. 现场取路径的开销：热调用 573 ns、冷调用 2.8–4.2 µs，仅对原生程序发生，可以接受。
+
+## 对 002（UDP 与 DNS）的意见
+
+1. **“模块对 UDP 首包 100% 覆盖”不是新发现**：现行 v2 的桥接模块就挂在 socket 创建处。覆盖由执行顺序
+   保证（`socket()` 返回先于任何 `sendto()`），所称“600 µs 时间余量”与结论无关。
+2. **免模块路线的多包 UDP 数据**补上了 `tracepoint_producer_probe` 未完成的测试，结论与预期一致
+   （首包必丢、后续包可补），但原始数据未入库。
+3. **DNS 复测方法正确（停生产服务、Chrome 前台），但没有回答关键问题。** tcpdump 看不到包的 socket UID，
+   `dumpsys dnsresolver` 记录的是请求发起方，也不是包的 socket UID。真正的问题是 netd 发出的 DNS 包在
+   TC 中的 `sk_uid`，应以 `experimental/socket_attribution_probe/dnsuid/` 之类的出口探针测量。
+   因此“已实测证实 enforceDnsUid 未开启”缺少直接证据；“1051 是 netd 自身网络验证探测”说得通
+   （与研究结论 27 的推测一致），但未给出证据（例如查询的域名）。
+
+## 结论（更新）
+
+沿 C 模块路线：**现场取路径**与**退出即停采**两项已具备进入正式开发的条件（门控、引用、权限、计数
+均已修正）；accept 继承建议用 `BPF_F_CLONE`，或“钩子 → tracepoint → BPF”复制，不在模块内处理；
+binder 仅适合诊断；DNS 仍需一次测量包 socket UID 的复测。落地要求同第一次审查的“若要落地”一节。
