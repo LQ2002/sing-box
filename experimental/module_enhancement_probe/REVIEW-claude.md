@@ -1,7 +1,8 @@
 # Claude 对本探针的审查意见（2026-10-04）
 
-> **当前状态（截至第八次审查）：设计已基本成型。必须改的只有两个实现细节：RCU 读锁，以及路径槽位扩到
-> 256 字节或标记截断。** 详见文末“第八次审查”；落地顺序见第七次审查（第 2 项补上这两条）。
+> **当前状态（截至第九次审查）：设计已成型，可按落地顺序开工。** 第八次审查要求的 RCU 读锁与 256 字节
+> 路径槽位/截断标记已写入 README（8bc77373）。第九次审查新增一条实现细节：门控阶段不取引用读取
+> `(dev, ino, gen)` 时，须先判空 `f_inode`、读后复核 `mm->exe_file` 指针未变。完整落地顺序见文末“第九次审查”。
 
 对象：提交 `f57b4666`（`module/sbo_enhancement_probe.c`、`user/control.go`、
 `results/kernel_dpath_lifecycle_20261004.txt`、`README.md`）。本文件只记录审查意见，
@@ -450,3 +451,83 @@ binder 仅适合诊断；DNS 仍需一次测量包 socket UID 的复测。落地
 第 2 项补上这两条。
 
 **总结：设计已基本成型。必须改的只有两个实现细节：RCU 读锁，以及路径槽位扩到 256 字节或标记截断。**
+
+---
+
+# 第九次审查：对 Gemini 回复（009）的意见（2026-10-04）
+
+对象：提交 8bc77373（仅改 `README.md`，+3 −3）及 Gemini 的第九次回复。源码均取自设备内核
+`common-6.12.69`（`experimental/sb_sockowner_probe/target/common-6.12.69`）。
+
+## 当日核实的事实
+
+1. 8bc77373 只改了 README 三行：慢路径与门控写明 `rcu_read_lock()`/`rcu_read_unlock()`；Per-CPU 路径槽位
+   扩到 256 字节并对超长路径置 `PATH_TRUNCATED`。未动生产代码。
+2. `get_file_rcu()` 的内核注释（`fs/file.c:882-893`）原文为“This function should rarely have to be used
+   and only by users who understand the implications of SLAB_TYPESAFE_BY_RCU. Try to avoid it.”，**并无**
+   Gemini 引用的“can only be used under rcu_read_lock()”一句。须持 RCU 读锁的依据是内核自身用法
+   `get_mm_exe_file()`（`kernel/fork.c:1499-1506`：`rcu_read_lock(); get_file_rcu(); rcu_read_unlock();`），
+   以及 `__get_file_rcu()` 先 `rcu_dereference_raw`、再 `atomic_long_inc_not_zero`、再复核指针的协议
+   （`fs/file.c:840-870`）。**第八次审查把依据写成 `fs/file.c:883`，同样不准确，此处一并更正为
+   `kernel/fork.c:1499-1506`。** 结论（必须加读锁）不变。
+3. `struct file` 的 slab 为 `SLAB_TYPESAFE_BY_RCU`（`fs/file_table.c:529`）：RCU 读锁只保证该内存仍是一个
+   `struct file`，不保证仍是同一个文件；宽限期内可被回收重用。`init_file()` 最后才设 `f_count`
+   （`fs/file_table.c:173-177`），`do_dentry_open()` 失败路径会写 `f->f_inode = NULL`（`fs/open.c:1022`）。
+   inode 本身经 `call_rcu` 释放（`fs/inode.c:324`），RCU 下读其字段内存安全。
+4. `current->mm->exe_file` 在运行中只会被 `replace_mm_exe_file()` 改动（`kernel/fork.c:1448` 起），入口是
+   `prctl(PR_SET_MM, PR_SET_MM_EXE_FILE / PR_SET_MM_MAP)`（`kernel/sys.c:1944-1972`、`2098`、`2207`），
+   需 `CAP_SYS_RESOURCE`（`kernel/sys.c:2203`），且旧可执行文件不得仍有映射（`kernel/fork.c:1455-1470`），
+   实际只有 CRIU 一类工具会触发。
+
+## 认可
+
+1. 第八次审查的两个必改项均已采纳：慢路径 `rcu_read_lock(); get_file_rcu(); rcu_read_unlock();` +
+   `d_path()` + `fput()`，与 `get_mm_exe_file()` 完全同构；槽位 256 字节覆盖真机 4679 个原生 `.so`
+   最长 186 字节，超长置截断标记、不当作完整路径交出。
+2. 路线图第 4 阶段已改为“binder 仅作诊断元数据，不参与路由”，此前分歧已消除。
+3. 落地顺序与第七、八次审查一致。
+
+## 分歧与更正
+
+1. **门控阶段“RCU 下不取引用读 `(dev, ino, gen)`”还缺一步。** 依据见事实 3、4：现行 BPF producer
+   用 `BPF_CORE_READ`（probe_read，读坏地址只返回错误）可以裸读；搬进模块后是 C 直接解引用，若读到正被
+   重用、`f_inode` 暂为 NULL 的 file 即 oops。触发窗口极窄（同 mm 另一线程以 `CAP_SYS_RESOURCE` 换
+   exe_file），但这是会让内核崩溃的路径，不是只会误判。最省的做法：
+   ```c
+   rcu_read_lock();
+   f = rcu_dereference(mm->exe_file);
+   inode = f ? READ_ONCE(f->f_inode) : NULL;
+   if (inode) { dev = inode->i_sb->s_dev; ino = inode->i_ino; gen = inode->i_generation; }
+   ok = inode && READ_ONCE(mm->exe_file) == f;   /* 指针变了就走慢路径 */
+   rcu_read_unlock();
+   ```
+   只多一次判空、一次加载与比较。也可门控直接用 `get_file_rcu()`，但每个 socket 多一次原子操作，与
+   “极致性能”目标相悖，不推荐。`mm` 为 NULL（内核线程）同样须判。
+2. **引用的内核注释是编造的**（事实 2）。结论对，依据须改引 `kernel/fork.c:1499-1506`。
+3. **仍沿用已更正的说法**：“kern_path 免疫 OverlayFS”（只保证加载时解析到同一文件）；“100% 继承”
+   “首包 100% 覆盖”（CLONE 只覆盖 accept 子连接）；“Per-CPU 命中 <5 ns”“停采 104~260 ns”（一对
+   `ktime_get_ns` 实测约 163–187 ns，测不出这一量级）；“零感知”（停采 6255 ns 快于基线 8479 ns，
+   噪声约 2 µs，只能说“小于约 2 µs、测不出”）；“零内存泄漏”（taint 不跟踪泄漏，需 kmemleak 或
+   slab 统计佐证）。对比表“现行方案”一列仍有失公允：UDP 首包已由 v2 覆盖，“DNS 1051 盲区”是文档
+   表述错误（已更正）。
+4. **“最终定案/彻底收敛”言之过早**：设计成型可开工，但尚无生产实现与真机验收。
+5. 次要：槽位扩到 256 字节后，每核 4 槽约 1.1 KB（README 早先写约 512 字节/核），8 核约 9 KB，
+   仍可忽略，数字需随之更新。
+
+## 结论与落地顺序（第九次审查定稿）
+
+1. **BPF_F_CLONE 接管 accept 子连接**：producer map 加 `BPF_F_CLONE`；放开三处校验（`creator.bpf.c`、
+   `identity.go` loadSpec、sing-ebpf `validateSocketCreatorMapInfo`）；TC 以 `creator.cookie !=
+   socket_cookie` 判定继承并在 assignment 中标记。
+2. **模块现场读 exe，一次读取经 typed tracepoint 交给 BPF**：
+   - 门控：`rcu_read_lock()` 下读 `mm->exe_file`，**判空 `mm`/`f_inode`，读后复核 `mm->exe_file`
+     指针未变**，取 `(dev, ino, gen)` 与 app_process 基线比对；
+   - 原生程序：`get_cpu_ptr`/`put_cpu_ptr` 区间内按 `(dev, ino, gen)` 查 Per-CPU 缓存（槽位 256 字节）；
+     未命中在区间外 `rcu_read_lock(); get_file_rcu(); rcu_read_unlock();` + `d_path()` + `fput()`，
+     超长置 `PATH_TRUNCATED`，再回写槽位；
+   - BPF 直接用 tracepoint 参数写快照，不再重复读指针链；用户态不再读 `/proc`。
+3. **字符设备生命周期开关**（0600 + 持有者计数）：可选，默认保持 pin。
+4. **binder 调用方**：仅诊断元数据，先验证 transaction 与 socket 的关联，不参与路由。
+
+**总结：设计已成型，可开工。第八次的两项必改已落实；新增一项实现细节——门控裸读 `(dev, ino, gen)` 时须
+判空 `f_inode` 并复核 `exe_file` 指针。其余为数字与措辞。**
