@@ -377,8 +377,12 @@ native 进程的可执行路径展示，并用 exe inode 校验。Manifest 索�
   包括 UID 1000 的 `com.miui.securitycenter`、`.remote`、`:cache` 三个进程（E2 按创建时名称），以及
   微信 `:push`/`:support`、哔哩哔哩 `:download`/`:pushservice`/`:web`、GMS、WebView 服务等。
   请求方：GMS（10136）的 socket 被 netd 记账给 Chrome（10309）与 `com.binance.dev`（10466），只进
-  debug 日志，路由按 GMS；netd 的 DNS socket sk_uid 为 1051（AID_DNS），本系统上 DNS 看不到具体
-  App 请求方（124 条）。未覆盖：SDK 沙箱（Killswitch 开启）、DownloadManager 主动下载、IPv6 回包。
+  debug 日志，路由按 GMS；另有 124 条 netd（创建者 UID 0）socket 的 sk_uid 为 1051（AID_DNS）。
+  **更正（2026-10-04）**：此前据此写的“本系统上 DNS 看不到具体 App 请求方”不成立。研究结论 28
+  （`experimental/socket_attribution_probe/README.md`，`dnsuid/` 真机证实）显示 netd 替 App 发出的
+  明文 DNS 会被 `fchown` 成发起 App 的 UID（`res_send.cpp`：`uid = enforce_dns_uid ? AID_DNS :
+  statp->uid`，本机 `enforceDnsUid` 未生效、私人 DNS 关闭）；1051 的 socket 更可能是 netd 自身查询
+  （如网络验证）。本次验收为什么只出现 1051、没有出现 App UID 的 DNS 请求方，尚未查明。未覆盖：SDK 沙箱（Killswitch 开启）、DownloadManager 主动下载、IPv6 回包。
   未提交原始日志与 dumpsys（含用户流量目的地址与进程列表）。
 - 完整 sing-box 入口 TCP/UDP、IPv4/IPv6、delivery/shared，校验实际载荷回包。
 - 无模块、半套 pins、v1 残留、netd 表缺失的预期行为。
@@ -448,8 +452,8 @@ E1–E3 纯函数解析）。只引用上面已记录的实测；没有测过的
 1. 多包共享同名进程仍判未知：本机 9 个名称（`system`、`com.android.phone`、`android.process.acore`
    等），system_server 的全部流量因此没有包名；区分需要进程内请求级信息，超出本设计。
 2. producer 安装前已存在的 socket、accept 子 socket 没有快照，只能按 UID 组级归属（accept 已真机验证）。
-3. 请求方：netd 标签只在首个满 socket 包读取一次，之后改标签不跟随；本系统 netd 的 DNS socket
-   sk_uid 为 1051（AID_DNS），看不到具体 App 请求方。
+3. 请求方：netd 标签只在首个满 socket 包读取一次，之后改标签不跟随。App 的明文 DNS 由 netd 发出时
+   sk_uid 应为 App UID（研究结论 28），但整服务验收只记录到 1051 的请求方，原因未查明（待验证）。
 4. 名称截断：参数块 78/99 字节，超长名称按前缀匹配，存在前缀歧义（本机已安装 1 个 78 字节名称）。
 5. FD 转交后按创建者归属，而不是实际使用者（用户“按发送者”的定义以创建者近似）。
 6. Framework 重启后 appId 可能被复用，跨重启存活的长连接可能误归属（研究结论，频度未测）。
@@ -457,6 +461,34 @@ E1–E3 纯函数解析）。只引用上面已记录的实测；没有测过的
    长时间持有/释放下的内核内存量化。
 8. BL 实际已解锁（见上文更正），系统侧（netd/zygote）方案未被设备状态排除，只是用户尚未选择；
    若将来接受系统侧改动，请求级区分与多包进程问题才有进一步改善的空间。
+
+### 外部方案核查：Gemini 对劣势与不足的改进建议（2026-10-04）
+
+用户转来 Gemini 的方案，逐条按源码与真机核查（2026-10-04 当日在设备上重跑 `attachtest`）。
+设备事实：`/sys/kernel/security/lsm` = `capability,landlock,safesetid,selinux,bpf`，`CONFIG_BPF_LSM=y`，
+但 `# CONFIG_FUNCTION_TRACER is not set`；vmlinux BTF 中 `btf_trace_android_*` 只有
+`android_trigger_vendor_lmk_kill` 一个。
+
+| 建议 | 结论 | 依据 |
+|---|---|---|
+| 改用 `lsm/socket_post_create` 去掉模块 | **本机不可行** | 当日实测 `lsm socket_post_create FAIL create raw tracepoint: not supported`；arm64 上 BPF LSM/fentry 经 trampoline 挂载，需函数跟踪支持，本内核未开 |
+| 直接 `raw_tracepoint/android_vh_sock_create` | **不可行** | 厂商钩子用 `DECLARE_HOOK`，无 `btf_trace_android_vh_*`；只有内核模块能 `register_trace_*` |
+| 免模块的真实候选 | 未实现，可研究 | 标准 tracepoint 可挂：`tp_btf` 的 `inet_sock_set_state`（TCP connect 在调用者上下文）、`sock_send_length`（研究结论 21：可得 cookie 与发送线程）。代价：记录的是“首次连接/发送者”而非创建者；UDP 的 `sock_send_length` 在 `sendmsg` 返回后触发，首包已过 TC，需要后续包补读或用户态回退 |
+| 不 pin link / `is_active` 开关，停止即停采 | 可做成选项 | 技术上正确；代价是 sing-box 停止或重启期间创建的 socket 没有快照。当前 pin 是为覆盖重启窗口的有意选择 |
+| 在 fork 或 setArgV0 时把名称写入 TASK_STORAGE，降到 <20 ns | **设计有误** | fork 时 argv 仍是 `zygote64`/`usap64`；argv 改写是用户态内存写，没有内核事件；`setArgv0` 先 `pthread_setname_np`（`task_rename`）后 `strlcpy` argv（`AndroidRuntime.cpp`），在 rename 事件里读到的仍是旧名。按进程懒缓存可行，但全机约 1–2 socket/s，收益约数 µs/s，且引入缓存过期语义（已在决策 6 否决） |
+| Minified BTF、Manifest 二进制缓存 | 收益低 | 最小 BTF 会把产物绑死到某一内核 BTF，失去跨 OTA 的 CO-RE；启动 0.2–0.4 s 是一次性成本且未拆分出 BTF 占比；Manifest 索引本就在后台懒构建，不在连接路径 |
+| uprobe Zygote 特权期记录真名防自报 | 可行但不值 | `CONFIG_UPROBES=y`，但需解析 ART/JNI 字符串；只防同一 UID 内的自我误归属 |
+| `bpf_d_path` 取原生子进程路径 | **不可行** | `kernel/trace/bpf_trace.c:915-942`：只允许 `security_file_open` 等白名单函数的 fentry/LSM 及迭代器；本机 fentry/LSM 又挂不上。正确做法在用户态：UID 快路径遇到快照 exe inode 不是 `app_process` 时走已核验的 /proc 路径（未实现，成本低） |
+| 首包后再读 `cookie_tag_map` 穿透 system_server | 方向可用，前提未证 | “很多客户端在 connect 之后才 tagSocket”未经实测；且用户要求按发送者路由（请求方只作诊断）。研究结论 38：多包进程 5 分钟内仅 `system_server` 11 个 socket，其余为 0，实际影响很小 |
+| accept 经 `security_inet_csk_clone`/sock_ops 继承快照 | LSM 不可行；有更简单办法 | 可给 SK_STORAGE 加 `BPF_F_CLONE`（`bpf_sk_storage_clone`，`sock.c:2485`），TC 把 cookie 不符的克隆值标为“继承自 listener”；手机上本地服务的入站连接很少，优先级低 |
+| sock_diag + /proc 为存量 socket 补快照 | 可行但侵入 | 需 `pidfd_getfd` 拿他进程 fd 才能写 SK_STORAGE；pin 持久化后只剩每次开机首次安装前的窗口 |
+| DNS 需挂 dnsproxyd 或改 DnsResolver APEX | **前提错误** | DnsResolver 默认把明文查询 `fchown` 成 App UID（研究结论 28 真机证实，`enforceDnsUid` 未生效）；无需改 APEX。本次验收为何只见 1051 待查 |
+| 借 BL 改 framework/APEX 打标 | 技术可行，代价高 | 每次 OTA 需重做并处理签名/校验；收益受结论 38 限制，且与“按发送者路由”冲突 |
+| “源码保证”SDK 沙箱、DownloadManager、IPv6、功耗零影响 | 不能替代实测 | E3 已实现但本机 Killswitch 开启；功耗未测 |
+
+可采纳的后续项（按收益/成本）：① UID 快路径为 App 原生子进程补可执行路径（用户态）；② 查明整服务验收中
+App DNS 请求方缺失的原因；③ 可选“停止即停采”开关；④ accept 子 socket 用 `BPF_F_CLONE` 继承；
+⑤ 若用户希望去掉模块，先用独立探针评估 `inet_sock_set_state` + `sock_send_length` 的时序与覆盖。
 
 ### 真机预验证（2026-10-03，独立探针，未接入生产）
 
