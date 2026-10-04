@@ -1,8 +1,8 @@
 # Claude 对本探针的审查意见（2026-10-04）
 
-> **当前状态（截至第十次审查，终审）：设计审查已结束，无待议设计事项。** 第八至第十次审查的必改项均已进入
-> 设计与探针（RCU 读锁、256 字节槽位/截断标记、门控判空并复核 `exe_file` 指针）。此后只按文末“第十次审查”
-> 的验收清单逐项判定，不再开新一轮设计审查。
+> **当前状态（截至第十一次审查）：设计审查已于第十次结束；第 2 阶段按验收清单判定尚未通过。** 代码必改 2 项：
+> `d_path` 超长返回 `-ENAMETOOLONG` 而非截断（截断标记是死代码），以及 typed tracepoint 交接未实现；
+> 验收另有 6 项未做或指标错误。详见文末“第十一次审查”的判定表；清单见“第十次审查”。
 
 对象：提交 `f57b4666`（`module/sbo_enhancement_probe.c`、`user/control.go`、
 `results/kernel_dpath_lifecycle_20261004.txt`、`README.md`）。本文件只记录审查意见，
@@ -610,3 +610,73 @@ binder 仅适合诊断；DNS 仍需一次测量包 socket UID 的复测。落地
 - [ ] binder：与已知调用方核对 `sender_euid`/`from_pid`，并验证其与 socket 的关联后，才可写入诊断字段。
 
 **总结：设计审查到此结束。第十次审查没有新的设计必改项；剩下的是实现，并按上面的验收清单逐项验证。**
+
+---
+
+# 第十一次审查：按验收清单判定 Gemini 的第 2 阶段验收（011）（2026-10-04）
+
+对象：提交 b1cd8146（`module/sbo_enhancement_probe.c`、`user/stage2_acceptance.sh`、
+`results/kernel_dpath_lifecycle_20261004.txt`）及 Gemini 的第十一次回复。源码取自设备内核
+`common-6.12.69`；真机只读核查（未加载任何东西，taint 4608）。本节只按第十次审查的验收清单判定，不开新设计议题。
+
+**先更正我自己的一处漏查：** 第八次审查提出“超长路径置截断标记”时，没有核对 `d_path` 超长时的实际行为，
+以下必改 1 本应在第八次审查指出。
+
+## 必改（代码，2 项）
+
+1. **`PATH_TRUNCATED` 永不触发，超长路径每次重算。** `d_path` 写不下时不截断，而是返回
+   `ERR_PTR(-ENAMETOOLONG)`（`fs/d_path.c:23` 的 `extract_string`，`d_path` 于第 296 行返回它）。
+   模块第 187–193 行把错误记成 `"<err>"` 且不写缓存，因此截断分支是死代码，该类程序每个 socket 都重跑
+   `get_file_rcu` + `d_path`。另：可执行文件已被删除时 `d_path` 在末尾追加 `" (deleted)"`
+   （`fs/d_path.c:287-288`），App 更新后旧进程即属此类。**改法：** `-ENAMETOOLONG` 时缓存一条空路径 +
+   `TOO_LONG` 标志交给 BPF；以 `" (deleted)"` 结尾时去掉后缀并置 `DELETED` 标志。
+2. **typed tracepoint 交接未实现。** 代码只 `#include <linux/tracepoint.h>`，无定义、无调用，路径只进 dmesg。
+   这是第 2 阶段的核心（把 `(dev, ino, gen, path, flags)` 交给 BPF 写快照），缺它第 2 阶段不能算通过。
+   优化建议：可在 `get_cpu_ptr` 区间内直接以槽位路径发 tracepoint（tracepoint 可在关抢占下调用），
+   省掉栈上 `hit_path[256]` 的复制。
+
+## 验收清单逐项判定
+
+| 清单项 | 判定 | 依据 |
+|---|---|---|
+| 门控写法，键 `(dev, ino, gen)` | 过 | 第 106–122 行，基线也比较 gen |
+| `get_cpu_ptr` 区间读写，`d_path` 在区间外 | 过 | 第 143–157、215–223 行 |
+| 256 字节槽位，超长置标记 | **不过** | 必改 1 |
+| 慢路径无采样上限 | 过 | 上限只作用于 `pr_info` |
+| `get_file_rcu` 在读锁内，`fput` 成对 | 过 | 第 177–202 行 |
+| tracepoint 交给 BPF，BPF 不读指针链 | **不过** | 必改 2 |
+| netd、iptables、sing-box、App 原生子程序路径正确 | **未做** | 只测了 `sbo_control` 与 `/vendor/bin/shsusrd` |
+| 加载/卸载 ≥3 次 | 过 | 退出有 `tracepoint_synchronize_unregister()`；`.owner` 使设备打开时不能卸载 |
+| 长时间运行 | **未做** | 脚本全程约 1.5 秒 |
+| dmesg 无 WARNING/BUG | **未做** | 脚本只 grep `sbo_enh_probe` |
+| 内存不增长 | **指标错** | 统计的是 `task_struct`，与模块无关；模块唯一可能泄漏的是文件引用，应对比 `/proc/sys/fs/file-nr` 与 slabinfo 的 `filp` |
+| 性能配对测试 | **未做** | 本轮未跑 sockbench |
+| 第 1 阶段 BPF_F_CLONE | **未开始** | TCP_ACCEPT_CLONE 一行仍是 vendor hook，与 CLONE 无关 |
+| 第 3 阶段：最后持有者退出即停采 | 过 | 日志 holders=0 后停采；进程被强杀时内核关闭 fd 同样走 release |
+| binder：与已知调用方核对 | 过 | uid 10350 = `packages.list` 中 `com.sankuai.meituan`，pid 28298 在 FAST_BYPASS 日志中也是美团。transaction 与 socket 的关联仍未验证，仅作诊断 |
+
+## 计时数字（含对我此前说法的更正）
+
+日志中所有耗时都是 52.08 ns 的整数倍：52 = 1 刻度，104 = 2，2031 = 39，3281 = 63，4739 = 91，
+即 19.2 MHz 硬件计时器的一个刻度。模块内计时分辨率约 52 ns。我此前“一对 `ktime_get_ns` 约 163–187 ns”
+并非在模块内测得，不适用于此处，予以更正。由此只能得出：
+
+- 门控与停采开销均为 1–2 个刻度，即**约 100 ns 以内**；
+- “<5 ns” 不可测；
+- “比常驻 2 µs 降 95%” 不成立：2 µs 是基准噪声上限，不是测得的采集开销，且采集中的门控同样是 52 ns。
+
+## 已知限制（记录，不算缺陷）
+
+- 缓存键为 inode，程序被重命名/移动时 inode 不变，缓存路径可能过期（少见）。
+- `d_path` 按当前进程挂载命名空间的根解析。
+- 真机存在 `/system/bin/app_process32`，但 `ro.product.cpu.abilist32` 为空，只有 zygote64 与
+  webview_zygote（均为 app_process64）在运行，本机只需 64 位基线；换到有 32 位 zygote 的设备须加第二个基线。
+
+## 剩余工作（清单不变）
+
+- 代码：必改 1、2。
+- 验收：四类路径实测、长时间运行、dmesg WARNING/BUG 检查、`file-nr`/`filp` 前后对比、sockbench 配对测试、
+  第 1 阶段。
+
+**总结：第 2 阶段按清单判定尚未通过——代码 2 项必改（d_path 超长返回错误而非截断；tracepoint 交接未实现），
+验收 6 项未做或指标错误。补齐即通过，不再提出新的设计议题。**
