@@ -1,0 +1,36 @@
+=== RUN   TestDeviceColonPrefixRule
+SHARED app_ids=10 packages=81 parse_failures=0
+DECLARED colon_correct=52/122
+DECLARED no_colon_multi_package=9/122
+DECLARED   app 1001 com.android.phone 
+DECLARED   app 1001 .dataservices 
+DECLARED   app 10095 android.process.media 
+DECLARED   app 1073 com.android.networkstack.process 
+DECLARED   app 1000 system 
+DECLARED   app 1000 com.android.phone 
+DECLARED   app 10119 .qtidataservices 
+DECLARED   app 10154 com.qti.phone 
+DECLARED no_colon_unique=61/122
+RUNNING colon_correct=2/18
+RUNNING   uid 1000 com.miui.touchassistant:float 
+RUNNING   uid 1000 com.xiaomi.misettings:remote 
+RUNNING no_colon_multi_package=7/18
+RUNNING   uid 10095 android.process.media 
+RUNNING   uid 1000 system 
+RUNNING   uid 1073 com.android.networkstack.process 
+RUNNING   uid 10154 com.qti.phone 
+RUNNING   uid 1001 .dataservices 
+RUNNING   uid 10119 .qtidataservices 
+RUNNING   uid 1001 com.android.phone 
+RUNNING no_colon_unique=9/18
+RUNNING   uid 1000 com.xiaomi.mi_connect_service 
+RUNNING   uid 1000 com.xiaomi.joyose 
+RUNNING   uid 1000 com.miui.securitycore.remote 
+RUNNING   uid 1000 com.miui.securitycenter.remote 
+RUNNING   uid 1002 com.android.bluetooth 
+RUNNING   uid 1027 com.android.nfc 
+RUNNING   uid 1001 com.xiaomi.hypercomm 
+RUNNING   uid 1002 com.xiaomi.bluetooth 
+RUNNING   uid 1000 com.xiaomi.mirror 
+--- PASS: TestDeviceColonPrefixRule (0.22s)
+PASS
