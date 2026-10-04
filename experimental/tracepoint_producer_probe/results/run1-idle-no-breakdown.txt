@@ -1,0 +1,28 @@
+prod=26306
+VERIFIER_ACCEPTED
+TC_EGRESS_OBSERVERS [dummy0 rmnet_ipa0 rmnet_data2 rmnet_data0 rmnet_data1 rmnet_data4 sbd66c20001 sbt66c20001]
+OBSERVING 3m0s
+BPF_COUNTERS (summed over CPUs):
+  syn_sent_calls=14
+  syn_sent_created=14
+  send_udp_calls=27
+  send_udp_created=12
+  tc_tcp_syn=44
+  tc_tcp_syn_with_identity=36
+  tc_udp_packets=29
+  tc_udp_with_identity=8
+  tc_udp_socket_first=11
+  udp_filled_late=11
+  udp_later_covered=1
+  kthread=0
+  argv_fail=0
+IDENTITY_EVENTS:
+  tcp_syn_sent_argv_match=14
+  tcp_syn_sent_events=14
+  udp_send_argv_match=12
+  udp_send_events=12
+UDP_FIRST_SEND (packets TC saw before the identity, capped at 3):
+  udp_packets_before_identity=0=1
+  udp_packets_before_identity=1=1
+  udp_packets_before_identity=2=10
+prod_after=26306

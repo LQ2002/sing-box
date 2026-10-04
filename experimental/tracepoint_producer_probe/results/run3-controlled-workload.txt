@@ -1,0 +1,40 @@
+remaining:
+probe=
+observers=0
+prod=26306
+BPF_COUNTERS (summed over CPUs):
+  syn_sent_calls=20
+  syn_sent_created=20
+  send_udp_calls=5
+  send_udp_created=4
+  tc_tcp_syn=48
+  tc_tcp_syn_with_identity=46
+  tc_udp_packets=6
+  tc_udp_with_identity=0
+  tc_udp_socket_first=3
+  udp_filled_late=3
+  udp_later_covered=0
+  kthread=0
+  argv_fail=0
+IDENTITY_EVENTS:
+  tcp_syn_sent_argv_match=20
+  tcp_syn_sent_events=20
+  udp_send_argv_match=4
+  udp_send_events=4
+TC_SIGHTINGS_BY_INTERFACE:
+  rmnet_data4 tcp_syn with_identity=1=30
+  rmnet_data4 udp_before_identity with_identity=0=3
+  rmnet_ipa0 tcp_syn with_identity=0=2
+  rmnet_ipa0 tcp_syn with_identity=1=16
+  rmnet_ipa0 udp_before_identity with_identity=0=1
+  sbt66c20001 udp_before_identity with_identity=0=2
+TCP_SYN_WITHOUT_IDENTITY cookie=7752270 socket_uid=0 sightings=2 identity_event_seen=false ifaces=[rmnet_ipa0]
+PER_SOCKET (unique cookies):
+  proto=17 first_had_identity=false identity_event_seen=true ifaces=rmnet_data4+rmnet_ipa0=1
+  proto=17 first_had_identity=false identity_event_seen=true ifaces=rmnet_data4+sbt66c20001=2
+  proto=6 first_had_identity=false identity_event_seen=false ifaces=rmnet_ipa0=1
+  proto=6 first_had_identity=true identity_event_seen=true ifaces=rmnet_data4=12
+  proto=6 first_had_identity=true identity_event_seen=true ifaces=rmnet_data4+rmnet_ipa0=8
+UDP_FIRST_SEND (packets TC saw before the identity, capped at 3):
+  udp_packets_before_identity=0=1
+  udp_packets_before_identity=2=3

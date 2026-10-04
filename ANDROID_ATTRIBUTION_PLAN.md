@@ -522,6 +522,35 @@ E1–E3 纯函数解析）。只引用上面已记录的实测；没有测过的
 App DNS 请求方缺失的原因；③ 可选“停止即停采”开关；④ accept 子 socket 用 `BPF_F_CLONE` 继承；
 ⑤ 若用户希望去掉模块，先用独立探针评估 `inet_sock_set_state` + `sock_send_length` 的时序与覆盖。
 
+### 免模块路线与模块增强试验（2026-10-04，只做试验，生产代码未改）
+
+用户要求先做试验、不改代码。探针 `experimental/tracepoint_producer_probe/`（只观察：TCX head、
+`TCX_NEXT`），生产 sing-box（pid 26306）全程运行，屏幕关闭，结果在其 `results/`。
+
+**免模块 producer（标准 tracepoint）**：verifier 接受，两个 `tp_btf` 均能挂载。
+- TCP（`inet_sock_set_state` → `TCP_SYN_SENT`）：受控负载（run3，`toybox nc` 以 UID 10136 与 root
+  各 10 次）**20 个新连接的首个 SYN 全部已带快照（20/20）**，argv[0] 与 /proc 20/20 一致；唯一无快照的
+  SYN（cookie 7752270，root）在 run2 已出现、只见于 `rmnet_ipa0`，是探针启动前的旧连接重试，非新连接。
+- UDP（`sock_send_length`）：按源码（`net/socket.c:722-736`）与实测，**首包必然先于快照经过 TC**
+  （run2 7/7、run3 4/4）；后续包补上的 socket 极少（run1 1/11，run2/run3 0），观察到的 UDP 多为单包
+  流，免模块路线对它们完全无快照。多包 UDP 的受控测试因 `toybox nc -u` 不随 stdin 结束退出而未完成。
+- 重复计数：同一包会在 `rmnet_data4` 与生产 sing-box 的 `sbt66c20001`（或 `rmnet_ipa0`）上各计一次，
+  run1 的“首包前 2 个包”实为 1 个包，按 cookie 去重后结论如上。
+- 结论：创建现场的覆盖只有模块（vendor hook）能完整提供；免模块路线 TCP 等价、UDP 有先天缺口，
+  **保留桥接模块**。
+
+**“增强模块”方案核查**（用户转来的 Gemini 方案）：
+| 增强 | 结论 | 依据 |
+|---|---|---|
+| 模块写 `sk_mark` 携带身份 | 不做 | netd `include/Fwmark.h`：`netId:16`、`explicitlySelected:1`、`protectedFromVpn:1`、`permission:2`、`uidBillingDone:1`、`reserved:8`、`vendor:2`、`ingress_cpu_wakeup:1`，32 位已占满；sing-box 还用 `0x40000000`；TC 每 socket 只读一次，收益≈0 |
+| 模块在创建时 `d_path` 固化原生路径 | 可选 | `d_path` 对模块导出；仅非 app_process 时调用；收益限于原生进程在查询前退出的情形 |
+| sk_mark 继承 accept、Netfilter LOCAL_OUT 补旧连接 | 不做 | mark 问题同上，accept 用 `BPF_F_CLONE` 即可；LOCAL_OUT 每包执行，加重热路径，只为补开机到首次安装前的窗口 |
+| 监听 binder 事务归属 system_server 代发 | 不做 | `btf_trace_binder_transaction*` 在本机 vmlinux BTF 中存在，BPF 不需模块即可挂；但“工作线程处理请求后下一个 socket 属于该客户端”不可靠（线程复用、异步线程/进程），且用户按发送者路由 |
+| 字符设备 `release()` 绑定生命周期，退出即停采 | 可选 | 简单可靠，等同不 pin link；代价是停止/重启期间新建 socket 无快照 |
+
+建议：模块保持精简（创建现场的唯一入口），按需加“退出即停采”选项，`d_path` 视需要；其余交给 BPF 与用户态。
+未做：多包 UDP 受控测试、DNS 干净复测（需停生产服务并亮屏）。
+
 ### 真机预验证（2026-10-03，独立探针，未接入生产）
 
 用户要求在写 producer v2 之前，先用独立小探针在真机上核对设计依赖的不确定点，全程不动
