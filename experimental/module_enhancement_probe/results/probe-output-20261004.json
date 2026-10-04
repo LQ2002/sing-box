@@ -1,0 +1,34 @@
+{
+  "device_kernel": "6.12.69-android16-6-g586bfab1b9c5-abogki536749445-4k",
+  "mark_inheritance": {
+    "parent_mark_set": 1527517748,
+    "child_mark_received": 1527517748,
+    "inheritance_success": true
+  },
+  "exe_inode_validation": {
+    "app_process64_inode": 10829601,
+    "total_procs_scanned": 978,
+    "java_app_procs": 91,
+    "native_procs": 180,
+    "sample_java_apps": [
+      "PID 10698: com.android.cellbroadcastreceiver",
+      "PID 11350: com.google.android.gms:snet",
+      "PID 11517: usap64",
+      "PID 11973: com.android.providers.media.module",
+      "PID 11996: com.miui.voiceassist:core",
+      "PID 12019: system",
+      "PID 12031: com.xiaomi.xmsfkeeper",
+      "PID 12067: com.qualcomm.location"
+    ],
+    "sample_native_procs": [
+      "PID 1: /system/bin/init (exe=/system/bin/init, ino=10830385)",
+      "PID 10594: inotifyd (exe=/system/bin/toybox, ino=10831744)",
+      "PID 10595: inotifyd (exe=/system/bin/toybox, ino=10831744)",
+      "PID 1069: /vendor/bin/audioadsprpcd (exe=/vendor/bin/audioadsprpcd, ino=988108)",
+      "PID 1080: /system/bin/logd (exe=/system/bin/logd, ino=10830776)",
+      "PID 1081: /system/bin/lmkd (exe=/system/bin/lmkd, ino=10830754)",
+      "PID 1082: /system/bin/servicemanager (exe=/system/bin/servicemanager, ino=10831339)",
+      "PID 1085: /vendor/bin/vndservicemanager (exe=/vendor/bin/vndservicemanager, ino=991735)"
+    ]
+  }
+}

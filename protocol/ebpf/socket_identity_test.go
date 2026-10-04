@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"testing"
 
+	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/log"
 
@@ -315,3 +316,99 @@ func TestRecordsSocketIdentityPreservesNonAndroidTracker(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnerFromIdentityNativeChildProcessPath(t *testing.T) {
+	tree := newFakeCgroupTree(t)
+
+	// 1. 创建两个文件：一个模拟 app_process64，另一个模拟 native helper 二进制
+	tempDir := t.TempDir()
+	appProcessBin := filepath.Join(tempDir, "app_process64")
+	nativeBin := filepath.Join(tempDir, "native_helper")
+	if err := os.WriteFile(appProcessBin, []byte("app_process"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nativeBin, []byte("ELF_binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var appStat, nativeStat unix.Stat_t
+	if err := unix.Stat(appProcessBin, &appStat); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Stat(nativeBin, &nativeStat); err != nil {
+		t.Fatal(err)
+	}
+
+	// 注册 appProcessInodes 用于测试隔离
+	resetTestInodes := setAppProcessInodesForTest([]uint64{appStat.Ino})
+	defer resetTestInodes()
+
+	// 2. 将进程添加到 fake cgroup 和 /proc
+	// 普通 Java App: PID 101, exe -> appProcessBin
+	appCgroup := tree.addProcess(t, "apps", 10050, 101, appProcessBin)
+	// 原生子程序: PID 102, 属于同一应用 (UID 10050, 同一 cgroup), 但 exe -> nativeBin
+	nativeCgroup := tree.addProcess(t, "apps", 10050, 102, nativeBin)
+
+	packages := &testPackageManager{
+		idByPackage:  map[string]uint32{"com.example.app": 10050},
+		packagesByID: map[uint32][]string{10050: {"com.example.app"}},
+	}
+	inbound := newIdentityTestInbound(t, tree, packages)
+	ctx := context.Background()
+
+	// Case 1: 普通 Java App (inode == appStat.Ino)
+	// UID 快路径应返回 PackageNames，但保持 ProcessPaths 为空（0 文件系统开销）
+	javaIdentity := socketIdentity{
+		cookie:   1001,
+		valid:    true,
+		uid:      10050,
+		cgroupID: appCgroup,
+		creator: commonEBPF.SocketCreator{
+			Cookie:       1001,
+			ProcessID:    101,
+			ThreadID:     101,
+			UserID:       10050,
+			StartTimeNs:  1234567 * 10000000,
+			Flags:        commonEBPF.SocketCreatorValid | commonEBPF.SocketCreatorExeValid,
+			ExeInode:     appStat.Ino,
+		},
+	}
+	javaOwner := inbound.ownerFromIdentity(ctx, javaIdentity)
+	if len(javaOwner.PackageNames) != 1 || javaOwner.PackageNames[0] != "com.example.app" {
+		t.Fatalf("java app PackageNames mismatch: %+v", javaOwner)
+	}
+	if javaOwner.ProcessID != 101 {
+		t.Fatalf("java app ProcessID mismatch: %+v", javaOwner)
+	}
+	if len(javaOwner.ProcessPaths) != 0 {
+		t.Fatalf("java app ProcessPaths should be empty on fast path, got %+v", javaOwner.ProcessPaths)
+	}
+
+	// Case 2: App 内部启动的原生二进制子程序 (inode == nativeStat.Ino != appProcessInodes)
+	// UID 快路径应识别其为原生子程序，并自动补齐 ProcessPaths！
+	nativeIdentity := socketIdentity{
+		cookie:   1002,
+		valid:    true,
+		uid:      10050,
+		cgroupID: nativeCgroup,
+		creator: commonEBPF.SocketCreator{
+			Cookie:       1002,
+			ProcessID:    102,
+			ThreadID:     102,
+			UserID:       10050,
+			StartTimeNs:  1234567 * 10000000,
+			Flags:        commonEBPF.SocketCreatorValid | commonEBPF.SocketCreatorExeValid,
+			ExeInode:     nativeStat.Ino,
+		},
+	}
+	nativeOwner := inbound.ownerFromIdentity(ctx, nativeIdentity)
+	if len(nativeOwner.PackageNames) != 1 || nativeOwner.PackageNames[0] != "com.example.app" {
+		t.Fatalf("native child PackageNames mismatch: %+v", nativeOwner)
+	}
+	if nativeOwner.ProcessID != 102 {
+		t.Fatalf("native child ProcessID mismatch: %+v", nativeOwner)
+	}
+	if len(nativeOwner.ProcessPaths) != 1 || nativeOwner.ProcessPaths[0] != nativeBin {
+		t.Fatalf("native child ProcessPaths should be populated with %q, got %+v", nativeBin, nativeOwner.ProcessPaths)
+	}
+}
+

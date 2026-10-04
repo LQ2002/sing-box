@@ -361,6 +361,44 @@ func isAndroidApplicationExecutable(path string) bool {
 	}
 }
 
+var (
+	appProcessInodesOnce sync.Once
+	appProcessInodes     []uint64
+)
+
+func initAppProcessInodes() {
+	for _, name := range []string{"/system/bin/app_process64", "/system/bin/app_process32", "/system/bin/app_process"} {
+		var stat unix.Stat_t
+		if err := unix.Stat(name, &stat); err == nil {
+			appProcessInodes = append(appProcessInodes, stat.Ino)
+		}
+	}
+}
+
+func isAppProcessInode(inode uint64) bool {
+	if inode == 0 {
+		return false
+	}
+	appProcessInodesOnce.Do(initAppProcessInodes)
+	for _, ino := range appProcessInodes {
+		if ino == inode {
+			return true
+		}
+	}
+	return false
+}
+
+func setAppProcessInodesForTest(inodes []uint64) func() {
+	prevOnce := appProcessInodesOnce
+	prevInodes := appProcessInodes
+	appProcessInodesOnce.Do(func() {})
+	appProcessInodes = inodes
+	return func() {
+		appProcessInodesOnce = prevOnce
+		appProcessInodes = prevInodes
+	}
+}
+
 func uniqueApplicationPackage(packageManager tun.PackageManager, uid uint32) string {
 	appID := uid % 100000
 	// System, SDK-sandbox and isolated UIDs need a different attribution source.

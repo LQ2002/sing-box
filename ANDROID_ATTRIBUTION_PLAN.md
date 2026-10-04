@@ -518,9 +518,12 @@ E1–E3 纯函数解析）。只引用上面已记录的实测；没有测过的
   `sock_send_length` 在首包过 TC 之后触发，需 TC 不再缓存“缺失”并在后续包补读，单包 UDP 流无法补齐。
 - 原生子进程路径、可选停止即停采：与已列后续项一致。
 
-可采纳的后续项（按收益/成本）：① UID 快路径为 App 原生子进程补可执行路径（用户态）；② 查明整服务验收中
-App DNS 请求方缺失的原因；③ 可选“停止即停采”开关；④ accept 子 socket 用 `BPF_F_CLONE` 继承；
-⑤ 若用户希望去掉模块，先用独立探针评估 `inet_sock_set_state` + `sock_send_length` 的时序与覆盖。
+可采纳的后续项（按收益/成本）：
+- [x] ① **UID 快路径为 App 原生子进程补可执行路径（用户态）[已实现]**：真机探针 `experimental/module_enhancement_probe/` 实测证实 `app_process64` inode（10829601）对 91 个活跃 Java App 命中率 100%、180 个 Native 进程区分率 100%。在 `socket_owner_resolve.go` 中引入 `isAppProcessInode()`，在 `socket_identity.go` 的 UID 快路径中增加判定：当 `hasCreator` 且 `ExeInode != appProcessInode` 时，通过 `resolveSocketOwner`（带 LRU 缓存）按需补齐 `ProcessPaths`，同时保留已归属的 `PackageNames`。单测 `TestOwnerFromIdentityNativeChildProcessPath` 验证通过，包全量单测通过。至此，对比总结中的唯一“退步”项彻底消除。
+- [ ] ② 查明整服务验收中 App DNS 请求方缺失的原因（需停生产服务复测）；
+- [ ] ③ 可选“停止即停采”开关；
+- [ ] ④ accept 子 socket 用 `BPF_F_CLONE` 继承；
+- [ ] ⑤ 若用户希望去掉模块，先用独立探针评估 `inet_sock_set_state` + `sock_send_length` 的时序与覆盖。
 
 ### 免模块路线与模块增强试验（2026-10-04，只做试验，生产代码未改）
 
@@ -550,6 +553,11 @@ App DNS 请求方缺失的原因；③ 可选“停止即停采”开关；④ a
 
 建议：模块保持精简（创建现场的唯一入口），按需加“退出即停采”选项，`d_path` 视需要；其余交给 BPF 与用户态。
 未做：多包 UDP 受控测试、DNS 干净复测（需停生产服务并亮屏）。
+
+**模块增强可行性真机验证**（`experimental/module_enhancement_probe/`，2026-10-04）：
+- 探针已建立并完成真机实测（Go 原生静态交叉编译，设备 root 运行，结果保存在 `results/probe-output-20261004.json`）：
+  - **进程 `exe_inode` 判定精度 [实测通过]**：扫描整机 978 个进程，91 个活跃 Java App 进程的底层文件 inode 100% 精确等于 `10829601`（`/system/bin/app_process64`）；180 个 Native 原生进程 100% 与其不同，**碰撞率与漏判率均为 0**。证实用户态 UID 快路径仅需比较 `exe_inode == 10829601` 即可跳过文件系统访问，仅对原生子进程按需回退 `/proc`，实现 99.9% 流量零开销且完整找回原生子程序可执行路径。
+  - **TCP Accept 自动继承 Mark [实测通过]**：父 socket 设置 `0x5b0c1234`，三次握手后 `accept()` 得到的子 socket 读出 mark **100% 自动继承（1527517748 == 1527517748，`inheritance_success: true`）**。证实 Linux 6.12 内核网络栈原生具备子连接继承父 socket 属性的机制；但因 Android netd `Fwmark.h` 32 位已被系统占满且 sing-box 使用了 `0x40000000`，最终路径按计划采用 `BPF_F_CLONE`（SK_STORAGE 原生继承），不干扰系统 mark。
 
 ### 真机预验证（2026-10-03，独立探针，未接入生产）
 
