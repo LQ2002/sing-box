@@ -36,6 +36,9 @@ struct binder_transaction;
 #include "binder_internal.h"
 #include <trace/hooks/binder.h>
 
+#define CREATE_TRACE_POINTS
+#include "sbo_enhancement_trace.h"
+
 MODULE_DESCRIPTION("SBO All-in-One Enhanced Module - Stage 2 Acceptance");
 MODULE_LICENSE("GPL");
 
@@ -56,6 +59,11 @@ static u32 app_process_gen;
 #define PATH_CACHE_SLOTS 4
 #define PATH_MAX_LEN 256
 #define PATH_FLAG_TRUNCATED (1U << 0)
+#define PATH_FLAG_TOO_LONG  (1U << 1)
+#define PATH_FLAG_DELETED   (1U << 2)
+
+static const char deleted_suffix[] = " (deleted)";
+#define DELETED_SUFFIX_LEN 10
 
 struct path_cache_key {
 	dev_t s_dev;
@@ -124,6 +132,7 @@ static void on_socket_create(void *unused, struct sock *sk)
 
 	if (likely(is_app_process)) {
 		/* Fast path: 99.9% of Java apps bypass here */
+		trace_sbo_enhancement_socket_identity(sk, dev, ino, gen, "", 0, 0);
 		if (atomic_inc_return(&fast_sample_count) <= 5) {
 			pr_info("sbo_enh_probe [FAST_BYPASS]: pid=%d comm=%s is_java=true cost_ns=%llu dev=%u ino=%lu gen=%u\n",
 				current->pid, current->comm, (t1 - t0), (unsigned int)dev, ino, gen);
@@ -135,9 +144,6 @@ static void on_socket_create(void *unused, struct sock *sk)
 	{
 		struct percpu_cache *pcpu;
 		bool cache_hit = false;
-		char hit_path[PATH_MAX_LEN];
-		u32 hit_len = 0;
-		u8 hit_flags = 0;
 		int s;
 
 		pcpu = get_cpu_ptr(&pcpu_path_cache); /* preempt_disable() */
@@ -145,25 +151,24 @@ static void on_socket_create(void *unused, struct sock *sk)
 			if (pcpu->slots[s].key.s_dev == dev &&
 			    pcpu->slots[s].key.i_ino == ino &&
 			    pcpu->slots[s].key.i_generation == gen &&
-			    pcpu->slots[s].path_len > 0) {
+			    (pcpu->slots[s].path_len > 0 || (pcpu->slots[s].flags & PATH_FLAG_TOO_LONG))) {
 				cache_hit = true;
-				hit_len = min_t(u32, pcpu->slots[s].path_len, PATH_MAX_LEN - 1);
-				memcpy(hit_path, pcpu->slots[s].path, hit_len);
-				hit_path[hit_len] = '\0';
-				hit_flags = pcpu->slots[s].flags;
+				/* Optimization: directly fire tracepoint using slot pointer under get_cpu_ptr,
+				 * completely eliminating 256-byte stack copy! */
+				trace_sbo_enhancement_socket_identity(sk, dev, ino, gen,
+					pcpu->slots[s].path, pcpu->slots[s].path_len, pcpu->slots[s].flags);
+				if (atomic_inc_return(&hit_sample_count) <= 10) {
+					pr_info("sbo_enh_probe [CACHE_HIT]: pid=%d comm=%s path=%s len=%u flags=%u dev=%u ino=%lu gen=%u\n",
+						current->pid, current->comm, pcpu->slots[s].path, pcpu->slots[s].path_len,
+						(unsigned int)pcpu->slots[s].flags, (unsigned int)dev, ino, gen);
+				}
 				break;
 			}
 		}
 		put_cpu_ptr(&pcpu_path_cache); /* preempt_enable() */
 
-		if (cache_hit) {
-			if (atomic_inc_return(&hit_sample_count) <= 10) {
-				pr_info("sbo_enh_probe [CACHE_HIT]: pid=%d comm=%s path=%s len=%u truncated=%d dev=%u ino=%lu gen=%u\n",
-					current->pid, current->comm, hit_path, hit_len,
-					(hit_flags & PATH_FLAG_TRUNCATED) ? 1 : 0, (unsigned int)dev, ino, gen);
-			}
+		if (cache_hit)
 			return;
-		}
 
 		/* --- Phase 3: Slow Path outside preemption-disabled section --- */
 		{
@@ -172,6 +177,7 @@ static void on_socket_create(void *unused, struct sock *sk)
 			u64 t_get_0, t_get_1, t_dp_0, t_dp_1, t_fp_0, t_fp_1;
 			u8 flags = 0;
 			u32 path_len = 0;
+			char cached_path[PATH_MAX_LEN] = {};
 
 			t_get_0 = ktime_get_ns();
 			rcu_read_lock();
@@ -185,11 +191,25 @@ static void on_socket_create(void *unused, struct sock *sk)
 				t_dp_1 = ktime_get_ns();
 
 				if (IS_ERR(path_str)) {
-					path_str = "<err>";
+					if (PTR_ERR(path_str) == -ENAMETOOLONG) {
+						/* Required Fix 1: buffer too small -> cache empty path + TOO_LONG flag */
+						flags |= PATH_FLAG_TOO_LONG;
+						path_len = 0;
+						cached_path[0] = '\0';
+					} else {
+						path_str = "<err>";
+						path_len = 0;
+					}
 				} else {
 					path_len = strlen(path_str);
-					if (path_len >= PATH_MAX_LEN - 1)
-						flags |= PATH_FLAG_TRUNCATED;
+					/* Required Fix 1: strip " (deleted)" suffix if present */
+					if (path_len >= DELETED_SUFFIX_LEN &&
+					    memcmp(path_str + path_len - DELETED_SUFFIX_LEN, deleted_suffix, DELETED_SUFFIX_LEN) == 0) {
+						flags |= PATH_FLAG_DELETED;
+						path_len -= DELETED_SUFFIX_LEN;
+						path_str[path_len] = '\0';
+					}
+					strscpy(cached_path, path_str, PATH_MAX_LEN);
 				}
 
 				if (exe->f_inode && exe->f_inode->i_sb) {
@@ -203,14 +223,14 @@ static void on_socket_create(void *unused, struct sock *sk)
 				t_fp_1 = ktime_get_ns();
 
 				if (atomic_inc_return(&miss_sample_count) <= 10) {
-					pr_info("sbo_enh_probe [CACHE_MISS_FILLED]: pid=%d comm=%s path=%s total_ns=%llu (get_rcu=%llu, d_path=%llu, fput=%llu) dev=%u ino=%lu gen=%u\n",
-						current->pid, current->comm, path_str,
+					pr_info("sbo_enh_probe [CACHE_MISS_FILLED]: pid=%d comm=%s path=%s total_ns=%llu (get_rcu=%llu, d_path=%llu, fput=%llu) flags=%u dev=%u ino=%lu gen=%u\n",
+						current->pid, current->comm, cached_path,
 						(t_fp_1 - t_get_0), (t_get_1 - t_get_0), (t_dp_1 - t_dp_0), (t_fp_1 - t_fp_0),
-						(unsigned int)dev, ino, gen);
+						(unsigned int)flags, (unsigned int)dev, ino, gen);
 				}
 
-				/* Phase 4: Write back to local per-CPU slot */
-				if (!IS_ERR(path_str) && path_len > 0) {
+				/* Phase 4: Write back to local per-CPU slot & emit tracepoint */
+				if (!IS_ERR(path_str) || (flags & PATH_FLAG_TOO_LONG)) {
 					u8 slot;
 					pcpu = get_cpu_ptr(&pcpu_path_cache); /* preempt_disable() */
 					slot = pcpu->next_slot++ % PATH_CACHE_SLOTS;
@@ -218,8 +238,11 @@ static void on_socket_create(void *unused, struct sock *sk)
 					pcpu->slots[slot].key.i_ino = ino;
 					pcpu->slots[slot].key.i_generation = gen;
 					pcpu->slots[slot].flags = flags;
-					strscpy(pcpu->slots[slot].path, path_str, PATH_MAX_LEN);
+					strscpy(pcpu->slots[slot].path, cached_path, PATH_MAX_LEN);
 					pcpu->slots[slot].path_len = path_len;
+					/* Emit tracepoint on miss writeback */
+					trace_sbo_enhancement_socket_identity(sk, dev, ino, gen,
+						pcpu->slots[slot].path, pcpu->slots[slot].path_len, pcpu->slots[slot].flags);
 					put_cpu_ptr(&pcpu_path_cache); /* preempt_enable() */
 				}
 			}
