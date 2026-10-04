@@ -243,3 +243,62 @@ binder 仅适合诊断；DNS 仍需一次测量包 socket UID 的复测。落地
 
 每项先用探针在真机验证，再接入生产；测试前后记录 taint，做长时间运行与分段开销测量（含
 “停采后开销”“原生程序取路径开销”的实测，而非估算）。
+
+---
+
+# 第五次审查：对 Gemini 回应（`E:\work_sb\005.txt`，提交 `e2c40ace`）的意见（2026-10-04）
+
+本节只记录意见，不修改探针文件。
+
+## 当日核实的事实
+
+- **GKI ABI 收录了 `struct binder_transaction` 的完整定义。** 内核源码树 `gki/aarch64/abi.stg` 第 276196 行
+  为 `struct_union { kind: STRUCT name: "binder_transaction" definition { bytesize: 192 member_id: ... } }`，
+  钩子符号 `__traceiter_android_vh_binder_transaction_received`（第 437565 行）、
+  `__tracepoint_android_vh_binder_transaction_received`（第 445134 行）也在 KMI 中。即在 android16-6.12
+  这一代 KMI 内，该结构体布局受 GKI ABI 监控保护，改动需经 ABI 破坏审批。
+- **本机两次 `ktime_get_ns()` 自身约 163–187 ns**（`creator_v2_probe` 分段测量的 `avg_clock_ns`，
+  `experimental/creator_v2_probe/results/capture-breakdown.log` 所在轮次）。
+- **原生进程在 inet socket 创建中的占比约 40%**：`creator_v2_probe` 180 s 采集的 207 个 inet socket 中，
+  netd 28 个、`iptables-restore`/`ip6tables-restore` 合计 54 个、sing-box 2 个
+  （`experimental/creator_v2_probe/results/capture.jsonl`）。
+
+## 认可
+
+1. **accept 继承已达成共识**：`BPF_F_CLONE`；TC 规则“快照有效且 cookie 不等即为继承”；三处校验一并放开。
+2. **撤回第三、四次审查中“binder 字段不应在模块里读”的反对。** 依据即上引 `abi.stg`：符号 CRC 不覆盖该布局，
+   但 KMI 的 ABI 监控覆盖。用户坚持模块方向时，模块直接读 `t->sender_euid`、`t->from_pid` 可以接受；
+   用 BPF CO-RE 读取同样可行，两者均可。
+3. **本轮补上了此前要求的实测**：测试前后 taint 均为 4608（无新增警告）；慢路径分段：`get_file_rcu`
+   208–312 ns、`d_path` 热 625–990 ns / 冷 2.6–3.3 µs、`fput` 208–261 ns，热总 1.4–1.7 µs。数据可信。
+
+## 分歧
+
+1. **“停采开销 104–260 ns”主要是时钟读数本身。** 测法是在回调内前后各调一次 `ktime_get_ns()`，而本机这对
+   调用自身即约 163–187 ns；`READ_ONCE` 判断本身只有几纳秒。另一方面，它又不含 tracepoint 分发到回调的开销。
+   “停采后开销可以忽略”的结论成立，但该数字不能当作实际开销引用。准确测法应是“未加载模块 / 已加载但停采 /
+   采集中”三态的 `socket()` 微基准对比（此前 `sockbench` 显示这类差别落在 1–2 µs 噪声内，难以分辨）。
+2. **“原生程序很少，全机加权开销趋近于零”不对。** 本机原生进程约占 inet socket 创建的 40%（见上），netd 每次
+   DNS 查询都新建 socket，都会走 `d_path` 慢路径（热约 1.5 µs、冷约 4 µs）。绝对值仍小（全机每秒数个 socket），
+   但不是“趋近于零”。追求极致性能时，可在模块内按 `(s_dev, i_ino)` 缓存最近解析的路径，同一程序只 `d_path`
+   一次。
+3. **“零内存泄漏、绝对安全”不能由 taint 不变推出。** taint 只记录 WARNING/BUG 等事件，不跟踪泄漏，本内核也未开
+   kmemleak。可下的结论只是“本次运行未触发内核警告”。
+4. **binder“同步 RPC 100% 命中”仍未验证。** 迄今日志只证明“收到事务时能拿到发送方 UID”，从未把某个事务与某个
+   socket 关联测过。需在 binder 线程处理事务期间创建 socket 并核对对应关系。异步侧 `setThreadStatsUid` 为可选接口
+   （第四次审查已引原文），整体仍是部分覆盖；用户按发送者路由，此信息只作诊断。
+5. **架构图仍沿用已更正的说法**：“<10 ns 零损耗”已在第四次审查中共同更正（克隆有 `GFP_ATOMIC` 分配）；
+   “Java 快速比对 <2 µs”无实测数据。
+
+## 落地顺序（在第四次审查基础上的修订）
+
+1. accept 继承：`BPF_F_CLONE`；producer map、collector、sing-ebpf 三处校验放开；TC 按 cookie 不等判定继承并标记。
+2. 模块在创建现场取可执行路径：仅原生程序，`get_file_rcu` + `d_path` + `fput`，**并按 `(s_dev, i_ino)` 缓存路径**；
+   经 typed tracepoint 参数交给 BPF 写入快照。
+3. 字符设备生命周期开关：0600、持有者原子计数，可选配置，默认保持 pin 持久化。
+4. binder 调用方作为诊断：**模块读取（KMI 保护布局）或 BPF CO-RE 读取均可**；先验证“事务 ↔ socket”关联，
+   不参与路由。
+
+每项先在真机验证再接入生产；开销以三态 `socket()` 微基准或分段计时（扣除时钟自身开销）实测。
+
+双方在方向上已基本一致；以上分歧均在数字与措辞，不涉及架构方向。
