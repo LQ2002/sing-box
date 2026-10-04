@@ -397,3 +397,51 @@ binder 仅适合诊断；DNS 仍需一次测量包 socket UID 的复测。落地
 本轮吸收了第六次审查的两条核心建议（缓存键、避免重复读取），设计已接近可开工。落地顺序沿用第六次审查版本，
 第 2 项补充：**Per-CPU 缓存在关闭抢占（`get_cpu_ptr`/`put_cpu_ptr` 或 `local_lock`）的区间内读写，`d_path`
 在区间之外执行**。binder 仅作诊断。
+
+---
+
+# 第八次审查：对 Gemini 回应（`E:\work_sb\008.txt`，提交 `94a00682`）的意见（2026-10-04）
+
+本节只记录意见，不修改探针文件。
+
+## 当日核实的事实
+
+- **测试善后**：测试曾把 CPU 4 调频策略改为 performance；事后各核均已恢复 `walt`（cpu0/2/4/7 当前
+  `scaling_governor=walt`）；无残留模块或文件，taint 仍为 4608。
+- **`get_file_rcu()` 的调用约定**：`fs/file.c:883` 注释为“get_file_rcu - try go get a reference to a file
+  under rcu”；内核自身 `get_mm_exe_file()` 为 `rcu_read_lock(); exe_file = get_file_rcu(&mm->exe_file);
+  rcu_read_unlock();`（`kernel/fork.c:1499-1506`）。`get_mm_exe_file` **未导出**给模块；`get_file_rcu`
+  为 `EXPORT_SYMBOL_GPL`（`fs/file.c:904`），`d_path` 为 `EXPORT_SYMBOL`（`fs/d_path.c:296`）。
+- **KMI**：`gki/aarch64/abi.stg` 收录 `get_file_rcu`、`d_path`、`misc_register`（受 GKI ABI 保护）。
+- **原生程序路径长度**：设备 `/data/app/*/lib/arm64` 下 4679 个 `.so`，最长 186 字节，206 个超过 127 字节。
+  Android 要求 App 自带可执行程序位于原生库目录并以 `.so` 命名，这正是原生子程序的典型路径。
+
+## 认可
+
+1. 测试善后到位（调频恢复、无残留、taint 不变）。
+2. Per-CPU 缓存结构基本正确：`get_cpu_ptr`/`put_cpu_ptr` 关闭抢占读写槽位，`d_path` 在区间外执行，
+   键为 `(dev, ino, generation)`，吸收了第七次审查三条意见。
+3. binder 在架构图中标为“辅助诊断元数据”，与用户“按发送者路由”一致。
+4. 所用接口 `get_file_rcu`、`d_path`、`misc_register` 均在 KMI 中，跨同代 OTA 稳定。
+
+## 需要更正
+
+1. **草案中 `get_file_rcu()` 未包在 RCU 读锁内，违反接口约定。** 依据见上（`fs/file.c:883`、
+   `kernel/fork.c:1499-1506`）。`get_mm_exe_file()` 未导出，模块须显式
+   `rcu_read_lock(); f = get_file_rcu(&current->mm->exe_file); rcu_read_unlock();`；门控阶段读取
+   `(dev, ino, gen)` 同样须在 RCU 读锁下。实际模块代码可能已有，但草案缺失，此处漏一步即与“0 UAF 风险”相悖。
+2. **128 字节路径槽位会截断真实路径。** 依据上述统计（206/4679 超过 127 字节，最长 186）。槽位应至少 256 字节，
+   或对超长路径置截断标记，不得把截断结果当完整路径交出。
+3. **锁频绑核基准仍不能支撑“相差不到 150 ns”。** “已加载停采”中位数 6255 ns 比“未加载模块” 8479 ns 还快
+   2.2 µs；加载模块不可能使 `socket()` 变快，说明锁频绑核后噪声仍约 2 µs；三态各轮区间（6006–8617 ns）重叠。
+   可下的结论仅为“差别小于约 2 µs、测不出”，与此前 `sockbench-pinned` 一致。“采集中”仍未加载 BPF producer。
+4. **仍沿用已更正的说法**：“kern_path 免疫 Overlay”（按挂载命名空间解析，未证）；“100% 继承”“<0.5 ns”
+   “开销降 90%+”“Per-CPU 命中 <5 ns”（含关抢占、4 次比较、最多 128 字节复制，未实测）。对比表“现行方案”一列
+   有失公允：UDP 首包覆盖是现行 v2 模块已有能力；“DNS 被误判为 1051 盲区”是计划文档的一句错误表述（已更正），
+   不是方案缺陷。
+
+## 结论与落地顺序
+
+设计已基本成型。须改的实现细节：**① exe_file 读取与 `get_file_rcu()` 用 `rcu_read_lock()`/`rcu_read_unlock()`
+包住；② 路径槽位扩至 256 字节或对超长路径置截断标记。** 其余为数字与措辞。落地顺序沿用第七次审查版本，
+第 2 项补上这两条。
