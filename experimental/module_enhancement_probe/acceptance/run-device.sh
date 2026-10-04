@@ -24,9 +24,17 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 [ ! -e /sys/module/sbo_enhancement_probe ] || fail 'module already loaded'
 echo "PRECHECK taint=$(cat /proc/sys/kernel/tainted) file_nr=$(awk '{print $1}' /proc/sys/fs/file-nr) sing-box=$(pidof sing-box || echo none)"
 
-# A /dev/kmsg marker bounds the dmesg check to this run. /proc/uptime cannot
-# be used for that: it includes suspend time, the dmesg clock does not.
+# Kernel log: streamed from /dev/kmsg into a file for the whole run. The ring
+# buffer alone is not enough - on this phone vendor drivers overwrite it well
+# within an hour, which made the first 1-hour run's dmesg check vacuous.
+# /dev/kmsg gives every reader its own position, so this steals nothing from
+# logd. A marker bounds the check to this run (/proc/uptime cannot: it counts
+# suspend time, the kernel log clock does not).
+KMSG=$DIR/kmsg-${1:-run}.txt
+cat /dev/kmsg > "$KMSG" &
+KMSG_PID=$!
 MARK="SBO_ACCEPT_MARK_$(date +%s)_$$"
+sleep 0.5
 echo "$MARK" > /dev/kmsg
 
 load() { insmod "$KO"; for i in 1 2 3 4 5 6 7 8 9 10; do [ -c /dev/sbo_enhancement_probe ] && return 0; sleep 0.1; done; fail 'device node missing'; }
@@ -35,15 +43,20 @@ unload() {
   [ ! -e /sys/module/sbo_enhancement_probe ] || fail 'module still loaded'
 }
 kernel_check() {
-  dmesg | sed -n "/$MARK/,\$p" > dmesg-since-mark.txt
-  echo "DMESG lines_since_mark=$(wc -l < dmesg-since-mark.txt)"
+  sleep 1
+  kill "$KMSG_PID" 2>/dev/null || true
+  sed -n "/$MARK/,\$p" "$KMSG" > dmesg-since-mark.txt
+  echo "DMESG captured_lines=$(wc -l < "$KMSG") lines_since_mark=$(wc -l < dmesg-since-mark.txt)"
+  [ "$(wc -l < dmesg-since-mark.txt)" -gt 1 ] || fail 'kernel log capture lost the marker'
+  cp -f dmesg-since-mark.txt "dmesg-since-mark-${MODE}.txt"
   grep -E 'sbo_enh_probe: (file_ref|loaded|baseline)' dmesg-since-mark.txt | tail -n 8
   if grep -iE 'WARNING:|BUG:|Oops|Unable to handle|Kernel panic|refcount_t|use-after-free|KASAN' dmesg-since-mark.txt; then
     fail 'kernel warning since mark'
   fi
   echo "DMESG_CLEAN taint=$(cat /proc/sys/kernel/tainted)"
 }
-cleanup_mod() { [ -e /sys/module/sbo_enhancement_probe ] && unload || true; }
+cleanup_mod() { kill "$KMSG_PID" 2>/dev/null || true; [ -e /sys/module/sbo_enhancement_probe ] && unload || true; }
+MODE=${1:-}
 trap cleanup_mod EXIT
 
 triggers() {
@@ -87,6 +100,16 @@ quick)
   wait "$DPID" || { cat deleted.log; fail 'deleted-exe selftest failed'; }
   cat deleted.log
 
+  # An app's own executable: a /data/app-shaped path of about the longest
+  # length measured on the device (186 bytes for app native libraries), run
+  # under an app UID. The concurrent watch checks the path and the UID.
+  APPDIR=$DIR/app/~~Xq9Lm2Rt7Vb4Nc8Kd1Pz3w==/com.example.sbo.attribution.nativechild-Ys6Hf0Jg5Uw2Ea9Tq4Bx7v==/lib/arm64
+  mkdir -p "$APPDIR"
+  cp "$TOOL" "$APPDIR/libsbo_native_child_exec.so"
+  chmod -R 755 "$DIR/app"
+  su 10999 -c "$APPDIR/libsbo_native_child_exec.so sockets -n 20 -hold 3s"
+  rm -rf "$DIR/app"
+
   triggers
   wait "$WATCH" || true
   cat watch-quick.log
@@ -126,18 +149,24 @@ bench)
   echo "$MAX" > $POL/scaling_min_freq
   echo "FREQ_LOCKED policy0 min=max=$(cat $POL/scaling_min_freq) cur=$(cat $POL/scaling_cur_freq)"
   bench() { taskset 10 "$TOOL" bench -n 20000 -rounds 5 -label "$1"; }
+  # Order per cycle: unloaded -> loaded_inactive -> collecting. Measuring
+  # "inactive" right after the consumer exited (first version) mixed in the
+  # map/RCU teardown of the consumer.
   for cycle in 1 2 3; do
     bench unloaded
     load
+    sleep 1
+    bench loaded_inactive
     "$TOOL" hold -object "$OBJ" -duration 600s > hold.log 2>&1 &
     HOLD=$!
     for i in $(seq 1 50); do grep -q HOLDING hold.log && break; sleep 0.1; done
     bench collecting
     kill "$HOLD"; wait "$HOLD" || true; HOLD=
     cat hold.log
-    bench loaded_inactive
     unload
+    sleep 1
   done
+  kernel_check
   ;;
 *)
   fail 'usage: run-device.sh quick | long <seconds> | bench'

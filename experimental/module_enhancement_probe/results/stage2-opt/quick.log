@@ -1,0 +1,69 @@
+PRECHECK taint=4608 file_nr=45769 sing-box=none
+LOAD_UNLOAD round=1 ok
+LOAD_UNLOAD round=2 ok
+LOAD_UNLOAD round=3 ok
+STATS_LOADED inet=0 skipped=0 app=0 hit=0 miss=0 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=0 put=0 active=0 holders=0
+SELF exe="/data/local/tmp/sboacc/sbo-acceptance" bytes=37 deleted=false expect=native
+SELFTEST kind=tcp4 n=2000 map[ok:2000 ok_cache_hit:1998]
+SELFTEST kind=udp4 n=2000 map[ok:2000 ok_cache_hit:1999]
+SELFTEST kind=tcp6 n=2000 map[ok:2000 ok_cache_hit:1999]
+SELFTEST kind=udp6 n=2000 map[ok:2000 ok_cache_hit:2000]
+SELFTEST kind=accept n=200 map[ok_inherited:200]
+SELFTEST unix_socket_snapshot_absent=true (lookup: key does not exist)
+SELFTEST_BPF_STATS map[duplicate:0 events:8201 path_insert:1 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+SELFTEST_MODULE_STATS inet=8207 skipped=1 app=6 hit=8195 miss=6 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=6 put=6 active=1 holders=2
+SELFTEST_PASS
+LONG_PATH bytes=303
+SELF exe="/data/local/tmp/sboacc/L/dir_1-0123456789abcdef0123456789/dir_2-0123456789abcdef0123456789/dir_3-0123456789abcdef0123456789/dir_4-0123456789abcdef0123456789/dir_5-0123456789abcdef0123456789/dir_6-0123456789abcdef0123456789/dir_7-0123456789abcdef0123456789/dir_8-0123456789abcdef0123456789/sbo-acceptance" bytes=303 deleted=false expect=too_long
+SELFTEST kind=tcp4 n=200 map[ok:200 ok_cache_hit:199]
+SELFTEST kind=udp4 n=200 map[ok:200 ok_cache_hit:199]
+SELFTEST kind=tcp6 n=200 map[ok:200 ok_cache_hit:199]
+SELFTEST kind=udp6 n=200 map[ok:200 ok_cache_hit:200]
+SELFTEST kind=accept n=200 map[ok_inherited:200]
+SELFTEST unix_socket_snapshot_absent=true (lookup: key does not exist)
+SELFTEST_BPF_STATS map[duplicate:0 events:1001 path_insert:0 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+SELFTEST_MODULE_STATS inet=9210 skipped=2 app=8 hit=9191 miss=11 too_long=5 deleted=0 error=0 kernel=0 unvalidated=0 get=11 put=11 active=1 holders=2
+SELFTEST_PASS
+WAITING_FOR_SIGUSR1 pid 15448
+SELF exe="/data/local/tmp/sboacc/sbo-deleted" bytes=44 deleted=true expect=native_deleted
+SELFTEST kind=tcp4 n=200 map[ok:200 ok_cache_hit:198]
+SELFTEST kind=udp4 n=200 map[ok:200 ok_cache_hit:199]
+SELFTEST kind=tcp6 n=200 map[ok:200 ok_cache_hit:199]
+SELFTEST kind=udp6 n=200 map[ok:200 ok_cache_hit:200]
+SELFTEST kind=accept n=200 map[ok_inherited:200]
+SELFTEST unix_socket_snapshot_absent=true (lookup: key does not exist)
+SELFTEST_BPF_STATS map[duplicate:0 events:1001 path_insert:1 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+SELFTEST_MODULE_STATS inet=10211 skipped=3 app=8 hit=10187 miss=16 too_long=5 deleted=5 error=0 kernel=0 unvalidated=0 get=16 put=16 active=1 holders=2
+SELFTEST_PASS
+SOCKETS pid=15474 uid=10999 n=20 exe="/data/local/tmp/sboacc/app/~~Xq9Lm2Rt7Vb4Nc8Kd1Pz3w==/com.example.sbo.attribution.nativechild-Ys6Hf0Jg5Uw2Ea9Tq4Bx7v==/lib/arm64/libsbo_native_child_exec.so" bytes=156
+WATCHING duration=1m30s file_nr=45737 module=inet=0 skipped=0 app=0 hit=0 miss=0 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=0 put=0 active=1 holders=1
+EVENT kind=too_long pid=15438 uid=0 comm=sbo-acceptance path="" verdict=ok 
+EVENT kind=too_long pid=15438 uid=0 comm=sbo-acceptance path="" verdict=ok 
+EVENT kind=too_long pid=15438 uid=0 comm=sbo-acceptance path="" verdict=ok 
+EVENT kind=too_long pid=15438 uid=0 comm=sbo-acceptance path="" verdict=ok 
+EVENT kind=too_long pid=15438 uid=0 comm=sbo-acceptance path="" verdict=ok 
+EVENT kind=native_deleted pid=15448 uid=0 comm=sbo-deleted path="/data/local/tmp/sboacc/sbo-deleted" verdict=ok 
+EVENT kind=native_deleted pid=15448 uid=0 comm=sbo-deleted path="/data/local/tmp/sboacc/sbo-deleted" verdict=ok 
+EVENT kind=native_deleted pid=15448 uid=0 comm=sbo-deleted path="/data/local/tmp/sboacc/sbo-deleted" verdict=ok 
+EVENT kind=native_deleted pid=15448 uid=0 comm=sbo-deleted path="/data/local/tmp/sboacc/sbo-deleted" verdict=ok 
+EVENT kind=native_deleted pid=15448 uid=0 comm=sbo-deleted path="/data/local/tmp/sboacc/sbo-deleted" verdict=ok 
+EVENT kind=native pid=15474 uid=10999 comm=libsbo_native_c path="/data/local/tmp/sboacc/app/~~Xq9Lm2Rt7Vb4Nc8Kd1Pz3w==/com.example.sbo.attribution.nativechild-Ys6Hf0Jg5Uw2Ea9Tq4Bx7v==/lib/arm64/libsbo_native_child_exec.so" verdict=ok 
+EVENT kind=native pid=15474 uid=10999 comm=libsbo_native_c path="/data/local/tmp/sboacc/app/~~Xq9Lm2Rt7Vb4Nc8Kd1Pz3w==/com.example.sbo.attribution.nativechild-Ys6Hf0Jg5Uw2Ea9Tq4Bx7v==/lib/arm64/libsbo_native_child_exec.so" verdict=ok 
+EVENT kind=native pid=15474 uid=10999 comm=libsbo_native_c path="/data/local/tmp/sboacc/app/~~Xq9Lm2Rt7Vb4Nc8Kd1Pz3w==/com.example.sbo.attribution.nativechild-Ys6Hf0Jg5Uw2Ea9Tq4Bx7v==/lib/arm64/libsbo_native_child_exec.so" verdict=ok 
+EVENT kind=native pid=15474 uid=10999 comm=libsbo_native_c path="/data/local/tmp/sboacc/app/~~Xq9Lm2Rt7Vb4Nc8Kd1Pz3w==/com.example.sbo.attribution.nativechild-Ys6Hf0Jg5Uw2Ea9Tq4Bx7v==/lib/arm64/libsbo_native_child_exec.so" verdict=ok 
+EVENT kind=native pid=15474 uid=10999 comm=libsbo_native_c path="/data/local/tmp/sboacc/app/~~Xq9Lm2Rt7Vb4Nc8Kd1Pz3w==/com.example.sbo.attribution.nativechild-Ys6Hf0Jg5Uw2Ea9Tq4Bx7v==/lib/arm64/libsbo_native_child_exec.so" verdict=ok 
+PROGRESS t=30s events=10374 kinds=map[app:98 native:8274 native_deleted:1001 too_long:1001] verdicts=map[app:map[ok:98] native:map[ok:8274] native_deleted:map[ok:1001] too_long:map[ok:1001]] bpf=map[duplicate:0 events:10374 path_insert:6 path_read_fail:0 ringbuf_drop:0 storage_fail:0] file_nr=45705 module=inet=10374 skipped=312 app=98 hit=10249 miss=27 too_long=5 deleted=5 error=0 kernel=0 unvalidated=0 get=27 put=27 active=1 holders=1
+PROGRESS t=1m0s events=10566 kinds=map[app:230 native:8334 native_deleted:1001 too_long:1001] verdicts=map[app:map[ok:230] native:map[ok:8334] native_deleted:map[ok:1001] too_long:map[ok:1001]] bpf=map[duplicate:0 events:10566 path_insert:7 path_read_fail:0 ringbuf_drop:0 storage_fail:0] file_nr=45737 module=inet=10566 skipped=430 app=230 hit=10306 miss=30 too_long=5 deleted=5 error=0 kernel=0 unvalidated=0 get=30 put=30 active=1 holders=1
+PROGRESS t=1m30s events=11165 kinds=map[app:601 native:8562 native_deleted:1001 too_long:1001] verdicts=map[app:map[ok:601] native:map[ok:8562] native_deleted:map[ok:1001] too_long:map[ok:1001]] bpf=map[duplicate:0 events:11165 path_insert:9 path_read_fail:0 ringbuf_drop:0 storage_fail:0] file_nr=46729 module=inet=11165 skipped=1700 app=601 hit=10522 miss=42 too_long=5 deleted=5 error=0 kernel=0 unvalidated=0 get=42 put=42 active=1 holders=1
+WATCH_DONE events=11165 kinds=map[app:601 native:8562 native_deleted:1001 too_long:1001] verdicts=map[app:map[ok:601] native:map[ok:8562] native_deleted:map[ok:1001] too_long:map[ok:1001]] bpf=map[duplicate:0 events:11165 path_insert:9 path_read_fail:0 ringbuf_drop:0 storage_fail:0] module=inet=11165 skipped=1700 app=601 hit=10522 miss=42 too_long=5 deleted=5 error=0 kernel=0 unvalidated=0 get=42 put=42 active=1 holders=1 distinct_paths=11 mismatches=0
+STATS_BEFORE_UNLOAD inet=11165 skipped=1700 app=601 hit=10522 miss=42 too_long=5 deleted=5 error=0 kernel=0 unvalidated=0 get=42 put=42 active=0 holders=0
+DMESG captured_lines=9973 lines_since_mark=1216
+6,2084197,245268902523,-,caller=T15324;sbo_enh_probe: loaded (/dev/sbo_enhancement_probe mode 0600)
+6,2084198,245269041766,-,caller=T15326;sbo_enh_probe: file_ref check: get_file_rcu=0 fput=0 delta=0
+6,2084200,245269077049,-,caller=T15327;sbo_enh_probe: baseline resolved dev=266338314 ino=10829601 gen=0
+6,2084201,245269078082,-,caller=T15327;sbo_enh_probe: loaded (/dev/sbo_enhancement_probe mode 0600)
+6,2084202,245269097964,-,caller=T15328;sbo_enh_probe: file_ref check: get_file_rcu=0 fput=0 delta=0
+6,2084204,245269133349,-,caller=T15329;sbo_enh_probe: baseline resolved dev=266338314 ino=10829601 gen=0
+6,2084205,245269136178,-,caller=T15329;sbo_enh_probe: loaded (/dev/sbo_enhancement_probe mode 0600)
+6,2085105,245359349933,-,caller=T19890;sbo_enh_probe: file_ref check: get_file_rcu=42 fput=42 delta=0
+DMESG_CLEAN taint=4608

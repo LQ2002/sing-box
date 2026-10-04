@@ -47,24 +47,40 @@ const (
 	devicePath   = "/dev/sbo_enhancement_probe"
 	statsPath    = "/sys/module/sbo_enhancement_probe/parameters/stats"
 	appProcess   = "/system/bin/app_process64"
-	snapshotSize = 320
+	snapshotSize = 64
 	pathLen      = 256
+	pathValueLen = 8 + pathLen
 )
 
-var bpfStatNames = []string{"events", "duplicate", "storage_fail", "path_read_fail", "ringbuf_drop"}
+var bpfStatNames = []string{"events", "duplicate", "storage_fail", "path_read_fail", "ringbuf_drop", "path_insert"}
 
+// rawSnapshot mirrors struct snapshot in bpf/consumer.bpf.c (64 bytes).
+type rawSnapshot struct {
+	Cookie   uint64
+	PID      uint32
+	TID      uint32
+	UID      uint32
+	Flags    uint32
+	Ino      uint64
+	Dev      uint32
+	Gen      uint32
+	PathLen  uint32
+	Reserved uint32
+	Comm     [16]byte
+}
+
+// snapshot is a decoded snapshot plus its path, looked up in the `paths`
+// map by (dev, ino, gen) the way a production reader would.
 type snapshot struct {
-	Cookie  uint64
-	PID     uint32
-	TID     uint32
-	UID     uint32
-	Flags   uint32
-	Dev     uint64
-	Ino     uint64
-	Gen     uint32
-	PathLen uint32
-	Comm    [16]byte
-	Path    [pathLen]byte
+	rawSnapshot
+	Path        string
+	PathMissing bool // native snapshot whose key has no `paths` entry
+}
+
+type pathKey struct {
+	Dev uint32
+	Gen uint32
+	Ino uint64
 }
 
 func cString(b []byte) string {
@@ -74,13 +90,24 @@ func cString(b []byte) string {
 	return string(b)
 }
 
-func decode(raw []byte) (snapshot, error) {
+func (c *consumer) decode(raw []byte) (snapshot, error) {
 	var s snapshot
 	if len(raw) < snapshotSize {
 		return s, fmt.Errorf("short snapshot: %d bytes", len(raw))
 	}
-	err := binary.Read(bytes.NewReader(raw[:snapshotSize]), binary.LittleEndian, &s)
-	return s, err
+	if err := binary.Read(bytes.NewReader(raw[:snapshotSize]), binary.LittleEndian, &s.rawSnapshot); err != nil {
+		return s, err
+	}
+	if s.Flags&flagNative != 0 && s.PathLen > 0 {
+		value := make([]byte, pathValueLen)
+		key := pathKey{Dev: s.Dev, Gen: s.Gen, Ino: s.Ino}
+		if err := c.coll.Maps["paths"].Lookup(&key, &value); err != nil {
+			s.PathMissing = true
+		} else {
+			s.Path = cString(value[8:])
+		}
+	}
+	return s, nil
 }
 
 func kind(flags uint32) string {
@@ -198,8 +225,10 @@ func check(s snapshot) (string, string) {
 	if err != nil {
 		return "gone", ""
 	}
-	path := cString(s.Path[:])
+	path := s.Path
 	switch {
+	case s.Flags&flagNative != 0 && s.PathMissing:
+		return "mismatch", "no paths entry for the snapshot's key"
 	case s.Flags&flagApp != 0:
 		if exe == appProcess {
 			return "ok", ""
@@ -247,6 +276,8 @@ func main() {
 		err = runBench(os.Args[2:])
 	case "hold":
 		err = runHold(os.Args[2:])
+	case "sockets":
+		err = runSockets(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown mode %q", os.Args[1])
 	}
@@ -315,7 +346,7 @@ func runSelftest(args []string) error {
 				counts["missing"]++
 				continue
 			}
-			s, err := decode(raw)
+			s, err := c.decode(raw)
 			if err != nil {
 				return err
 			}
@@ -323,7 +354,7 @@ func runSelftest(args []string) error {
 			if err != nil {
 				return err
 			}
-			path := cString(s.Path[:])
+			path := s.Path
 			switch {
 			case s.Cookie != cookie:
 				counts["bad_cookie"]++
@@ -440,7 +471,7 @@ func runWatch(args []string) error {
 		if err != nil {
 			return err
 		}
-		s, err := decode(rec.RawSample)
+		s, err := c.decode(rec.RawSample)
 		if err != nil {
 			return err
 		}
@@ -453,7 +484,7 @@ func runWatch(args []string) error {
 		}
 		verdicts[k][verdict]++
 		comm := cString(s.Comm[:])
-		path := cString(s.Path[:])
+		path := s.Path
 		if verdict == "mismatch" && len(mismatches) < 200 {
 			mismatches = append(mismatches, map[string]any{"pid": s.PID, "uid": s.UID, "comm": comm,
 				"flags": s.Flags, "path": path, "reason": reason})
@@ -551,7 +582,7 @@ func lookup(c *consumer, fd int) (snapshot, error) {
 	if err := c.coll.Maps["snapshots"].Lookup(uint32(fd), &raw); err != nil {
 		return snapshot{}, err
 	}
-	return decode(raw)
+	return c.decode(raw)
 }
 
 func acceptTest(c *consumer, n int) (int, error) {
@@ -614,4 +645,30 @@ func acceptTest(c *consumer, n int) (int, error) {
 	}
 	fmt.Printf("SELFTEST kind=accept n=%d %v\n", n, counts)
 	return n - counts["ok_inherited"], nil
+}
+
+// runSockets needs no privileges: it only creates inet sockets and keeps
+// them open, so a concurrent `watch` can check the snapshots while this
+// process is alive. Used to run a copy of this binary as an app UID from a
+// /data/app-shaped path.
+func runSockets(args []string) error {
+	flags := flag.NewFlagSet("sockets", flag.ExitOnError)
+	n := flags.Int("n", 20, "sockets to create")
+	hold := flags.Duration("hold", 3*time.Second, "keep them open this long")
+	_ = flags.Parse(args)
+	fds := make([]int, 0, *n)
+	for i := 0; i < *n; i++ {
+		fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+		if err != nil {
+			return err
+		}
+		fds = append(fds, fd)
+	}
+	exe, _ := os.Readlink("/proc/self/exe")
+	fmt.Printf("SOCKETS pid=%d uid=%d n=%d exe=%q bytes=%d\n", os.Getpid(), os.Getuid(), len(fds), exe, len(exe))
+	time.Sleep(*hold)
+	for _, fd := range fds {
+		unix.Close(fd)
+	}
+	return nil
 }
