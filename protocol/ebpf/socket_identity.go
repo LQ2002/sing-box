@@ -366,12 +366,6 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 			}
 			if hasCreator {
 				owner.ProcessID = identity.creator.ProcessID
-				if identity.creator.HasExecutable() && identity.creator.ExeInode != 0 && !isAppProcessInode(identity.creator.ExeInode) {
-					creatorOwner := i.resolveSocketOwner(ctx, socketOwnerFromCreator(identity.creator))
-					if len(creatorOwner.ProcessPaths) > 0 {
-						owner.ProcessPaths = creatorOwner.ProcessPaths
-					}
-				}
 			}
 			i.identityCounters.resolvedPackage.Add(1)
 			if resolver.markLogged(identity.cgroupID, packageName) {

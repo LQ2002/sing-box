@@ -156,30 +156,27 @@ func TestAssignmentCreatorSharedPathCannotClaimLocalIdentity(t *testing.T) {
 
 func TestSocketCreatorConfiguration(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		options    *option.EBPFSocketCreatorOptions
-		local      bool
-		plane      string
-		want       string
-		wantRemove bool
-		invalid    bool
+		name    string
+		options *option.EBPFSocketCreatorOptions
+		local   bool
+		plane   string
+		want    string
+		invalid bool
 	}{
-		{"omitted", nil, true, localDataPlaneTC, "", false, false},
-		{"disabled", &option.EBPFSocketCreatorOptions{}, true, localDataPlaneTC, "", false, false},
-		{"default_path", &option.EBPFSocketCreatorOptions{Enabled: true}, true, localDataPlaneTC, socketidentity.DefaultPinPath, false, false},
-		{"remove_on_stop", &option.EBPFSocketCreatorOptions{Enabled: true, RemoveOnStop: true}, true, localDataPlaneTC, socketidentity.DefaultPinPath, true, false},
-		{"remove_on_stop_disabled", &option.EBPFSocketCreatorOptions{RemoveOnStop: true}, true, localDataPlaneTC, "", false, true},
-		{"custom_path", &option.EBPFSocketCreatorOptions{Enabled: true, PinPath: "/sys/fs/bpf/custom/"}, true, localDataPlaneTC, "/sys/fs/bpf/custom", false, false},
-		{"not_local", &option.EBPFSocketCreatorOptions{Enabled: true}, false, localDataPlaneTC, "", false, true},
-		{"cgroup", &option.EBPFSocketCreatorOptions{Enabled: true}, true, localDataPlaneCgroup, "", false, true},
-		{"relative", &option.EBPFSocketCreatorOptions{Enabled: true, PinPath: "relative"}, true, localDataPlaneTC, "", false, true},
-		{"root", &option.EBPFSocketCreatorOptions{Enabled: true, PinPath: "/"}, true, localDataPlaneTC, "", false, true},
-		{"path_disabled", &option.EBPFSocketCreatorOptions{PinPath: "/sys/fs/bpf/custom"}, true, localDataPlaneTC, "", false, true},
+		{"omitted", nil, true, localDataPlaneTC, "", false},
+		{"disabled", &option.EBPFSocketCreatorOptions{}, true, localDataPlaneTC, "", false},
+		{"default_path", &option.EBPFSocketCreatorOptions{Enabled: true}, true, localDataPlaneTC, socketidentity.DefaultPinPath, false},
+		{"custom_path", &option.EBPFSocketCreatorOptions{Enabled: true, PinPath: "/sys/fs/bpf/custom/"}, true, localDataPlaneTC, "/sys/fs/bpf/custom", false},
+		{"not_local", &option.EBPFSocketCreatorOptions{Enabled: true}, false, localDataPlaneTC, "", true},
+		{"cgroup", &option.EBPFSocketCreatorOptions{Enabled: true}, true, localDataPlaneCgroup, "", true},
+		{"relative", &option.EBPFSocketCreatorOptions{Enabled: true, PinPath: "relative"}, true, localDataPlaneTC, "", true},
+		{"root", &option.EBPFSocketCreatorOptions{Enabled: true, PinPath: "/"}, true, localDataPlaneTC, "", true},
+		{"path_disabled", &option.EBPFSocketCreatorOptions{PinPath: "/sys/fs/bpf/custom"}, true, localDataPlaneTC, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path, removeOnStop, err := normalizeSocketCreator(tc.options, tc.local, tc.plane)
-			if (err != nil) != tc.invalid || !tc.invalid && (path != tc.want || removeOnStop != tc.wantRemove) {
-				t.Fatalf("path=%q removeOnStop=%v err=%v", path, removeOnStop, err)
+			path, err := normalizeSocketCreator(tc.options, tc.local, tc.plane)
+			if (err != nil) != tc.invalid || !tc.invalid && path != tc.want {
+				t.Fatalf("path=%q err=%v", path, err)
 			}
 		})
 	}

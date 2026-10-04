@@ -74,10 +74,9 @@ type Inbound struct {
 	selfBypassCgroup         bool
 	processTracker           processTrackerOwner
 	processTrackerRollback   processTrackerOwner
-	socketCreator              socketCreatorCollector
-	socketCreatorPinPath       string
-	socketCreatorRemoveOnStop  bool
-	socketCreatorActive        atomic.Bool
+	socketCreator            socketCreatorCollector
+	socketCreatorPinPath     string
+	socketCreatorActive      atomic.Bool
 	netdCookieTags           netdCookieTagMap
 	processInfoCache         *processInfoCache
 	usePlatformProcessFinder bool
@@ -244,7 +243,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		return nil, err
 	}
 	localDataPlane, cgroupPath, sharedDataPlane := selection.localDataPlane, selection.cgroupPath, selection.sharedDataPlane
-	socketCreatorPinPath, socketCreatorRemoveOnStop, err := normalizeSocketCreator(options.Local.SocketCreator, localEnabled, localDataPlane)
+	socketCreatorPinPath, err := normalizeSocketCreator(options.Local.SocketCreator, localEnabled, localDataPlane)
 	if err != nil {
 		return nil, err
 	}
@@ -329,9 +328,8 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		localEnabled:         localEnabled,
 		localDataPlane:       localDataPlane,
 		cgroupPath:           cgroupPath,
-		socketCreatorPinPath:       socketCreatorPinPath,
-		socketCreatorRemoveOnStop: socketCreatorRemoveOnStop,
-		selfBypass:                 selfBypass,
+		socketCreatorPinPath: socketCreatorPinPath,
+		selfBypass:           selfBypass,
 		processInfoCache:     newProcessInfoCache(),
 		enableTCP:            enableTCP,
 		enableUDP:            enableUDP,
