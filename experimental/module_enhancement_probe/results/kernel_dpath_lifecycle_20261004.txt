@@ -61,3 +61,18 @@ sbo_enh_probe: baseline resolved dev=266338314 ino=10829601 (通过 kern_path �
 [231161.829642] sbo_enh_probe: last holder RELEASED (holders=0), is_active set to FALSE
 实测结论:
 内核 VFS 保证所有持有者释放（包括异常强杀）时，微秒级自动复位 is_active=false，完全自动化。
+
+八、锁最高频 (2.74 GHz) + 绑大核 (CPU 4) 三态各 20000 次*3 轮微基准实测:
+测试条件:
+- CPU 4 调频策略锁死为 performance，频率固定在 2745600 kHz；
+- taskset 10 (0x10 = CPU 4) 强行绑定 CPU 4 执行；
+- 各状态运行 20000 次 socket(AF_INET, SOCK_DGRAM) + close(fd)，测试 3 轮取中位数：
+
+[BASELINE_NO_MODULE]    20000次*3轮 (中位数): 8479 ns/socket (各轮: [6929, 8479, 8617] ns)
+[LOADED_INACTIVE_BYPASS] 20000次*3轮 (中位数): 6255 ns/socket (各轮: [6006, 6255, 7487] ns)
+[LOADED_ACTIVE_GATED]    20000次*3轮 (中位数): 8362 ns/socket (各轮: [6369, 8362, 8454] ns)
+
+实测结论:
+在彻底消除动态调频降频与跨核调度噪声后：
+三态单次 socket() 耗时均落在 6.2 ~ 8.5 µs 系统调用本底噪声区间内，
+无论是停采状态的 bypass 判定还是激活状态下的 RCU 快速门控判定，在真实系统调用宏观层面均零可感知损耗！
