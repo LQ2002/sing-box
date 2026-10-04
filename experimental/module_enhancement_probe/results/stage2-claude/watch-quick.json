@@ -1,0 +1,132 @@
+{
+  "bpf": {
+    "duplicate": 0,
+    "events": 10065,
+    "path_read_fail": 0,
+    "ringbuf_drop": 0,
+    "storage_fail": 0
+  },
+  "events": 10065,
+  "file_nr_end": "46729",
+  "kinds": {
+    "app": 390,
+    "native": 8075,
+    "native_deleted": 800,
+    "too_long": 800
+  },
+  "mismatches": null,
+  "module": "inet=10065 skipped=581 app=390 hit=9654 miss=21 too_long=3 deleted=3 error=0 kernel=0 unvalidated=0 get=21 put=21 active=1 holders=1",
+  "paths": [
+    {
+      "path": "/data/local/tmp/sboacc/sbo-acceptance",
+      "kind": "native",
+      "events": 8000,
+      "cache_hits": 7996,
+      "uids": {
+        "0": 8000
+      },
+      "comms": {
+        "sbo-acceptance": 8000
+      }
+    },
+    {
+      "path": "",
+      "kind": "too_long",
+      "events": 800,
+      "cache_hits": 797,
+      "uids": {
+        "0": 800
+      },
+      "comms": {
+        "sbo-acceptance": 800
+      }
+    },
+    {
+      "path": "/data/local/tmp/sboacc/sbo-deleted",
+      "kind": "native_deleted",
+      "events": 800,
+      "cache_hits": 797,
+      "uids": {
+        "0": 800
+      },
+      "comms": {
+        "sbo-deleted": 800
+      }
+    },
+    {
+      "path": "",
+      "kind": "app",
+      "events": 390,
+      "cache_hits": 0,
+      "uids": {
+        "1000": 319,
+        "10193": 5,
+        "10356": 66
+      },
+      "comms": {
+        "ConnectivitySer": 26,
+        "Thread-291": 5,
+        "[GT]HotPool#1": 26,
+        "binder:3818_10": 24,
+        "binder:3818_12": 10,
+        "binder:3818_18": 19,
+        "binder:3818_1B": 14,
+        "binder:3818_7": 1
+      }
+    },
+    {
+      "path": "/system/bin/iptables",
+      "kind": "native",
+      "events": 60,
+      "cache_hits": 54,
+      "uids": {
+        "0": 60
+      },
+      "comms": {
+        "ip6tables-resto": 15,
+        "iptables": 30,
+        "iptables-restor": 15
+      }
+    },
+    {
+      "path": "/data/adb/services/sing-box/sing-box",
+      "kind": "native",
+      "events": 13,
+      "cache_hits": 10,
+      "uids": {
+        "0": 13
+      },
+      "comms": {
+        "sing-box": 13
+      }
+    },
+    {
+      "path": "/system/bin/netd",
+      "kind": "native",
+      "events": 2,
+      "cache_hits": 0,
+      "uids": {
+        "0": 2
+      },
+      "comms": {
+        "Dns_117_0": 2
+      }
+    }
+  ],
+  "seconds": 90.001171996,
+  "verdicts": {
+    "app": {
+      "ok": 390
+    },
+    "native": {
+      "ok": 8075
+    },
+    "native_deleted": {
+      "ok": 800
+    },
+    "too_long": {
+      "gone": 206,
+      "ok": 594
+    }
+  }
+}

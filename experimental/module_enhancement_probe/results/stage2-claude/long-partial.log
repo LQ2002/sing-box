@@ -1,0 +1,12 @@
+PRECHECK taint=4608 file_nr=46665 sing-box=none
+FILE_NR_START 46665	0	1070370
+WATCHING duration=1h0m0s file_nr=46665 module=inet=0 skipped=0 app=0 hit=0 miss=0 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=0 put=0 active=1 holders=1
+PROGRESS t=5m0s events=1514 kinds=map[app:1206 native:308] verdicts=map[app:map[ok:1206] native:map[gone:7 ok:301]] bpf=map[duplicate:0 events:1514 path_read_fail:0 ringbuf_drop:0 storage_fail:0] file_nr=46729 module=inet=1514 skipped=1719 app=1206 hit=290 miss=18 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=18 put=18 active=1 holders=1
+WATCH_DONE events=1628 kinds=map[app:1320 native:308] verdicts=map[app:map[ok:1320] native:map[gone:7 ok:301]] bpf=map[duplicate:0 events:1628 path_read_fail:0 ringbuf_drop:0 storage_fail:0] module=inet=1628 skipped=1973 app=1320 hit=290 miss=18 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=18 put=18 active=1 holders=1 distinct_paths=4 mismatches=0
+FILE_NR_END 46825	0	1070370
+STATS_BEFORE_UNLOAD inet=1628 skipped=1973 app=1320 hit=290 miss=18 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=18 put=18 active=0 holders=0
+DMESG lines_since_mark=1327
+[239559.347812] sbo_enh_probe: baseline resolved dev=266338314 ino=10829601 gen=0
+[239559.348691] sbo_enh_probe: loaded (/dev/sbo_enhancement_probe mode 0600)
+[239893.878006] sbo_enh_probe: file_ref check: get_file_rcu=18 fput=18 delta=0
+DMESG_CLEAN taint=4608

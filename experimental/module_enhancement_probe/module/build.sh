@@ -14,6 +14,7 @@ test -s "$BASE"
 clang --version | head -1
 pahole --version
 mkdir -p "$HERE/.build"
+python3 "$HERE/gen_layout.py"
 
 OUT=$(mktemp -d "${TMPDIR:-/tmp}/sbo-enh-probe.XXXXXX")
 cp -a "$KDIR/." "$OUT/"
@@ -28,5 +29,6 @@ LLVM_OBJCOPY="$CLANG_BIN/llvm-objcopy" pahole -J -j1 \
     --btf_base "$BASE" "$HERE/sbo_enhancement_probe.ko"
 "$OUT/tools/bpf/resolve_btfids/resolve_btfids" -b "$BASE" "$HERE/sbo_enhancement_probe.ko"
 python3 "$OLD/verify-ko.py" "$HERE/sbo_enhancement_probe.ko" "$SYMVERS"
+python3 "$HERE/verify_btf.py"
 sha256sum "$HERE/sbo_enhancement_probe.ko" "$BASE" "$SYMVERS"
 rm -rf "$OUT"

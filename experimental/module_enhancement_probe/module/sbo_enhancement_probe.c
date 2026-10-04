@@ -1,16 +1,43 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* All-in-One Enhanced Kernel Module Feasibility Probe - Stage 2 Acceptance Implementation.
- * Features:
- * 1. Safe RCU fast-path bypass for app_process (null check + pointer validation);
- * 2. Per-CPU cache (4 slots x 256 bytes) protected by get_cpu_ptr()/put_cpu_ptr();
- * 3. Cache key: (s_dev, i_ino, i_generation) preventing F2FS inode reuse ambiguity;
- * 4. d_path() called strictly OUTSIDE preemption-disabled sections;
- * 5. get_file_rcu() inside RCU read lock paired with fput();
- * 6. PATH_TRUNCATED flag for paths >= 256 bytes;
- * 7. Miscdevice mode 0600 with atomic open_count refcounting.
+/* All-in-one enhanced kernel module probe (Stage 2).
+ *
+ * android_vh_sock_create -> classify the creating executable -> typed
+ * tracepoint sbo_enhancement_socket_identity, consumed by bpf/consumer.bpf.c.
+ *
+ * Hot path, in order of cost (review rounds 8-13 in ../REVIEW-claude.md):
+ *  1. Only user inet sockets (AF_INET/AF_INET6, !sk_kern_sock) are handled
+ *     (both fields read at offsets generated from the device BTF);
+ *     unix/netlink sockets, which Android creates far more often, return
+ *     before any pointer chasing.
+ *  2. Gate: under rcu_read_lock, read mm->exe_file->f_inode without taking
+ *     a reference. struct file is SLAB_TYPESAFE_BY_RCU (fs/file_table.c:529)
+ *     and zeroed on reuse (kmem_cache_zalloc, :209/:243), so f_inode can be
+ *     the old inode, NULL or the new one; inodes are RCU-freed
+ *     (fs/inode.c:324). Hence: NULL-check f_inode and re-check that
+ *     mm->exe_file still points to the same file. Only a validated key may
+ *     match app_process64 or the cache; otherwise take the slow path, which
+ *     re-reads the key under a real reference.
+ *  3. Per-CPU cache keyed by (s_dev, i_ino, i_generation). /data is f2fs,
+ *     which reuses inode numbers and randomises i_generation on new inodes
+ *     (fs/f2fs/namei.c:253), so the generation is part of the key. Slots are
+ *     only touched between get_cpu_ptr()/put_cpu_ptr(); a hit fires the
+ *     tracepoint straight from the slot, no copy.
+ *  4. Slow path: rcu_read_lock(); get_file_rcu(); rcu_read_unlock() - the
+ *     same sequence as get_mm_exe_file() (kernel/fork.c:1499-1506), which is
+ *     not exported - then d_path() into a 256-byte buffer and fput().
+ *     d_path() never truncates: it returns -ENAMETOOLONG (fs/d_path.c:23),
+ *     reported as TOO_LONG and cached so the program is not re-resolved.
+ *     An unlinked exe gets " (deleted)" appended (fs/d_path.c:287); it is
+ *     stripped and reported as DELETED.
+ *
+ * While collection is inactive (no holder of /dev/sbo_enhancement_probe) no
+ * event is fired: a socket without a snapshot means "not collected", never
+ * "app". Counters are per-CPU and readable without side effects from
+ * /sys/module/sbo_enhancement_probe/parameters/stats.
  */
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/fs.h>
 #include <linux/file.h>
 #include <linux/mm.h>
@@ -19,15 +46,19 @@
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
 #include <linux/dcache.h>
-#include <linux/ktime.h>
-#include <linux/uaccess.h>
 #include <linux/percpu.h>
 #include <linux/tracepoint.h>
-#include <net/sock.h>
+#include <linux/socket.h>
 
+/* No <net/sock.h>: struct sock stays opaque so the tracepoint argument
+ * resolves to the device kernel's BTF type (see gen_layout.py). The two
+ * socket facts read here use offsets generated from the device BTF.
+ */
+#include "sbo_sock_layout.h"
+
+struct sock;
 struct sockaddr;
 struct sk_buff;
-struct request_sock;
 #include <trace/hooks/net.h>
 
 struct binder_proc;
@@ -39,253 +70,260 @@ struct binder_transaction;
 #define CREATE_TRACE_POINTS
 #include "sbo_enhancement_trace.h"
 
-MODULE_DESCRIPTION("SBO All-in-One Enhanced Module - Stage 2 Acceptance");
+MODULE_DESCRIPTION("SBO all-in-one enhanced module probe (Stage 2)");
 MODULE_LICENSE("GPL");
 
 static bool is_active;
 static atomic_t open_count = ATOMIC_INIT(0);
-static atomic_t fast_sample_count = ATOMIC_INIT(0);
-static atomic_t hit_sample_count = ATOMIC_INIT(0);
-static atomic_t miss_sample_count = ATOMIC_INIT(0);
-static atomic_t clone_sample_count = ATOMIC_INIT(0);
 static atomic_t binder_sample_count = ATOMIC_INIT(0);
-static atomic_t inactive_sample_count = ATOMIC_INIT(0);
-
-/* Strict paired refcount tracking for get_file_rcu() and fput() */
-static atomic_t count_get_file = ATOMIC_INIT(0);
-static atomic_t count_fput = ATOMIC_INIT(0);
 
 static dev_t app_process_dev;
 static unsigned long app_process_ino;
 static u32 app_process_gen;
 
-/* --- Per-CPU Path Cache Definitions --- */
-#define PATH_CACHE_SLOTS 4
-#define PATH_MAX_LEN 256
-#define PATH_FLAG_TRUNCATED (1U << 0)
-#define PATH_FLAG_TOO_LONG  (1U << 1)
-#define PATH_FLAG_DELETED   (1U << 2)
-
-static const char deleted_suffix[] = " (deleted)";
-#define DELETED_SUFFIX_LEN 10
-
-struct path_cache_key {
-	dev_t s_dev;
-	unsigned long i_ino;
-	u32 i_generation;
+enum sbo_stat {
+	ST_INET,        /* user inet sockets handled while active */
+	ST_SKIPPED,     /* non-inet or kernel sockets, returned immediately */
+	ST_APP,
+	ST_HIT,
+	ST_MISS,        /* slow path entered */
+	ST_TOO_LONG,
+	ST_DELETED,
+	ST_ERROR,
+	ST_KERNEL,
+	ST_UNVALIDATED, /* gate could not validate its lock-free read */
+	ST_GET,         /* get_file_rcu() returned a reference */
+	ST_PUT,         /* fput() of that reference */
+	ST_COUNT,
 };
 
+static const char *const stat_names[ST_COUNT] = {
+	"inet", "skipped", "app", "hit", "miss", "too_long", "deleted",
+	"error", "kernel", "unvalidated", "get", "put",
+};
+
+static DEFINE_PER_CPU(u64 [ST_COUNT], sbo_stats);
+
+static inline void stat_inc(enum sbo_stat index)
+{
+	this_cpu_inc(sbo_stats[index]);
+}
+
+static u64 stat_sum(enum sbo_stat index)
+{
+	u64 sum = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu)
+		sum += per_cpu(sbo_stats[index], cpu);
+	return sum;
+}
+
+/* skc_family and the sk_kern_sock bit, at the device kernel's offsets. */
+static inline bool is_user_inet(const struct sock *sk)
+{
+	const u8 *base = (const u8 *)sk;
+	u16 family = *(const u16 *)(base + SBO_SKC_FAMILY_OFFSET);
+
+	return (family == AF_INET || family == AF_INET6) &&
+	       !((base[SBO_SK_KERN_SOCK_BYTE] >> SBO_SK_KERN_SOCK_SHIFT) & 1);
+}
+
+static int stats_get(char *buffer, const struct kernel_param *kp)
+{
+	int len = 0, i;
+
+	for (i = 0; i < ST_COUNT; i++)
+		len += sysfs_emit_at(buffer, len, "%s%s=%llu", i ? " " : "", stat_names[i], stat_sum(i));
+	len += sysfs_emit_at(buffer, len, " active=%d holders=%d\n", READ_ONCE(is_active), atomic_read(&open_count));
+	return len;
+}
+
+static const struct kernel_param_ops stats_ops = { .get = stats_get };
+module_param_cb(stats, &stats_ops, NULL, 0400);
+MODULE_PARM_DESC(stats, "Per-CPU event counters, summed");
+
+/* --- Per-CPU path cache --- */
+#define PATH_CACHE_SLOTS 4
+#define PATH_MAX_LEN 256 /* longest of 4679 app native libraries on the device: 186 bytes */
+
+static const char deleted_suffix[] = " (deleted)";
+#define DELETED_SUFFIX_LEN (sizeof(deleted_suffix) - 1)
+
 struct path_cache_entry {
-	struct path_cache_key key;
-	char path[PATH_MAX_LEN];
+	dev_t s_dev;
+	u32 i_generation;
+	unsigned long i_ino;
 	u32 path_len;
 	u8 flags;
+	bool valid;
+	char path[PATH_MAX_LEN];
 };
 
 struct percpu_cache {
 	struct path_cache_entry slots[PATH_CACHE_SLOTS];
-	u8 next_slot;
+	unsigned int next_slot;
 };
 
 static DEFINE_PER_CPU(struct percpu_cache, pcpu_path_cache);
 
-/* 1. Socket Creation Hook */
+static inline void emit(struct sock *sk, dev_t dev, unsigned long ino, u32 gen,
+			const char *path, u32 path_len, u8 flags)
+{
+	trace_sbo_enhancement_socket_identity(sk, dev, ino, gen, path, path_len, flags);
+}
+
+/* Fires the event from a matching slot. Returns false on a miss. */
+static bool cache_emit(struct sock *sk, dev_t dev, unsigned long ino, u32 gen)
+{
+	struct percpu_cache *pcpu = get_cpu_ptr(&pcpu_path_cache);
+	bool hit = false;
+	int s;
+
+	for (s = 0; s < PATH_CACHE_SLOTS; s++) {
+		struct path_cache_entry *e = &pcpu->slots[s];
+
+		if (e->valid && e->i_ino == ino && e->s_dev == dev && e->i_generation == gen) {
+			emit(sk, dev, ino, gen, e->path, e->path_len, e->flags | SBO_FLAG_CACHE_HIT);
+			hit = true;
+			break;
+		}
+	}
+	put_cpu_ptr(&pcpu_path_cache);
+	return hit;
+}
+
+/* Resolves the creator's executable under a real reference. */
+static void resolve_slow(struct sock *sk, struct mm_struct *mm)
+{
+	char buf[PATH_MAX_LEN];
+	struct file *exe;
+	struct inode *inode;
+	struct percpu_cache *pcpu;
+	struct path_cache_entry *e;
+	char *path;
+	dev_t dev;
+	unsigned long ino;
+	u32 gen, path_len = 0;
+	u8 flags;
+
+	stat_inc(ST_MISS);
+	rcu_read_lock();
+	exe = get_file_rcu(&mm->exe_file);
+	rcu_read_unlock();
+	if (!exe) {
+		stat_inc(ST_ERROR);
+		emit(sk, 0, 0, 0, "", 0, SBO_FLAG_ERROR);
+		return;
+	}
+	stat_inc(ST_GET);
+	inode = file_inode(exe);
+	dev = inode->i_sb->s_dev;
+	ino = inode->i_ino;
+	gen = inode->i_generation;
+	if (dev == app_process_dev && ino == app_process_ino && gen == app_process_gen) {
+		/* Only reached when the gate could not validate its read. */
+		fput(exe);
+		stat_inc(ST_PUT);
+		stat_inc(ST_APP);
+		emit(sk, dev, ino, gen, "", 0, SBO_FLAG_APP_PROCESS);
+		return;
+	}
+	path = d_path(&exe->f_path, buf, sizeof(buf));
+	fput(exe);
+	stat_inc(ST_PUT);
+
+	if (IS_ERR(path)) {
+		if (PTR_ERR(path) != -ENAMETOOLONG) {
+			/* Not cached: a transient failure must not shadow later sockets. */
+			stat_inc(ST_ERROR);
+			emit(sk, dev, ino, gen, "", 0, SBO_FLAG_ERROR);
+			return;
+		}
+		stat_inc(ST_TOO_LONG);
+		flags = SBO_FLAG_TOO_LONG;
+		path = "";
+	} else {
+		flags = SBO_FLAG_NATIVE_PATH;
+		path_len = strlen(path);
+		if (path_len >= DELETED_SUFFIX_LEN &&
+		    !memcmp(path + path_len - DELETED_SUFFIX_LEN, deleted_suffix, DELETED_SUFFIX_LEN)) {
+			path_len -= DELETED_SUFFIX_LEN;
+			path[path_len] = '\0';
+			flags |= SBO_FLAG_DELETED;
+			stat_inc(ST_DELETED);
+		}
+	}
+
+	pcpu = get_cpu_ptr(&pcpu_path_cache);
+	e = &pcpu->slots[pcpu->next_slot++ % PATH_CACHE_SLOTS];
+	e->s_dev = dev;
+	e->i_ino = ino;
+	e->i_generation = gen;
+	e->flags = flags;
+	e->path_len = path_len;
+	memcpy(e->path, path, path_len);
+	e->path[path_len] = '\0';
+	e->valid = true;
+	emit(sk, dev, ino, gen, e->path, path_len, flags);
+	put_cpu_ptr(&pcpu_path_cache);
+}
+
+/* 1. Socket creation hook (net/socket.c:1602, end of __sock_create) */
 static void on_socket_create(void *unused, struct sock *sk)
 {
-	u64 t0, t1;
-	struct file *exe = NULL;
-	bool is_app_process = false;
+	struct mm_struct *mm;
+	struct file *exe;
+	struct inode *inode;
 	dev_t dev = 0;
 	unsigned long ino = 0;
 	u32 gen = 0;
-	u64 t_inact_0, t_inact_1;
+	bool validated = false;
 
-	t_inact_0 = ktime_get_ns();
-	if (!READ_ONCE(is_active)) {
-		t_inact_1 = ktime_get_ns();
-		if (atomic_inc_return(&inactive_sample_count) <= 5) {
-			pr_info("sbo_enh_probe [INACTIVE_OVERHEAD]: pid=%d is_active=false cost_ns=%llu\n",
-				current->pid, (t_inact_1 - t_inact_0));
-		}
+	if (!READ_ONCE(is_active))
+		return;
+	if (!sk || !is_user_inet(sk)) {
+		stat_inc(ST_SKIPPED);
+		return;
+	}
+	stat_inc(ST_INET);
+	mm = current->mm;
+	if (!mm || (current->flags & PF_KTHREAD)) {
+		stat_inc(ST_KERNEL);
+		emit(sk, 0, 0, 0, "", 0, SBO_FLAG_KERNEL);
 		return;
 	}
 
-	if (!current->mm) {
-		/* Kernel thread bypass: emit exactly one ERROR event with empty path */
-		trace_sbo_enhancement_socket_identity(sk, 0, 0, 0, "", 0, SBO_FLAG_ERROR);
-		return;
-	}
-
-	/* --- Phase 1: RCU Fast-Path Gate with Pointer Validation --- */
-	t0 = ktime_get_ns();
 	rcu_read_lock();
-	exe = rcu_dereference(current->mm->exe_file);
+	exe = rcu_dereference(mm->exe_file);
 	if (likely(exe)) {
-		struct inode *inode = READ_ONCE(exe->f_inode);
-		if (likely(inode && inode->i_sb)) {
+		inode = READ_ONCE(exe->f_inode);
+		if (likely(inode)) {
 			dev = inode->i_sb->s_dev;
 			ino = inode->i_ino;
 			gen = inode->i_generation;
-			/* Pointer-validation check: ensure exe_file didn't change concurrently */
-			if (likely(READ_ONCE(current->mm->exe_file) == exe)) {
-				if (likely(dev == app_process_dev && ino == app_process_ino && gen == app_process_gen)) {
-					is_app_process = true;
-				}
-			}
+			validated = READ_ONCE(mm->exe_file) == exe;
 		}
 	}
 	rcu_read_unlock();
-	t1 = ktime_get_ns();
 
-	if (likely(is_app_process)) {
-		/* Fast path: 99.9% of Java apps bypass here */
-		trace_sbo_enhancement_socket_identity(sk, dev, ino, gen, "", 0, SBO_FLAG_APP_PROCESS);
-		if (atomic_inc_return(&fast_sample_count) <= 5) {
-			pr_info("sbo_enh_probe [FAST_BYPASS]: pid=%d comm=%s is_java=true cost_ns=%llu dev=%u ino=%lu gen=%u\n",
-				current->pid, current->comm, (t1 - t0), (unsigned int)dev, ino, gen);
-		}
-		return;
-	}
-
-	/* --- Phase 2: Per-CPU Cache Lookup (<5 ns under get_cpu_ptr) --- */
-	{
-		struct percpu_cache *pcpu;
-		bool cache_hit = false;
-		int s;
-
-		pcpu = get_cpu_ptr(&pcpu_path_cache); /* preempt_disable() */
-		for (s = 0; s < PATH_CACHE_SLOTS; s++) {
-			if (pcpu->slots[s].key.s_dev == dev &&
-			    pcpu->slots[s].key.i_ino == ino &&
-			    pcpu->slots[s].key.i_generation == gen &&
-			    (pcpu->slots[s].path_len > 0 || (pcpu->slots[s].flags & PATH_FLAG_TOO_LONG))) {
-				cache_hit = true;
-				/* Optimization: directly fire tracepoint using slot pointer under get_cpu_ptr,
-				 * completely eliminating 256-byte stack copy! */
-				trace_sbo_enhancement_socket_identity(sk, dev, ino, gen,
-					pcpu->slots[s].path, pcpu->slots[s].path_len, pcpu->slots[s].flags);
-				if (atomic_inc_return(&hit_sample_count) <= 10) {
-					pr_info("sbo_enh_probe [CACHE_HIT]: pid=%d comm=%s path=%s len=%u flags=%u dev=%u ino=%lu gen=%u\n",
-						current->pid, current->comm, pcpu->slots[s].path, pcpu->slots[s].path_len,
-						(unsigned int)pcpu->slots[s].flags, (unsigned int)dev, ino, gen);
-				}
-				break;
-			}
-		}
-		put_cpu_ptr(&pcpu_path_cache); /* preempt_enable() */
-
-		if (cache_hit)
+	if (likely(validated)) {
+		if (dev == app_process_dev && ino == app_process_ino && gen == app_process_gen) {
+			stat_inc(ST_APP);
+			emit(sk, dev, ino, gen, "", 0, SBO_FLAG_APP_PROCESS);
 			return;
-
-		/* --- Phase 3: Slow Path outside preemption-disabled section --- */
-		{
-			char buf[PATH_MAX_LEN];
-			char *path_str = NULL;
-			u64 t_get_0, t_get_1, t_dp_0, t_dp_1, t_fp_0, t_fp_1;
-			u8 flags = 0;
-			u32 path_len = 0;
-			char cached_path[PATH_MAX_LEN] = {};
-			bool should_cache = false;
-
-			t_get_0 = ktime_get_ns();
-			rcu_read_lock();
-			exe = get_file_rcu(&current->mm->exe_file);
-			rcu_read_unlock();
-			t_get_1 = ktime_get_ns();
-
-			if (exe) {
-				atomic_inc(&count_get_file);
-				t_dp_0 = ktime_get_ns();
-				path_str = d_path(&exe->f_path, buf, sizeof(buf));
-				t_dp_1 = ktime_get_ns();
-
-				if (IS_ERR(path_str)) {
-					if (PTR_ERR(path_str) == -ENAMETOOLONG) {
-						/* Required Fix 1: buffer too small -> cache empty path + TOO_LONG flag */
-						flags = SBO_FLAG_TOO_LONG;
-						path_len = 0;
-						cached_path[0] = '\0';
-						should_cache = true;
-					} else {
-						/* Non-recoverable error: do NOT write to cache */
-						flags = SBO_FLAG_ERROR;
-						path_len = 0;
-						cached_path[0] = '\0';
-						should_cache = false;
-					}
-				} else {
-					path_len = strlen(path_str);
-					flags = SBO_FLAG_NATIVE_PATH;
-					/* Required Fix 1: strip " (deleted)" suffix if present */
-					if (path_len >= DELETED_SUFFIX_LEN &&
-					    memcmp(path_str + path_len - DELETED_SUFFIX_LEN, deleted_suffix, DELETED_SUFFIX_LEN) == 0) {
-						flags |= SBO_FLAG_DELETED;
-						path_len -= DELETED_SUFFIX_LEN;
-						path_str[path_len] = '\0';
-					}
-					strscpy(cached_path, path_str, PATH_MAX_LEN);
-					should_cache = true;
-				}
-
-				if (exe->f_inode && exe->f_inode->i_sb) {
-					ino = exe->f_inode->i_ino;
-					dev = exe->f_inode->i_sb->s_dev;
-					gen = exe->f_inode->i_generation;
-				}
-
-				t_fp_0 = ktime_get_ns();
-				fput(exe); /* Strict refcount release */
-				atomic_inc(&count_fput);
-				t_fp_1 = ktime_get_ns();
-
-				if (atomic_inc_return(&miss_sample_count) <= 10) {
-					pr_info("sbo_enh_probe [CACHE_MISS_FILLED]: pid=%d comm=%s path=%s total_ns=%llu (get_rcu=%llu, d_path=%llu, fput=%llu) flags=%u dev=%u ino=%lu gen=%u\n",
-						current->pid, current->comm, cached_path,
-						(t_fp_1 - t_get_0), (t_get_1 - t_get_0), (t_dp_1 - t_dp_0), (t_fp_1 - t_fp_0),
-						(unsigned int)flags, (unsigned int)dev, ino, gen);
-				}
-
-				/* Phase 4: Write back to local per-CPU slot ONLY if should_cache is true */
-				if (should_cache) {
-					u8 slot;
-					pcpu = get_cpu_ptr(&pcpu_path_cache); /* preempt_disable() */
-					slot = pcpu->next_slot++ % PATH_CACHE_SLOTS;
-					pcpu->slots[slot].key.s_dev = dev;
-					pcpu->slots[slot].key.i_ino = ino;
-					pcpu->slots[slot].key.i_generation = gen;
-					pcpu->slots[slot].flags = flags;
-					strscpy(pcpu->slots[slot].path, cached_path, PATH_MAX_LEN);
-					pcpu->slots[slot].path_len = path_len;
-					/* Emit tracepoint directly using slot pointer under get_cpu_ptr */
-					trace_sbo_enhancement_socket_identity(sk, dev, ino, gen,
-						pcpu->slots[slot].path, pcpu->slots[slot].path_len, pcpu->slots[slot].flags);
-					put_cpu_ptr(&pcpu_path_cache); /* preempt_enable() */
-				} else {
-					/* Error branch: emit tracepoint with ERROR flag without polluting cache */
-					trace_sbo_enhancement_socket_identity(sk, dev, ino, gen, "", 0, SBO_FLAG_ERROR);
-				}
-			} else {
-				/* exe == NULL: emit exactly one tracepoint event with ERROR flag */
-				trace_sbo_enhancement_socket_identity(sk, dev, ino, gen, "", 0, SBO_FLAG_ERROR);
-				pr_info("sbo_enh_probe [NATIVE_CHILD]: pid=%d comm=%s <no_exe_file>\n", current->pid, current->comm);
-			}
 		}
+		if (cache_emit(sk, dev, ino, gen)) {
+			stat_inc(ST_HIT);
+			return;
+		}
+	} else {
+		stat_inc(ST_UNVALIDATED);
 	}
+	resolve_slow(sk, mm);
 }
 
-/* 2. TCP Accept Child Socket Clone Hook */
-static void on_inet_csk_clone(void *unused, struct sock *newsk, const struct request_sock *req)
-{
-	if (!READ_ONCE(is_active))
-		return;
-
-	if (newsk && atomic_inc_return(&clone_sample_count) <= 5) {
-		pr_info("sbo_enh_probe [TCP_ACCEPT_CLONE]: newsk=%px family=%d state=%d\n",
-			newsk, newsk->sk_family, newsk->sk_state);
-	}
-}
-
-/* 3. Binder IPC Caller Attribution Hook */
+/* 2. Binder caller hook (diagnostic metadata only, never used for routing) */
 static void on_binder_received(void *unused, struct binder_transaction *t,
 			       struct binder_proc *proc, struct binder_thread *thread, uint32_t cmd)
 {
@@ -299,15 +337,11 @@ static void on_binder_received(void *unused, struct binder_transaction *t,
 	}
 }
 
-/* 4. Misc Device Lifecycle Management (Mode 0600 + Atomic Refcount) */
+/* 3. Misc device lifecycle: collection runs while at least one holder is open */
 static int probe_open(struct inode *inode, struct file *file)
 {
 	int count = atomic_inc_return(&open_count);
 	if (count == 1) {
-		atomic_set(&fast_sample_count, 0);
-		atomic_set(&hit_sample_count, 0);
-		atomic_set(&miss_sample_count, 0);
-		atomic_set(&clone_sample_count, 0);
 		atomic_set(&binder_sample_count, 0);
 		WRITE_ONCE(is_active, true);
 		pr_info("sbo_enh_probe: first holder OPENED (holders=%d), is_active set to TRUE\n", count);
@@ -347,19 +381,18 @@ static int __init probe_init(void)
 	int err;
 	struct path p;
 
-	/* Dynamic baseline resolution: read real app_process64 dev, ino & generation via kern_path */
-	if (kern_path("/system/bin/app_process64", LOOKUP_FOLLOW, &p) == 0) {
-		if (p.dentry && d_inode(p.dentry) && d_inode(p.dentry)->i_sb) {
-			app_process_dev = d_inode(p.dentry)->i_sb->s_dev;
-			app_process_ino = d_inode(p.dentry)->i_ino;
-			app_process_gen = d_inode(p.dentry)->i_generation;
-			pr_info("sbo_enh_probe: baseline resolved dev=%u ino=%lu gen=%u\n",
-				(unsigned int)app_process_dev, app_process_ino, app_process_gen);
-		}
-		path_put(&p);
-	} else {
-		pr_warn("sbo_enh_probe: failed to lookup /system/bin/app_process64\n");
+	/* Resolve the zygote binary at load time instead of hard-coding it. */
+	err = kern_path("/system/bin/app_process64", LOOKUP_FOLLOW, &p);
+	if (err) {
+		pr_err("sbo_enh_probe: failed to look up /system/bin/app_process64: %d\n", err);
+		return err;
 	}
+	app_process_dev = d_inode(p.dentry)->i_sb->s_dev;
+	app_process_ino = d_inode(p.dentry)->i_ino;
+	app_process_gen = d_inode(p.dentry)->i_generation;
+	path_put(&p);
+	pr_info("sbo_enh_probe: baseline resolved dev=%u ino=%lu gen=%u\n",
+		(unsigned int)app_process_dev, app_process_ino, app_process_gen);
 
 	err = misc_register(&probe_misc);
 	if (err) {
@@ -367,7 +400,6 @@ static int __init probe_init(void)
 		return err;
 	}
 
-	/* Register 1: Socket creation hook */
 	err = register_trace_android_vh_sock_create(on_socket_create, NULL);
 	if (err) {
 		pr_err("sbo_enh_probe: failed to register sock_create hook: %d\n", err);
@@ -375,42 +407,34 @@ static int __init probe_init(void)
 		return err;
 	}
 
-	/* Register 2: TCP accept child socket clone hook */
-	err = register_trace_android_vh_inet_csk_clone_lock(on_inet_csk_clone, NULL);
-	if (err) {
-		pr_err("sbo_enh_probe: failed to register inet_csk_clone hook: %d\n", err);
-		unregister_trace_android_vh_sock_create(on_socket_create, NULL);
-		misc_deregister(&probe_misc);
-		return err;
-	}
-
-	/* Register 3: Binder IPC caller attribution hook */
 	err = register_trace_android_vh_binder_transaction_received(on_binder_received, NULL);
 	if (err) {
 		pr_err("sbo_enh_probe: failed to register binder hook: %d\n", err);
-		unregister_trace_android_vh_inet_csk_clone_lock(on_inet_csk_clone, NULL);
 		unregister_trace_android_vh_sock_create(on_socket_create, NULL);
+		tracepoint_synchronize_unregister();
 		misc_deregister(&probe_misc);
 		return err;
 	}
 
-	pr_info("sbo_enh_probe: Stage 2 All-in-One module loaded successfully (/dev/%s mode 0600)\n",
-		probe_misc.name);
+	pr_info("sbo_enh_probe: loaded (/dev/%s mode 0600)\n", probe_misc.name);
 	return 0;
 }
 
 static void __exit probe_exit(void)
 {
-	int g = atomic_read(&count_get_file);
-	int f = atomic_read(&count_fput);
+	u64 got, put;
+
 	WRITE_ONCE(is_active, false);
 	unregister_trace_android_vh_binder_transaction_received(on_binder_received, NULL);
-	unregister_trace_android_vh_inet_csk_clone_lock(on_inet_csk_clone, NULL);
 	unregister_trace_android_vh_sock_create(on_socket_create, NULL);
 	tracepoint_synchronize_unregister();
 	misc_deregister(&probe_misc);
-	pr_info("sbo_enh_probe: file_ref check: get_file_rcu=%d fput=%d delta=%d\n", g, f, g - f);
-	pr_info("sbo_enh_probe: module unloaded successfully\n");
+	/* Read only after every in-flight hook has returned. */
+	got = stat_sum(ST_GET);
+	put = stat_sum(ST_PUT);
+	pr_info("sbo_enh_probe: file_ref check: get_file_rcu=%llu fput=%llu delta=%lld\n",
+		got, put, (long long)(got - put));
+	pr_info("sbo_enh_probe: module unloaded\n");
 }
 
 module_init(probe_init);

@@ -1,0 +1,60 @@
+PRECHECK taint=4608 file_nr=46601 sing-box=none
+LOAD_UNLOAD round=1 ok
+LOAD_UNLOAD round=2 ok
+LOAD_UNLOAD round=3 ok
+STATS_LOADED inet=0 skipped=0 app=0 hit=0 miss=0 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=0 put=0 active=0 holders=0
+SELF exe="/data/local/tmp/sboacc/sbo-acceptance" bytes=37 deleted=false expect=native
+SELFTEST kind=tcp4 n=2000 map[ok:2000 ok_cache_hit:1999]
+SELFTEST kind=udp4 n=2000 map[ok:2000 ok_cache_hit:1998]
+SELFTEST kind=tcp6 n=2000 map[ok:2000 ok_cache_hit:1999]
+SELFTEST kind=udp6 n=2000 map[ok:2000 ok_cache_hit:2000]
+SELFTEST unix_socket_snapshot_absent=true (lookup: key does not exist)
+SELFTEST_BPF_STATS map[duplicate:0 events:8002 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+SELFTEST_MODULE_STATS inet=8008 skipped=3 app=8 hit=7996 miss=4 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=4 put=4 active=1 holders=2
+SELFTEST_PASS
+LONG_PATH bytes=303
+SELF exe="/data/local/tmp/sboacc/L/dir_1-0123456789abcdef0123456789/dir_2-0123456789abcdef0123456789/dir_3-0123456789abcdef0123456789/dir_4-0123456789abcdef0123456789/dir_5-0123456789abcdef0123456789/dir_6-0123456789abcdef0123456789/dir_7-0123456789abcdef0123456789/dir_8-0123456789abcdef0123456789/sbo-acceptance" bytes=303 deleted=false expect=too_long
+SELFTEST kind=tcp4 n=200 map[ok:200 ok_cache_hit:198]
+SELFTEST kind=udp4 n=200 map[ok:200 ok_cache_hit:199]
+SELFTEST kind=tcp6 n=200 map[ok:200 ok_cache_hit:200]
+SELFTEST kind=udp6 n=200 map[ok:200 ok_cache_hit:200]
+SELFTEST unix_socket_snapshot_absent=true (lookup: key does not exist)
+SELFTEST_BPF_STATS map[duplicate:0 events:800 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+SELFTEST_MODULE_STATS inet=8808 skipped=4 app=8 hit=8793 miss=7 too_long=3 deleted=0 error=0 kernel=0 unvalidated=0 get=7 put=7 active=1 holders=2
+SELFTEST_PASS
+WAITING_FOR_SIGUSR1 pid 26087
+SELF exe="/data/local/tmp/sboacc/sbo-deleted" bytes=44 deleted=true expect=native_deleted
+SELFTEST kind=tcp4 n=200 map[ok:200 ok_cache_hit:198]
+SELFTEST kind=udp4 n=200 map[ok:200 ok_cache_hit:199]
+SELFTEST kind=tcp6 n=200 map[ok:200 ok_cache_hit:200]
+SELFTEST kind=udp6 n=200 map[ok:200 ok_cache_hit:200]
+SELFTEST unix_socket_snapshot_absent=true (lookup: key does not exist)
+SELFTEST_BPF_STATS map[duplicate:0 events:800 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+SELFTEST_MODULE_STATS inet=9608 skipped=5 app=8 hit=9590 miss=10 too_long=3 deleted=3 error=0 kernel=0 unvalidated=0 get=10 put=10 active=1 holders=2
+SELFTEST_PASS
+WATCHING duration=1m30s file_nr=46665 module=inet=0 skipped=0 app=0 hit=0 miss=0 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=0 put=0 active=1 holders=1
+EVENT kind=too_long pid=26076 uid=0 comm=sbo-acceptance path="" verdict=ok 
+EVENT kind=too_long pid=26076 uid=0 comm=sbo-acceptance path="" verdict=ok 
+EVENT kind=too_long pid=26076 uid=0 comm=sbo-acceptance path="" verdict=ok 
+EVENT kind=too_long pid=26076 uid=0 comm=sbo-acceptance path="" verdict=ok 
+EVENT kind=too_long pid=26076 uid=0 comm=sbo-acceptance path="" verdict=ok 
+EVENT kind=native_deleted pid=26087 uid=0 comm=sbo-deleted path="/data/local/tmp/sboacc/sbo-deleted" verdict=ok 
+EVENT kind=native_deleted pid=26087 uid=0 comm=sbo-deleted path="/data/local/tmp/sboacc/sbo-deleted" verdict=ok 
+EVENT kind=native_deleted pid=26087 uid=0 comm=sbo-deleted path="/data/local/tmp/sboacc/sbo-deleted" verdict=ok 
+EVENT kind=native_deleted pid=26087 uid=0 comm=sbo-deleted path="/data/local/tmp/sboacc/sbo-deleted" verdict=ok 
+EVENT kind=native_deleted pid=26087 uid=0 comm=sbo-deleted path="/data/local/tmp/sboacc/sbo-deleted" verdict=ok 
+PROGRESS t=30s events=9806 kinds=map[app:141 native:8065 native_deleted:800 too_long:800] verdicts=map[app:map[ok:141] native:map[ok:8065] native_deleted:map[ok:800] too_long:map[gone:206 ok:594]] bpf=map[duplicate:0 events:9806 path_read_fail:0 ringbuf_drop:0 storage_fail:0] file_nr=46537 module=inet=9806 skipped=214 app=141 hit=9646 miss=19 too_long=3 deleted=3 error=0 kernel=0 unvalidated=0 get=19 put=19 active=1 holders=1
+PROGRESS t=1m0s events=9910 kinds=map[app:241 native:8069 native_deleted:800 too_long:800] verdicts=map[app:map[ok:241] native:map[ok:8069] native_deleted:map[ok:800] too_long:map[gone:206 ok:594]] bpf=map[duplicate:0 events:9910 path_read_fail:0 ringbuf_drop:0 storage_fail:0] file_nr=46601 module=inet=9910 skipped=317 app=241 hit=9648 miss=21 too_long=3 deleted=3 error=0 kernel=0 unvalidated=0 get=21 put=21 active=1 holders=1
+PROGRESS t=1m30s events=10065 kinds=map[app:390 native:8075 native_deleted:800 too_long:800] verdicts=map[app:map[ok:390] native:map[ok:8075] native_deleted:map[ok:800] too_long:map[gone:206 ok:594]] bpf=map[duplicate:0 events:10065 path_read_fail:0 ringbuf_drop:0 storage_fail:0] file_nr=46729 module=inet=10065 skipped=581 app=390 hit=9654 miss=21 too_long=3 deleted=3 error=0 kernel=0 unvalidated=0 get=21 put=21 active=1 holders=1
+WATCH_DONE events=10065 kinds=map[app:390 native:8075 native_deleted:800 too_long:800] verdicts=map[app:map[ok:390] native:map[ok:8075] native_deleted:map[ok:800] too_long:map[gone:206 ok:594]] bpf=map[duplicate:0 events:10065 path_read_fail:0 ringbuf_drop:0 storage_fail:0] module=inet=10065 skipped=581 app=390 hit=9654 miss=21 too_long=3 deleted=3 error=0 kernel=0 unvalidated=0 get=21 put=21 active=1 holders=1 distinct_paths=7 mismatches=0
+STATS_BEFORE_UNLOAD inet=10065 skipped=581 app=390 hit=9654 miss=21 too_long=3 deleted=3 error=0 kernel=0 unvalidated=0 get=21 put=21 active=0 holders=0
+DMESG lines_since_mark=497
+[239461.725073] sbo_enh_probe: loaded (/dev/sbo_enhancement_probe mode 0600)
+[239461.845552] sbo_enh_probe: file_ref check: get_file_rcu=0 fput=0 delta=0
+[239461.868453] sbo_enh_probe: baseline resolved dev=266338314 ino=10829601 gen=0
+[239461.869316] sbo_enh_probe: loaded (/dev/sbo_enhancement_probe mode 0600)
+[239462.001398] sbo_enh_probe: file_ref check: get_file_rcu=0 fput=0 delta=0
+[239462.048400] sbo_enh_probe: baseline resolved dev=266338314 ino=10829601 gen=0
+[239462.049272] sbo_enh_probe: loaded (/dev/sbo_enhancement_probe mode 0600)
+[239552.325636] sbo_enh_probe: file_ref check: get_file_rcu=21 fput=21 delta=0
+DMESG_CLEAN taint=4608

@@ -1,0 +1,92 @@
+{
+  "bpf": {
+    "duplicate": 0,
+    "events": 1628,
+    "path_read_fail": 0,
+    "ringbuf_drop": 0,
+    "storage_fail": 0
+  },
+  "events": 1628,
+  "file_nr_end": "46793",
+  "kinds": {
+    "app": 1320,
+    "native": 308
+  },
+  "mismatches": null,
+  "module": "inet=1628 skipped=1973 app=1320 hit=290 miss=18 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=18 put=18 active=1 holders=1",
+  "paths": [
+    {
+      "path": "",
+      "kind": "app",
+      "events": 1320,
+      "cache_hits": 0,
+      "uids": {
+        "1000": 1142,
+        "10136": 14,
+        "10356": 147,
+        "1073": 17
+      },
+      "comms": {
+        "ConnectivitySer": 16,
+        "CronetNet": 2,
+        "NetworkStats": 1,
+        "binder:3818_18": 1,
+        "binder:3818_1B": 21,
+        "binder:3818_1E": 1,
+        "binder:3818_7": 10,
+        "binder:3818_E": 5
+      }
+    },
+    {
+      "path": "/system/bin/netd",
+      "kind": "native",
+      "events": 186,
+      "cache_hits": 179,
+      "uids": {
+        "0": 186
+      },
+      "comms": {
+        "Dns_117_0": 2,
+        "Dns_117_10136": 20,
+        "Dns_117_10356": 144,
+        "Dns_117_1073": 20
+      }
+    },
+    {
+      "path": "/system/bin/iptables",
+      "kind": "native",
+      "events": 108,
+      "cache_hits": 101,
+      "uids": {
+        "0": 108
+      },
+      "comms": {
+        "ip6tables-resto": 39,
+        "iptables": 30,
+        "iptables-restor": 39
+      }
+    },
+    {
+      "path": "/data/adb/services/sing-box/sing-box",
+      "kind": "native",
+      "events": 14,
+      "cache_hits": 10,
+      "uids": {
+        "0": 14
+      },
+      "comms": {
+        "sing-box": 14
+      }
+    }
+  ],
+  "seconds": 334.275003206,
+  "verdicts": {
+    "app": {
+      "ok": 1320
+    },
+    "native": {
+      "gone": 7,
+      "ok": 301
+    }
+  }
+}

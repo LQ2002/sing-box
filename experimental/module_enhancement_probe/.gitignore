@@ -1,0 +1,12 @@
+# Build outputs (module: Kbuild in WSL; acceptance: BPF object + arm64 binary)
+module/.build/
+module/*.ko
+module/*.o
+module/*.mod
+module/*.mod.c
+module/.*.cmd
+module/.module-common.o
+module/Module.symvers
+module/modules.order
+module/__pycache__/
+acceptance/build/
