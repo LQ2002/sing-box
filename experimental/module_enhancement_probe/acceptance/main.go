@@ -280,6 +280,8 @@ func main() {
 		err = runSockets(os.Args[2:])
 	case "cgscan":
 		err = runCgscan(os.Args[2:])
+	case "producercheck":
+		err = runProducerCheck(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown mode %q", os.Args[1])
 	}
@@ -677,3 +679,5 @@ func runSockets(args []string) error {
 	}
 	return nil
 }
+
+func errorsAs(err error, target any) bool { return errors.As(err, target) }

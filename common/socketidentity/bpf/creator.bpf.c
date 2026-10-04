@@ -21,10 +21,23 @@ struct mm_struct {
     struct file *exe_file;
 } __attribute__((preserve_access_index));
 
+struct kernfs_node {
+    const char *name;
+} __attribute__((preserve_access_index));
+
+struct cgroup {
+    struct kernfs_node *kn;
+} __attribute__((preserve_access_index));
+
+struct css_set {
+    struct cgroup *dfl_cgrp;
+} __attribute__((preserve_access_index));
+
 struct task_struct {
     struct task_struct *group_leader;
     __u64 start_boottime;
     struct mm_struct *mm;
+    struct css_set *cgroups;
 } __attribute__((preserve_access_index));
 
 struct sock_common {
@@ -121,6 +134,42 @@ static __always_inline void record_process_name(struct task_struct *task, struct
     }
 }
 
+// Division of labour with the socket cgroup (ANDROID_ATTRIBUTION_PLAN.md,
+// "cgroup 分工"): Android gives every process it starts - apps, system-UID
+// apps, init services - its own cgroup v2 directory .../uid_<uid>/pid_<pid>,
+// and the kernel stamps the creator's cgroup on the socket (cgroup_sk_alloc),
+// which TC already records. When the creating process is the one its cgroup
+// is named after, that cgroup identifies it exactly, so no snapshot is
+// needed: userspace resolves the cgroup to the process and reads its name
+// (argv[0]) and executable from /proc. Device probe: 5453/5453 app_process
+// sockets were in their creator's own cgroup. Skipping saves the sk_storage
+// allocation (~570 ns hot) and the argv/exe reads.
+//
+// Everything else still gets a snapshot: native children and app-zygote
+// children inherit a parent's cgroup (pid_<parent>), and KernelSU/zygisk
+// daemons, su shells and sing-box itself all live in the root cgroup.
+#define CGROUP_NAME_MAX 24
+
+static __always_inline int in_own_process_cgroup(struct task_struct *task, __u32 tgid)
+{
+    const char *name = BPF_CORE_READ(task, cgroups, dfl_cgrp, kn, name);
+    char buf[CGROUP_NAME_MAX] = {};
+    if (!name || bpf_probe_read_kernel_str(buf, sizeof(buf), name) < 6)
+        return 0;
+    if (buf[0] != 'p' || buf[1] != 'i' || buf[2] != 'd' || buf[3] != '_')
+        return 0;
+    __u64 value = 0;
+    for (int i = 4; i < CGROUP_NAME_MAX; i++) {
+        char c = buf[i];
+        if (c == 0)
+            return i > 4 && value == tgid;
+        if (c < '0' || c > '9')
+            return 0;
+        value = value * 10 + (c - '0');
+    }
+    return 0;
+}
+
 SEC("tp_btf/sbo_identity_socket_create")
 int BPF_PROG(capture_creator, struct sock *sk)
 {
@@ -133,13 +182,15 @@ int BPF_PROG(capture_creator, struct sock *sk)
         return 0;
 
     __u64 pid_tgid = bpf_get_current_pid_tgid();
+    struct task_struct *task = bpf_get_current_task_btf();
+    if (in_own_process_cgroup(task, pid_tgid >> 32))
+        return 0;
     struct socket_creator creator = {
         .cookie = bpf_get_socket_cookie(sk),
         .process_id = pid_tgid >> 32,
         .thread_id = (__u32)pid_tgid,
         .user_id = (__u32)bpf_get_current_uid_gid(),
     };
-    struct task_struct *task = bpf_get_current_task_btf();
     struct task_struct *leader = task ? task->group_leader : 0;
     if (leader)
         creator.start_time_ns = leader->start_boottime;

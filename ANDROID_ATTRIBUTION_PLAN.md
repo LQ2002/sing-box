@@ -638,6 +638,48 @@ SELinux Enforcing，`/sys/kernel/btf/vmlinux` sha256 `37d2c7e7…5f35` 与桥接
 - 开销模型改用上面的实测值；不做按进程缓存：唯一能省的是约 2 µs/socket 的 cache miss，
   全机约每秒数 µs，却要引入“argv 被改写后缓存过期”的新语义，不值得。
 
+### cgroup 分工（2026-10-04）
+
+依据：`experimental/module_enhancement_probe/results/cgroup-probe/README.md`（真机只读探针）。
+socket 的 cgroup（TC 已记录的 `socket_cgroup_id`，即 `bpf_skb_cgroup_id()` =
+`cgroup_id(sock_cgroup_ptr(&sk->sk_cgrp_data))`，`net/core/filter.c:5005-5014`）在 10232/10232 个 socket
+上等于创建线程的 cgroup；app_process 创建的 5453/5453 个 socket 在创建者自己的 `…/uid_X/pid_<tgid>` 里。
+系统 UID 的 App（system_server、com.android.phone 等）与 init 服务在 `/system/uid_X/pid_Y`，路径中的
+uid 对 init 服务总是 0；原生子进程、App zygote 派生进程在父进程的 cgroup；sing-box、KernelSU/zygisk/
+LSPosed、su shell 在根 cgroup。在模块内计时实测中，建 sk_storage 快照约占 570 ns/socket（热路径）。
+
+实现：
+
+- `common/socketidentity/bpf/creator.bpf.c`：`in_own_process_cgroup` 读
+  `task->cgroups->dfl_cgrp->kn->name`，为 `pid_<当前 tgid>` 时直接返回，不建快照、不读 argv/exe。
+  其余情况（子进程、根 cgroup、他人的 pid 目录）照旧建 v2 快照。快照布局与 ABI 不变；对象 sha256
+  `1473de52…5727`（已与上一版不同，旧 pins 须按原契约用旧版二进制移除，真机当前无旧 pins）。
+- `protocol/ebpf/socket_identity.go`：`cgroupOwner` 记下目录对应的 pid；无快照、producer 生效、且
+  cgroup 是进程目录时，`ownerFromProcessCgroup` 校验 `/proc/<pid>/cgroup` 所指目录的 inode 等于 socket
+  的 cgroup id（同一进程实例；cgroup id 开机内不复用），取进程自己的 UID 与启动时间，再交给
+  `resolveSocketOwner`：argv[0] 进程名（`/proc/<pid>/cmdline`）、exe 路径、E1/E2 归包与快照路径相同。
+  UID 取进程而非 socket：init 服务目录都标 uid_0，netd 会把 DNS socket fchown 给请求 App；
+  socket UID 不同时只作请求方计入诊断（按发送者分流，决策 1）。producer 未启用时 cgroup 仍只是
+  UID 标签（fork 的子进程共享 cgroup，无法据此认定创建者）。
+- 诊断新增 `resolved_by_cgroup_process`、`cgroup_process_gone`。
+- Manifest 索引不变（冒号前缀快速判断经测试证明并非总成立——包可以把 `android:process` 写成别的包名
+  开头的完整名字——且用户决定暂不改动 Manifest 部分，已撤回）。
+
+验证：
+
+- 本机（WSL）：`protocol/ebpf`、`common/socketidentity`、`common/androidmanifest` 的 vet（android/arm64
+  与本机）、单元测试、race 全部通过；新增 `socket_identity_cgroup_test.go` 5 项：共享 UID 经 cgroup 归包、
+  producer 未启用时不取 PID、netd 为发送者而 App 为请求方、UID 取进程不取目录标签、进程已迁出时拒绝。
+- 真机 producer 门控（`sbo-acceptance producercheck`，生产对象挂桥接模块 `capture_all=1`）：校验器接受
+  （263 条指令）；根 cgroup 200/200 有快照、`pid_<自己>` 0/200、`pid_<他人>` 200/200、移回后 200/200；
+  桥接模块已卸载、临时 cgroup 已删除、taint 4608。
+- **未执行**：整链路真机验收（新 sing-box + TC + 真实 App 连接，看 `resolved_by_cgroup_process` 与归包
+  正确性、开销）。
+
+剩余（按顺序）：整链路真机验收；sing-ebpf 放开 `BPF_F_CLONE` 与 TC 继承标记（accept 子连接；其 cgroup
+已随 `cgroup_sk_clone` 继承监听者，App 监听者无快照时已能经 cgroup 归属）；以增强模块替换桥接模块
+（原生程序完整路径，且须保留 argv[0] 哈希）。
+
 ## 仓库与范围
 
 - 主实施仓库：`E:\ebpf_sing-box`。
@@ -659,6 +701,7 @@ SELinux Enforcing，`/sys/kernel/btf/vmlinux` sha256 `37d2c7e7…5f35` 与桥接
 | 2 | 已有 sing-ebpf fork 的 UID 热更新与归属字段 | **已完成**（本地、真机与真实 App 验收均通过） | sing-ebpf `3c1b28f`（已推送）；应用依赖 `6252b171`；记录见“阶段 2 实施记录” |
 | 3 | sing-box 接入新归属路径并完成整链路验收 | **归属修复、持久创建者第一轮集成及隔离真机验证完成；目标设计与完整验收仍有未完成项** | 修复 `cae57485`；创建者集成 `ee0208de`；实际数据面证据与剩余项见阶段 3 |
 | 目标设计 | creator v2（创建时进程名哈希、exe inode）、netd 请求方、E1–E3 解析 | **实现完成；本机、隔离真机、整服务真实 App（正确 22/错误 0）与新旧配对（稳态无可测差异，内存经 `madvdontneed=1` 持平）均已验收**；sing-ebpf 已推送（`6ab9da7`），`go.mod` 已升级（`6f291cf8`） | 分支 `claude/attribution-target-design`；sing-ebpf `aa849f4`、`6ab9da7`；见“Claude 目标设计”的预验证与验收矩阵 |
+| cgroup 分工 | 创建者在自己的 `pid_<tgid>` cgroup 时不建快照，由 socket cgroup 定位进程 | **producer 与用户态实现完成；本机测试与真机 producer 门控验证通过；整链路真机验收未执行** | 见“cgroup 分工（2026-10-04）” |
 
 阶段 1、2 已有实现及验收记录；阶段 3 已修正 cgroup 进程归属假设，并补做真实数据回包验证。
 阶段是否通过以实际证据为准；未执行和不适用的检查分别列出，不用勾选掩盖未完成项。

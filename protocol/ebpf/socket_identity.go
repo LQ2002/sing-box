@@ -112,10 +112,20 @@ func (identity socketIdentity) hasCreator() bool {
 	return identity.creator.IsValid() && identity.creator.Cookie == identity.cookie
 }
 
-// cgroupOwner is an Android UID group label, never a process identity.
+// cgroupOwner is an Android process cgroup .../uid_<uid>/pid_<pid>. uid is
+// the directory's label (init services are all labelled uid_0, whatever they
+// run as), pid the process the directory was created for. Whether that
+// process created a given socket is decided in ownerFromProcessCgroup.
 type cgroupOwner struct {
 	found bool
 	uid   uint32
+	pid   uint32
+	// Set once ownerFromProcessCgroup has checked the directory's process
+	// against /proc: its UID and start time. A cgroup ID is never reused
+	// within a boot, so this stays true for the directory's lifetime.
+	procVerified bool
+	procUID      uint32
+	procStartNs  uint64
 	// logged and loggedPackage remember what was last logged for this
 	// group. Cookie-derived creator metadata is never cached here.
 	logged        bool
@@ -209,7 +219,7 @@ func (r *cgroupOwnerResolver) scanUIDDirectory(kind, uidDir string, uid uint32, 
 	var result cgroupOwner
 	found := false
 	for _, entry := range entries {
-		_, ok := parseCgroupComponent(entry.Name(), "pid_")
+		pid, ok := parseCgroupComponent(entry.Name(), "pid_")
 		if !ok {
 			continue
 		}
@@ -220,7 +230,7 @@ func (r *cgroupOwnerResolver) scanUIDDirectory(kind, uidDir string, uid uint32, 
 		if _, loaded := r.cache.Peek(stat.Ino); loaded && stat.Ino != target {
 			continue
 		}
-		owner := cgroupOwner{found: true, uid: uid}
+		owner := cgroupOwner{found: true, uid: uid, pid: pid}
 		r.cache.Add(stat.Ino, owner)
 		if stat.Ino == target {
 			result, found = owner, true
@@ -244,9 +254,14 @@ type identityCounters struct {
 	// resolvedByProcess counts shared/system UID processes named through
 	// the (process name, UID) manifest index.
 	resolvedByProcess atomic.Uint64
-	noIdentity        atomic.Uint64
-	rootCgroup        atomic.Uint64
-	cgroupGone        atomic.Uint64
+	// resolvedByCgroupProcess counts flows without a snapshot attributed to
+	// the process their cgroup was created for (the producer skips sockets
+	// whose creator is that process).
+	resolvedByCgroupProcess atomic.Uint64
+	cgroupProcessGone       atomic.Uint64
+	noIdentity              atomic.Uint64
+	rootCgroup              atomic.Uint64
+	cgroupGone              atomic.Uint64
 	// unknownPackage counts flows with no package result (including absent
 	// creator evidence, shared processes, and native daemons).
 	unknownPackage atomic.Uint64
@@ -376,8 +391,18 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 	} else if group.found {
 		i.identityCounters.uidMismatch.Add(1)
 	}
-	// A cgroup is never a fallback for a missing cookie creator. This query
-	// must remain per cookie, since several creators can share one group.
+	// The producer leaves out exactly the sockets whose creator is the process
+	// its cgroup is named after, so with the producer active a socket without
+	// a snapshot in a process cgroup belongs to that process. Without the
+	// producer this would not hold (a forked child shares the cgroup), and
+	// the cgroup stays a UID label only.
+	if !hasCreator && group.found && group.pid != 0 && i.socketCreatorActive.Load() {
+		if owner := i.ownerFromProcessCgroup(ctx, identity, group, resolver); owner != nil {
+			return owner
+		}
+	}
+	// This query must remain per cookie, since several creators can share
+	// one group.
 	owner := i.creatorFromIdentity(ctx, identity)
 	if owner.UserId == -1 {
 		i.identityCounters.creatorUnavailable.Add(1)
@@ -393,6 +418,90 @@ func (i *Inbound) ownerFromIdentity(ctx context.Context, identity socketIdentity
 	}
 	return owner
 }
+
+// ownerFromProcessCgroup attributes a socket to the process its cgroup was
+// created for. The process must still be that cgroup's process: its
+// /proc/<pid>/cgroup must name a directory whose inode is the socket's
+// cgroup ID (the ID is the kernfs inode, kernfs_id_ino, and is not reused
+// within a boot, so a recycled PID in a new pid_<pid> directory cannot
+// match). The UID is the process's own: init services' directories are all
+// labelled uid_0, and netd fchown()s its DNS sockets to the requesting app,
+// whose UID stays a diagnostic requester. Name (argv[0]), executable and
+// package then come from resolveSocketOwner exactly as for a snapshot
+// without a recorded name. nil when the process is gone or moved.
+func (i *Inbound) ownerFromProcessCgroup(ctx context.Context, identity socketIdentity, group cgroupOwner, resolver *cgroupOwnerResolver) *adapter.ConnectionOwner {
+	if !group.procVerified {
+		uid, startNs, ok := verifyCgroupProcess(group.pid, identity.cgroupID)
+		if !ok {
+			i.identityCounters.cgroupProcessGone.Add(1)
+			return nil
+		}
+		group.procVerified, group.procUID, group.procStartNs = true, uid, startNs
+		resolver.cache.Add(identity.cgroupID, group)
+	}
+	if requester, differs := identity.requesterUID(group.procUID); differs {
+		i.identityCounters.requesterDiffers.Add(1)
+		i.logger.DebugContext(ctx, "socket of uid ", group.procUID, " works for uid ", requester,
+			" (", i.packageForApplicationUID(requester), "); routed by the sender")
+	}
+	owner := i.resolveSocketOwner(ctx, SocketOwner{ProcessID: group.pid, UserID: group.procUID, StartTimeNs: group.procStartNs})
+	if owner.UserId == -1 {
+		i.identityCounters.cgroupProcessGone.Add(1)
+		return nil
+	}
+	i.identityCounters.resolvedByCgroupProcess.Add(1)
+	if len(owner.PackageNames) == 0 {
+		i.identityCounters.unknownPackage.Add(1)
+	}
+	return owner
+}
+
+// verifyCgroupProcess checks that pid still lives in the cgroup with inode
+// cgroupID and returns its UID and start time.
+func verifyCgroupProcess(pid uint32, cgroupID uint64) (uint32, uint64, bool) {
+	dir, err := os.Open(filepath.Join(procRoot, strconv.FormatUint(uint64(pid), 10)))
+	if err != nil {
+		return 0, 0, false
+	}
+	defer dir.Close()
+	dirFD := int(dir.Fd())
+	raw, err := readFileAt(dirFD, "cgroup")
+	if err != nil {
+		return 0, 0, false
+	}
+	path := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		if rest, found := strings.CutPrefix(line, "0::"); found {
+			path = rest
+			break
+		}
+	}
+	var stat unix.Stat_t
+	if path == "" || unix.Stat(filepath.Join(cgroupProcRoot, path), &stat) != nil || stat.Ino != cgroupID {
+		return 0, 0, false
+	}
+	status, err := readFileAt(dirFD, "status")
+	if err != nil {
+		return 0, 0, false
+	}
+	uid, ok := parseProcessUID(status)
+	if !ok {
+		return 0, 0, false
+	}
+	statRaw, err := readFileAt(dirFD, "stat")
+	if err != nil {
+		return 0, 0, false
+	}
+	ticks, ok := parseStartTicks(statRaw)
+	if !ok {
+		return 0, 0, false
+	}
+	return uid, ticks * (1e9 / userHZ), true
+}
+
+// cgroupProcRoot is where /proc/<pid>/cgroup paths are resolved; tests
+// replace it.
+var cgroupProcRoot = cgroupRoot
 
 // The creation snapshot and UID/group fields are independently valid. In
 // particular, a missing cgroup or fchown'ed sk_uid must not hide a creator.
@@ -444,6 +553,10 @@ type AttributionDiagnostics struct {
 	// By UID alone (ordinary app or SDK sandbox) / by (process name, UID).
 	ResolvedByUID     uint64 `json:"resolved_by_uid"`
 	ResolvedByProcess uint64 `json:"resolved_by_process"`
+	// Without a snapshot, by the process its cgroup was created for; and
+	// such cgroups whose process was gone or moved.
+	ResolvedByCgroupProcess uint64 `json:"resolved_by_cgroup_process"`
+	CgroupProcessGone       uint64 `json:"cgroup_process_gone"`
 	// Unknown reasons.
 	UnknownPackage     uint64 `json:"unknown_package"`
 	RootCgroup         uint64 `json:"root_cgroup"`
@@ -480,19 +593,22 @@ func (i *Inbound) attributionDiagnostics() *AttributionDiagnostics {
 	}
 	counters := &i.identityCounters
 	diagnostics := &AttributionDiagnostics{
-		Mode:               i.processTrackingMode(),
-		ResolvedByUID:      counters.resolvedPackage.Load(),
-		ResolvedByProcess:  counters.resolvedByProcess.Load(),
-		UnknownPackage:     counters.unknownPackage.Load(),
-		RootCgroup:         counters.rootCgroup.Load(),
-		GroupUnresolved:    counters.cgroupGone.Load(),
-		NoIdentity:         counters.noIdentity.Load(),
-		CreatorUnavailable: counters.creatorUnavailable.Load(),
-		UIDMismatch:        counters.uidMismatch.Load(),
-		CreatorSnapshots:   counters.creatorSnapshots.Load(),
-		CreatorMissing:     counters.creatorMissing.Load(),
-		CreatorInvalid:     counters.creatorInvalid.Load(),
-		CreatorFallbacks:   counters.creatorFallbacks.Load(),
+		Mode:              i.processTrackingMode(),
+		ResolvedByUID:     counters.resolvedPackage.Load(),
+		ResolvedByProcess: counters.resolvedByProcess.Load(),
+
+		ResolvedByCgroupProcess: counters.resolvedByCgroupProcess.Load(),
+		CgroupProcessGone:       counters.cgroupProcessGone.Load(),
+		UnknownPackage:          counters.unknownPackage.Load(),
+		RootCgroup:              counters.rootCgroup.Load(),
+		GroupUnresolved:         counters.cgroupGone.Load(),
+		NoIdentity:              counters.noIdentity.Load(),
+		CreatorUnavailable:      counters.creatorUnavailable.Load(),
+		UIDMismatch:             counters.uidMismatch.Load(),
+		CreatorSnapshots:        counters.creatorSnapshots.Load(),
+		CreatorMissing:          counters.creatorMissing.Load(),
+		CreatorInvalid:          counters.creatorInvalid.Load(),
+		CreatorFallbacks:        counters.creatorFallbacks.Load(),
 
 		MultiPackageProcess: counters.multiPackageProcess.Load(),
 		UndeclaredProcess:   counters.undeclaredProcess.Load(),
