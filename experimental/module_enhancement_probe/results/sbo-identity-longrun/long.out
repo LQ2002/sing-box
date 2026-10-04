@@ -1,0 +1,25 @@
+START 23:31:45 sing-box pid=24428 rss=36064 kB file_nr=52457
+DIAL pid=1583 exe="/data/local/tmp/sbo-full/sbo-acceptance" bytes=39 connected=2/2
+DIAL pid=2295 exe="/data/local/tmp/sbo-full/L/dir_1-0123456789abcdef0123456789/dir_2-0123456789abcdef0123456789/dir_3-0123456789abcdef0123456789/dir_4-0123456789abcdef0123456789/dir_5-0123456789abcdef0123456789/dir_6-0123456789abcdef0123456789/dir_7-0123456789abcdef0123456789/dir_8-0123456789abcdef0123456789/sbo-dial" bytes=299 connected=2/2
+DIAL_WAITING pid 2874
+DIAL pid=2874 exe="/data/local/tmp/sbo-full/sbo-dial-deleted (deleted)" bytes=51 connected=2/2
+SCENARIOS_DONE inet=9278 skipped=12855 own_cgroup=6935 hit=2314 miss=29 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=29 put=29 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 23:36:41 t=300s rss=27580 kB file_nr=52073 kmsg_lines=12598 module=inet=10817 skipped=14849 own_cgroup=8304 hit=2482 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 23:41:41 t=600s rss=25800 kB file_nr=51593 kmsg_lines=14098 module=inet=12078 skipped=15883 own_cgroup=9421 hit=2626 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 23:46:42 t=900s rss=23760 kB file_nr=51593 kmsg_lines=15853 module=inet=13427 skipped=17035 own_cgroup=10609 hit=2787 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 23:51:42 t=1200s rss=27344 kB file_nr=52553 kmsg_lines=17357 module=inet=15621 skipped=23035 own_cgroup=12415 hit=3175 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 23:56:43 t=1500s rss=28592 kB file_nr=53097 kmsg_lines=18941 module=inet=17814 skipped=25297 own_cgroup=14329 hit=3454 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 00:01:43 t=1800s rss=22420 kB file_nr=53769 kmsg_lines=20342 module=inet=19122 skipped=26811 own_cgroup=15453 hit=3638 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 00:06:44 t=2100s rss=22632 kB file_nr=54025 kmsg_lines=21683 module=inet=20371 skipped=28103 own_cgroup=16615 hit=3725 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 00:11:44 t=2400s rss=17696 kB file_nr=52553 kmsg_lines=23420 module=inet=22448 skipped=39413 own_cgroup=18476 hit=3941 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 00:16:45 t=2700s rss=18060 kB file_nr=52905 kmsg_lines=24791 module=inet=23763 skipped=41051 own_cgroup=19656 hit=4076 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 00:21:45 t=3000s rss=18636 kB file_nr=52745 kmsg_lines=26143 module=inet=25246 skipped=42445 own_cgroup=20964 hit=4251 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 00:26:46 t=3300s rss=17572 kB file_nr=53033 kmsg_lines=27684 module=inet=26352 skipped=43639 own_cgroup=22003 hit=4318 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+PROGRESS 00:31:47 t=3600s rss=18200 kB file_nr=53065 kmsg_lines=29021 module=inet=27523 skipped=44619 own_cgroup=23050 hit=4442 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+END 00:31:47 rss=18200 kB module=inet=27523 skipped=44619 own_cgroup=23050 hit=4442 miss=31 too_long=2 deleted=2 error=0 kernel=0 unvalidated=0 get=31 put=31 t_own=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0
+KERNEL_LOG captured=29061 since_mark=20717
+KERNEL_SPLATS total=0 in_module_frames=0
+sbo_identity: file_ref check: get_file_rcu=31 fput=31 delta=0
+TAINT 4608
+
+[exited with code 0]

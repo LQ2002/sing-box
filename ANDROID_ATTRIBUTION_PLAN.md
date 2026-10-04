@@ -719,8 +719,14 @@ LSPosed、su shell 在根 cgroup。在模块内计时实测中，建 sk_storage 
   netd 21、App 按 UID 17、system_server 未知 1）；模块计数 inet 5815，其中自有 cgroup 4427（76%）不发事件，
   缓存命中 1366/未命中 22，非 inet 10913 在入口返回；`get_file_rcu=fput=22`。根 cgroup 中的原生程序（KernelSU
   shell 中的 `nc`）4 个连接均归为其路径与 PID。收尾后模块卸载、taint 4608。
-- **未执行**：模块版的长时间运行（与持续内核日志捕获）及整链路开销复测；路径过长/已删除的整链路场景（模块级已在
-  探针 quick 中验证）。
+- 1 小时长跑与开销（`experimental/module_enhancement_probe/acceptance/prod-longrun.sh`，结果
+  `results/sbo-identity-longrun/`，不点亮屏幕）：
+  - 开销（模块 `timing`，锁频、CPU 4，3 轮各约 10 万 socket）：自有 cgroup 跳过 50–52 ns/socket；建快照（模块 +
+    v3 producer，缓存命中）762–787 ns/socket。
+  - 1 小时：inet 27523 个，其中 own_cgroup 23050（83.7%）不发事件、建快照 4473（缓存未命中 31）；归属 163 条
+    **错误 0**（带 PID 10 条与 ActivityManager 一致；多包未知 3；按 UID 52；netd 91；根 cgroup 客户端 6 条，含 299 字节
+    路径——路径表不存、回退 `/proc` 得完整路径——和运行中被删除的程序，均为正确路径）；内核日志全程捕获，
+    标记后 20717 行 **0 个告警**；`get_file_rcu=fput=31`；taint 4608；测试实例 RSS 稳定在约 18 MB。
 
 ## 仓库与范围
 
@@ -744,7 +750,7 @@ LSPosed、su shell 在根 cgroup。在模块内计时实测中，建 sk_storage 
 | 3 | sing-box 接入新归属路径并完成整链路验收 | **归属修复、持久创建者第一轮集成及隔离真机验证完成；目标设计与完整验收仍有未完成项** | 修复 `cae57485`；创建者集成 `ee0208de`；实际数据面证据与剩余项见阶段 3 |
 | 目标设计 | creator v2（创建时进程名哈希、exe inode）、netd 请求方、E1–E3 解析 | **实现完成；本机、隔离真机、整服务真实 App（正确 22/错误 0）与新旧配对（稳态无可测差异，内存经 `madvdontneed=1` 持平）均已验收**；sing-ebpf 已推送（`6ab9da7`），`go.mod` 已升级（`6f291cf8`） | 分支 `claude/attribution-target-design`；sing-ebpf `aa849f4`、`6ab9da7`；见“Claude 目标设计”的预验证与验收矩阵 |
 | cgroup 分工 | 创建者在自己的 `pid_<tgid>` cgroup 时不建快照，由 socket cgroup 定位进程 | **实现完成；本机测试、真机 producer 门控、整链路真实 App（错误 0）验收通过** | 见“cgroup 分工（2026-10-04）” |
-| 增强模块 | `sbo_identity` 模块取代桥接模块：自有 cgroup 门控移入模块、创建现场解析可执行文件完整路径，producer v3 | **实现完成；本机测试、真机 producer 与整链路（错误 0）验收通过** | 见“增强模块 sbo_identity（2026-10-04）” |
+| 增强模块 | `sbo_identity` 模块取代桥接模块：自有 cgroup 门控移入模块、创建现场解析可执行文件完整路径，producer v3 | **实现完成；本机测试、真机 producer、整链路（错误 0）、1 小时长跑（错误 0、内核告警 0）与开销复测通过** | 见“增强模块 sbo_identity（2026-10-04）” |
 
 阶段 1、2 已有实现及验收记录；阶段 3 已修正 cgroup 进程归属假设，并补做真实数据回包验证。
 阶段是否通过以实际证据为准；未执行和不适用的检查分别列出，不用勾选掩盖未完成项。

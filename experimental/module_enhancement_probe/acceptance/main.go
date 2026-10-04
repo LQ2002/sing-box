@@ -282,6 +282,12 @@ func main() {
 		err = runCgscan(os.Args[2:])
 	case "producercheck":
 		err = runProducerCheck(os.Args[2:])
+	case "dial":
+		err = runDial(os.Args[2:])
+	case "prodhold":
+		err = runProdHold(os.Args[2:])
+	case "ownbench":
+		err = runOwnBench(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown mode %q", os.Args[1])
 	}

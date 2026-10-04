@@ -1,0 +1,2 @@
+# Device scripts run under /system/bin/sh: keep them LF.
+*.sh text eol=lf

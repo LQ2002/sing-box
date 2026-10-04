@@ -1,0 +1,4 @@
+     91 process path: /system/bin/netd, user: root, pid: 2006
+      2 process path: /data/local/tmp/sbo-full/sbo-dial-deleted, user: root, pid: 2874
+      2 process path: /data/local/tmp/sbo-full/sbo-acceptance, user: root, pid: 1583
+      2 process path: /data/local/tmp/sbo-full/L/dir_1-0123456789abcdef0123456789/dir_2-0123456789abcdef0123456789/dir_3-0123456789abcdef0123456789/dir_4-0123456789abcdef0123456789/dir_5-0123456789abcdef0123456789/dir_6-0123456789abcdef0123456789/dir_7-0123456789abcdef0123456789/dir_8-0123456789abcdef0123456789/sbo-dial, user: root, pid: 2295
