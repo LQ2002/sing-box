@@ -278,6 +278,8 @@ func main() {
 		err = runHold(os.Args[2:])
 	case "sockets":
 		err = runSockets(os.Args[2:])
+	case "cgscan":
+		err = runCgscan(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown mode %q", os.Args[1])
 	}
@@ -450,6 +452,7 @@ func runWatch(args []string) error {
 	printed := map[string]int{}
 	verdicts := map[string]map[string]int{}
 	tallies := map[string]*pathTally{}
+	cg := newCgroupTally()
 	var mismatches []map[string]any
 	total := 0
 	next := start.Add(*interval)
@@ -476,6 +479,7 @@ func runWatch(args []string) error {
 			return err
 		}
 		total++
+		cg.add(rec.RawSample, s)
 		k := kind(s.Flags)
 		kinds[k]++
 		verdict, reason := check(s)
@@ -517,12 +521,13 @@ func runWatch(args []string) error {
 	summary := map[string]any{
 		"seconds": time.Since(start).Seconds(), "events": total, "kinds": kinds, "verdicts": verdicts,
 		"bpf": c.bpfStats(), "module": moduleStats(), "file_nr_end": fileNr(),
-		"paths": list, "mismatches": mismatches,
+		"paths": list, "mismatches": mismatches, "cgroup": cg,
 	}
 	b, _ := json.MarshalIndent(summary, "", "  ")
 	if err := os.WriteFile(*output, b, 0o644); err != nil {
 		return err
 	}
+	fmt.Printf("CGROUP by_kind=%v sk_task_differ=%d shared=%v\n", cg.ByKind, cg.SkTaskDiff, cg.Shared)
 	fmt.Printf("WATCH_DONE events=%d kinds=%v verdicts=%v bpf=%v module=%s distinct_paths=%d mismatches=%d\n",
 		total, kinds, verdicts, c.bpfStats(), moduleStats(), len(list), len(mismatches))
 	return nil

@@ -1,0 +1,248 @@
+{
+  "bpf": {
+    "duplicate": 0,
+    "events": 10232,
+    "path_insert": 11,
+    "path_read_fail": 0,
+    "ringbuf_drop": 0,
+    "storage_fail": 0
+  },
+  "cgroup": {
+    "by_kind_uidclass_class": {
+      "app/app": {
+        "own": 3761
+      },
+      "app/system": {
+        "own": 1692
+      },
+      "native/app": {
+        "ancestor": 154,
+        "gone": 91,
+        "other_pid": 2,
+        "shared": 1
+      },
+      "native/root": {
+        "ancestor": 626,
+        "own": 1376,
+        "shared": 46
+      },
+      "native/system": {
+        "own": 2220,
+        "own_uid_x": 263
+      }
+    },
+    "sk_task_cgroup_differ": 0,
+    "shared_paths": {
+      "/": 47
+    },
+    "not_own_exe_paths": {
+      "ancestor /system/bin/ip @ /apps/uid_N/pid_N": 154,
+      "ancestor /system/bin/iptables @ /system/uid_N/pid_N": 626,
+      "other_pid /system/bin/ip @ /apps/uid_N/pid_N": 2,
+      "own_uid_x /vendor/bin/qms @ /system/uid_N/pid_N": 263,
+      "shared /data/adb/services/sing-box/sing-box @ /": 13,
+      "shared /system/bin/iptables @ /": 32,
+      "shared /system/bin/toybox @ /": 2
+    }
+  },
+  "events": 10232,
+  "file_nr_end": "53193",
+  "kinds": {
+    "app": 5453,
+    "native": 4779
+  },
+  "mismatches": null,
+  "module": "inet=10232 skipped=19976 app=5453 hit=4080 miss=699 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=699 put=699 active=1 holders=1 t_app=0/0 t_hit=0/0 t_miss=0/0 t_kernel=0/0",
+  "paths": [
+    {
+      "path": "",
+      "kind": "app",
+      "events": 5453,
+      "cache_hits": 0,
+      "uids": {
+        "1000": 1689,
+        "10095": 1,
+        "10106": 1,
+        "10134": 1,
+        "10136": 133,
+        "10174": 87,
+        "10180": 1,
+        "10193": 6,
+        "10205": 5,
+        "10220": 1,
+        "10356": 1129,
+        "10361": 2244,
+        "10380": 12,
+        "10384": 2,
+        "10460": 138,
+        "1073": 3
+      },
+      "comms": {
+        "CronetNet": 4,
+        "MiuiNetworkPoli": 5,
+        "binder:3818_14": 11,
+        "binder:3818_15": 3,
+        "binder:3818_3": 2,
+        "binder:3818_4": 5,
+        "binder:3818_7": 5,
+        "binder:3818_B": 1
+      }
+    },
+    {
+      "path": "/system/bin/netd",
+      "kind": "native",
+      "events": 1375,
+      "cache_hits": 1278,
+      "uids": {
+        "0": 1375
+      },
+      "comms": {
+        "Dns_120_0": 6,
+        "Dns_120_10095": 6,
+        "Dns_120_10134": 4,
+        "Dns_120_10136": 76,
+        "Dns_120_10174": 29,
+        "Dns_120_10205": 6,
+        "Dns_120_10356": 40,
+        "Dns_120_10380": 1
+      }
+    },
+    {
+      "path": "/vendor/bin/hw/android.hardware.wifi-service",
+      "kind": "native",
+      "events": 1226,
+      "cache_hits": 1100,
+      "uids": {
+        "1010": 1226
+      },
+      "comms": {
+        "android.hardwar": 432,
+        "binder:2134_1": 409,
+        "binder:2134_2": 385
+      }
+    },
+    {
+      "path": "/system/bin/iptables",
+      "kind": "native",
+      "events": 658,
+      "cache_hits": 539,
+      "uids": {
+        "0": 658
+      },
+      "comms": {
+        "ip6tables-resto": 313,
+        "iptables": 32,
+        "iptables-restor": 313
+      }
+    },
+    {
+      "path": "/vendor/bin/cnd",
+      "kind": "native",
+      "events": 598,
+      "cache_hits": 474,
+      "uids": {
+        "1000": 598
+      },
+      "comms": {
+        "cnd": 598
+      }
+    },
+    {
+      "path": "/vendor/bin/ipacm",
+      "kind": "native",
+      "events": 390,
+      "cache_hits": 279,
+      "uids": {
+        "1001": 390
+      },
+      "comms": {
+        "ipacm": 125,
+        "netlink socket": 265
+      }
+    },
+    {
+      "path": "/vendor/bin/qms",
+      "kind": "native",
+      "events": 263,
+      "cache_hits": 158,
+      "uids": {
+        "1001": 263
+      },
+      "comms": {
+        "qms": 263
+      }
+    },
+    {
+      "path": "/system/bin/ip",
+      "kind": "native",
+      "events": 247,
+      "cache_hits": 241,
+      "uids": {
+        "10356": 244,
+        "10361": 3
+      },
+      "comms": {
+        "ip": 247
+      }
+    },
+    {
+      "path": "/data/adb/services/sing-box/sing-box",
+      "kind": "native",
+      "events": 13,
+      "cache_hits": 9,
+      "uids": {
+        "0": 13
+      },
+      "comms": {
+        "sing-box": 13
+      }
+    },
+    {
+      "path": "/vendor/bin/cnss-daemon",
+      "kind": "native",
+      "events": 6,
+      "cache_hits": 2,
+      "uids": {
+        "1000": 6
+      },
+      "comms": {
+        "cnss-daemon": 6
+      }
+    },
+    {
+      "path": "/system/bin/toybox",
+      "kind": "native",
+      "events": 2,
+      "cache_hits": 0,
+      "uids": {
+        "0": 1,
+        "10999": 1
+      },
+      "comms": {
+        "toybox": 2
+      }
+    },
+    {
+      "path": "/vendor/bin/mipower_hal",
+      "kind": "native",
+      "events": 1,
+      "cache_hits": 0,
+      "uids": {
+        "0": 1
+      },
+      "comms": {
+        "mipower_hal": 1
+      }
+    }
+  ],
+  "seconds": 600.007281594,
+  "verdicts": {
+    "app": {
+      "ok": 5453
+    },
+    "native": {
+      "gone": 127,
+      "ok": 4652
+    }
+  }
+}

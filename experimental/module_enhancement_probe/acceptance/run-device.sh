@@ -140,6 +140,29 @@ long)
   unload
   kernel_check
   ;;
+cgroup)
+  # Read-only cgroup probe: can bpf_skb_cgroup_id() stand in for a module
+  # snapshot? Static scan of every process, then per-socket comparison.
+  seconds=${2:-600}
+  "$TOOL" cgscan -out cgscan-before.json > cgscan-before.log
+  grep -E '^CGSCAN ' cgscan-before.log
+  load
+  "$TOOL" watch -object "$OBJ" -duration "${seconds}s" -interval 120s -out watch-cgroup.json > watch-cgroup.log 2>&1 &
+  WATCH=$!
+  sleep 2
+  triggers
+  # Native program started from a KernelSU root shell (not an Android-started
+  # process) and one run under an app UID by su.
+  toybox ping -c 2 -W 1 127.0.0.1 > /dev/null 2>&1 || true
+  su 10999 -c "toybox ping -c 2 -W 1 127.0.0.1" > /dev/null 2>&1 || true
+  wait "$WATCH" || true
+  grep -E '^(CGROUP|WATCH_DONE)' watch-cgroup.log
+  "$TOOL" cgscan -out cgscan-after.json > cgscan-after.log
+  grep -E '^CGSCAN ' cgscan-after.log
+  echo "STATS_BEFORE_UNLOAD $(cat /sys/module/sbo_enhancement_probe/parameters/stats)"
+  unload
+  kernel_check
+  ;;
 bench)
   POL=/sys/devices/system/cpu/cpufreq/policy0
   MIN=$(cat $POL/scaling_min_freq); MAX=$(cat $POL/scaling_max_freq)
@@ -177,6 +200,6 @@ bench)
   kernel_check
   ;;
 *)
-  fail 'usage: run-device.sh quick | long <seconds> | bench'
+  fail 'usage: run-device.sh quick | long <seconds> | bench | cgroup <seconds>'
   ;;
 esac

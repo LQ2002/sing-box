@@ -23,7 +23,26 @@
 #include <bpf_tracing.h>
 
 typedef __u32 dev_t;
-struct sock;
+
+/* Only for the cgroup probe (mirror path): the socket's cgroup id, which is
+ * what TC's bpf_skb_cgroup_id() returns - cgroup_id(sock_cgroup_ptr(
+ * &sk->sk_cgrp_data)), net/core/filter.c:5005-5014 - and equals the cgroup
+ * directory's inode number on 64-bit (kernfs_id_ino). */
+struct kernfs_node {
+    __u64 id;
+} __attribute__((preserve_access_index));
+
+struct cgroup {
+    struct kernfs_node *kn;
+} __attribute__((preserve_access_index));
+
+struct sock_cgroup_data {
+    struct cgroup *cgroup;
+} __attribute__((preserve_access_index));
+
+struct sock {
+    struct sock_cgroup_data sk_cgrp_data;
+} __attribute__((preserve_access_index));
 
 #define PATH_LEN 256 /* must equal PATH_MAX_LEN in the module */
 
@@ -45,6 +64,14 @@ struct snapshot {
 };
 
 _Static_assert(sizeof(struct snapshot) == 64, "snapshot size");
+
+/* Ring-buffer record: the snapshot plus the two cgroup ids (probe only; the
+ * per-socket snapshot itself stays 64 bytes). */
+struct event {
+    struct snapshot snap;
+    __u64 sk_cgroup_id;      /* cgroup stamped on the socket at creation */
+    __u64 task_cgroup_id;    /* creating task's cgroup at the same moment */
+};
 
 struct path_key {
     __u32 dev;
@@ -175,12 +202,14 @@ int BPF_PROG(on_socket_identity, struct sock *sk, dev_t dev, unsigned long ino,
 
     if (!mirror_events)
         return 0;
-    struct snapshot *ev = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
+    struct event *ev = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
     if (!ev) {
         bump(ST_RINGBUF_DROP);
         return 0;
     }
-    __builtin_memcpy(ev, st, sizeof(*ev));
+    __builtin_memcpy(&ev->snap, st, sizeof(ev->snap));
+    ev->sk_cgroup_id = BPF_CORE_READ(sk, sk_cgrp_data.cgroup, kn, id);
+    ev->task_cgroup_id = bpf_get_current_cgroup_id();
     bpf_ringbuf_submit(ev, 0);
     return 0;
 }
