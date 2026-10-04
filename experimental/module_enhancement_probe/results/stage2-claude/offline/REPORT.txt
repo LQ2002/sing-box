@@ -1,0 +1,19 @@
+2026-10-04 18:04:08 OFFLINE_START taint=4608
+2026-10-04 18:05:40 PHASE quick rc=0 3 selftests passed; SELFTEST kind=accept n=200 map[ok_inherited:200]
+SELFTEST kind=accept n=200 map[ok_inherited:200]
+SELFTEST kind=accept n=200 map[ok_inherited:200]
+2026-10-04 18:05:47 PHASE bench rc=0
+BENCH label=unloaded n=20000 rounds=5 median=5585 min=5407 max=6348 all=[6348 5430 5407 5585 5783]
+BENCH label=collecting n=20000 rounds=5 median=7193 min=7038 max=8083 all=[8083 7074 7193 7038 7575]
+BENCH label=loaded_inactive n=20000 rounds=5 median=6208 min=5600 max=7141 all=[7141 6320 6208 5600 6016]
+BENCH label=unloaded n=20000 rounds=5 median=5784 min=5548 max=5928 all=[5548 5701 5860 5784 5928]
+BENCH label=collecting n=20000 rounds=5 median=7016 min=6748 max=9297 all=[9297 6842 7016 6748 7141]
+BENCH label=loaded_inactive n=20000 rounds=5 median=6050 min=5610 max=7617 all=[7617 6050 5610 5845 6444]
+BENCH label=unloaded n=20000 rounds=5 median=5672 min=5364 max=6140 all=[6140 5364 5833 5672 5660]
+BENCH label=collecting n=20000 rounds=5 median=7638 min=6224 max=8405 all=[8405 6224 7737 6392 7638]
+BENCH label=loaded_inactive n=20000 rounds=5 median=6677 min=6116 max=7434 all=[6543 6677 6116 7208 7434]
+2026-10-04 19:05:47 PHASE long rc=0
+WATCH_DONE events=42697 kinds=map[app:26895 native:15802] verdicts=map[app:map[ok:26895] native:map[gone:95 ok:15707]] bpf=map[duplicate:0 events:42697 path_read_fail:0 ringbuf_drop:0 storage_fail:0] module=inet=42697 skipped=142112 app=26895 hit=15692 miss=110 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=110 put=110 active=1 holders=1 distinct_paths=13 mismatches=0
+STATS_BEFORE_UNLOAD inet=42697 skipped=142112 app=26895 hit=15692 miss=110 too_long=0 deleted=0 error=0 kernel=0 unvalidated=0 get=110 put=110 active=0 holders=0
+DMESG_CLEAN taint=4608
+2026-10-04 19:05:47 OFFLINE_DONE taint=4608 module_loaded=no

@@ -1,0 +1,134 @@
+{
+  "bpf": {
+    "duplicate": 0,
+    "events": 10809,
+    "path_read_fail": 0,
+    "ringbuf_drop": 0,
+    "storage_fail": 0
+  },
+  "events": 10809,
+  "file_nr_end": "47433",
+  "kinds": {
+    "app": 435,
+    "native": 8372,
+    "native_deleted": 1001,
+    "too_long": 1001
+  },
+  "mismatches": null,
+  "module": "inet=10809 skipped=2404 app=435 hit=10338 miss=36 too_long=5 deleted=6 error=0 kernel=0 unvalidated=0 get=36 put=36 active=1 holders=1",
+  "paths": [
+    {
+      "path": "/data/local/tmp/sboacc/sbo-acceptance",
+      "kind": "native",
+      "events": 8201,
+      "cache_hits": 8194,
+      "uids": {
+        "0": 8201
+      },
+      "comms": {
+        "sbo-acceptance": 8201
+      }
+    },
+    {
+      "path": "",
+      "kind": "too_long",
+      "events": 1001,
+      "cache_hits": 996,
+      "uids": {
+        "0": 1001
+      },
+      "comms": {
+        "sbo-acceptance": 1001
+      }
+    },
+    {
+      "path": "/data/local/tmp/sboacc/sbo-deleted",
+      "kind": "native_deleted",
+      "events": 1001,
+      "cache_hits": 995,
+      "uids": {
+        "0": 1001
+      },
+      "comms": {
+        "sbo-deleted": 1001
+      }
+    },
+    {
+      "path": "",
+      "kind": "app",
+      "events": 435,
+      "cache_hits": 0,
+      "uids": {
+        "1000": 313,
+        "10193": 5,
+        "10356": 116,
+        "10384": 1
+      },
+      "comms": {
+        "ConnectivitySer": 6,
+        "NetworkStats": 1,
+        "adScheduler-105": 1,
+        "binder:3818_11": 1,
+        "binder:3818_12": 4,
+        "binder:3818_17": 5,
+        "binder:3818_D": 7,
+        "binder:3818_E": 1
+      }
+    },
+    {
+      "path": "/system/bin/netd",
+      "kind": "native",
+      "events": 87,
+      "cache_hits": 79,
+      "uids": {
+        "0": 87
+      },
+      "comms": {
+        "Dns_117_0": 2,
+        "Dns_117_10356": 8,
+        "Dns_117_10384": 77
+      }
+    },
+    {
+      "path": "/system/bin/iptables",
+      "kind": "native",
+      "events": 70,
+      "cache_hits": 64,
+      "uids": {
+        "0": 70
+      },
+      "comms": {
+        "ip6tables-resto": 20,
+        "iptables": 30,
+        "iptables-restor": 20
+      }
+    },
+    {
+      "path": "/data/adb/services/sing-box/sing-box",
+      "kind": "native",
+      "events": 14,
+      "cache_hits": 10,
+      "uids": {
+        "0": 14
+      },
+      "comms": {
+        "sing-box": 14
+      }
+    }
+  ],
+  "seconds": 90.001025903,
+  "verdicts": {
+    "app": {
+      "ok": 435
+    },
+    "native": {
+      "ok": 8372
+    },
+    "native_deleted": {
+      "ok": 1001
+    },
+    "too_long": {
+      "ok": 1001
+    }
+  }
+}

@@ -1,0 +1,18 @@
+PRECHECK taint=4608 file_nr=47497 sing-box=none
+FREQ_LOCKED policy0 min=max=2745600 cur=2745600
+BENCH label=unloaded n=20000 rounds=5 median=5585 min=5407 max=6348 all=[6348 5430 5407 5585 5783]
+BENCH label=collecting n=20000 rounds=5 median=7193 min=7038 max=8083 all=[8083 7074 7193 7038 7575]
+HOLDING
+HOLD_DONE bpf=map[duplicate:0 events:100004 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+BENCH label=loaded_inactive n=20000 rounds=5 median=6208 min=5600 max=7141 all=[7141 6320 6208 5600 6016]
+BENCH label=unloaded n=20000 rounds=5 median=5784 min=5548 max=5928 all=[5548 5701 5860 5784 5928]
+BENCH label=collecting n=20000 rounds=5 median=7016 min=6748 max=9297 all=[9297 6842 7016 6748 7141]
+HOLDING
+HOLD_DONE bpf=map[duplicate:0 events:100008 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+BENCH label=loaded_inactive n=20000 rounds=5 median=6050 min=5610 max=7617 all=[7617 6050 5610 5845 6444]
+BENCH label=unloaded n=20000 rounds=5 median=5672 min=5364 max=6140 all=[6140 5364 5833 5672 5660]
+BENCH label=collecting n=20000 rounds=5 median=7638 min=6224 max=8405 all=[8405 6224 7737 6392 7638]
+HOLDING
+HOLD_DONE bpf=map[duplicate:0 events:100008 path_read_fail:0 ringbuf_drop:0 storage_fail:0]
+BENCH label=loaded_inactive n=20000 rounds=5 median=6677 min=6116 max=7434 all=[6543 6677 6116 7208 7434]
+FREQ_RESTORED min=787200 max=2745600 governor=walt
