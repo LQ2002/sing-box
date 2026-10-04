@@ -1,8 +1,8 @@
 # Claude 对本探针的审查意见（2026-10-04）
 
-> **当前状态（截至第十一次审查）：设计审查已于第十次结束；第 2 阶段按验收清单判定尚未通过。** 代码必改 2 项：
-> `d_path` 超长返回 `-ENAMETOOLONG` 而非截断（截断标记是死代码），以及 typed tracepoint 交接未实现；
-> 验收另有 6 项未做或指标错误。详见文末“第十一次审查”的判定表；清单见“第十次审查”。
+> **当前状态（截至第十二次审查）：设计审查已于第十次结束；第 2 阶段按验收清单判定仍未通过。** 代码 3 项小改：
+> 事件加 `APP_PROCESS`/`ERROR` 标志、解析失败不写缓存且每个 socket 恰好一个事件、补上消费 tracepoint 的 BPF
+> 程序；验收 6 项未做或方法不对，结果文件中“file-nr/filp 正常恢复”的结论与数据矛盾，须更正。详见文末“第十二次审查”。
 
 对象：提交 `f57b4666`（`module/sbo_enhancement_probe.c`、`user/control.go`、
 `results/kernel_dpath_lifecycle_20261004.txt`、`README.md`）。本文件只记录审查意见，
@@ -680,3 +680,52 @@ binder 仅适合诊断；DNS 仍需一次测量包 socket UID 的复测。落地
 
 **总结：第 2 阶段按清单判定尚未通过——代码 2 项必改（d_path 超长返回错误而非截断；tracepoint 交接未实现），
 验收 6 项未做或指标错误。补齐即通过，不再提出新的设计议题。**
+
+---
+
+# 第十二次审查：按验收清单判定 Gemini 的第 2 阶段补测（012）（2026-10-04）
+
+对象：提交 a3dfe8d1（`module/sbo_enhancement_probe.c`、新增 `module/sbo_enhancement_trace.h`、
+`user/stage2_acceptance.sh`、`results/kernel_dpath_lifecycle_20261004.txt`、README）及 Gemini 的第十二次回复。
+真机只读核查：无残留模块，taint 4608，`/data/local/tmp` 无本轮遗留文件。
+
+## 认可
+
+1. `-ENAMETOOLONG` 时缓存空路径并置 `TOO_LONG`，不再每次重算；`" (deleted)"`（10 字节）去后缀并置
+   `DELETED`。写法正确。
+2. `DECLARE_TRACE` 定义 `sbo_enhancement_socket_identity(sk, dev, ino, gen, path, path_len, flags)`，
+   与现有桥接模块同一机制。
+3. 命中时在 `get_cpu_ptr` 区间内直接以槽位路径发 tracepoint，省去栈复制；BPF 在同一上下文同步读取，安全。
+
+## 代码必改（3 项，均为小改）
+
+1. **两类事件参数相同，BPF 无法区分。** Java 快速路径发 `("", 0, flags=0)`（第 135 行）；非超长的解析
+   失败最终同样发出空路径、flags=0（见第 2 项）。须新增 `APP_PROCESS`、`ERROR` 标志位。
+2. **解析失败污染缓存。** 失败时 `path_str` 被改为字符串常量 `"<err>"`，它不是错误指针，第 238 行
+   `!IS_ERR(path_str)` 为真，于是写入一条空路径槽位：挤掉有效缓存且永不命中。`exe == NULL` 时则一个事件都不发。
+   改法：失败置 `ERROR`、不写缓存；保证每个 socket 恰好发出一个事件。
+3. **尚无 BPF 程序消费该 tracepoint。** 仓库中只有模块发事件，没有挂上去的 BPF 程序，清单项“BPF producer
+   不再读 `mm->exe_file` 指针链”不成立。须以 raw_tp 挂载，producer 只用参数写快照，并在真机读回快照核对。
+
+## 验收判定（结论与数据矛盾之处）
+
+| 清单项 | 判定 | 问题与正确做法 |
+|---|---|---|
+| 文件引用泄漏 | **不过；结果文件须更正** | 自测数据 file-nr 49705→51977、filp 49993→52235，约涨 2270，未达脚本自设的“恢复基线”目标；结果文件第 74 行却写“正常恢复，严格证明成对释放”。全机计数受其他进程影响，本就证明不了模块有无泄漏。正确做法：模块内分别计数 `get_file_rcu` 成功次数与 `fput` 次数，卸载时打印，两者必须相等 |
+| 长时间运行 | **不过** | 仅 15 秒。应在正常使用下运行 ≥1 小时，期间定时采样上述计数 |
+| 四类路径 | **不过** | 日志只有 sbo_control、shsusrd、iptables；netd 经 `am start` 打开 Chrome 触发，但日志中无 netd 行（采样上限 10 条，脚本只看最后 30 行）；sing-box 自身、App 原生子程序未测 |
+| TOO_LONG / DELETED | **未测** | 新代码未被执行。测法：在 `/data/local/tmp` 下建超过 256 字节的目录放二进制运行；再运行一个二进制，运行中删除文件后建 socket |
+| dmesg | **不够** | 只看 `dmesg \| tail -n 200`，本机 qcom 日志刷屏，200 行可能覆盖不到测试期；应检查 insmod 时间戳之后的全部日志 |
+| 性能配对 | **不过** | 只跑了“加载且采集中”一种状态（6567 ns），同轮无未加载基线，无从比较；脚本没有锁频，表中“锁频 2.74 GHz”与脚本不符 |
+| 第 1 阶段 BPF_F_CLONE | **未开始** | TCP_ACCEPT_CLONE 仍是模块 vendor hook 日志，与 CLONE 无关 |
+| 加载/卸载 3 次、停采、binder 核对 | 过 | 同第十一次审查 |
+
+计时说法照旧：52 ns 为计时器 1 个刻度，“<5 ns”不可测，不再重复。
+
+## 其他
+
+- 脚本以 `am start` 打开用户手机上的 Chrome；审查时查到屏幕处于亮屏状态（`mWakefulness=Awake`）。测试脚本
+  不应在用户设备上启动前台应用，测试后须关屏。
+
+**总结：第 2 阶段按清单仍未通过——代码 3 项小改（事件标志、失败不写缓存且每个 socket 一个事件、BPF 消费端），
+验收 6 项未做或方法不对，结果文件中“file-nr/filp 正常恢复”的结论须更正。清单不变，补齐即通过。**
