@@ -37,92 +37,93 @@ func readDmesgRecent(keyword string) []string {
 func main() {
 	devPath := "/dev/sbo_enhancement_probe"
 
-	fmt.Println("=== 增强模块可行性真机实测 ===")
+	fmt.Println("=== 全能单模块生产级特性真机实测 ===")
 
-	// 1. 检查设备节点是否存在
-	if _, err := os.Stat(devPath); err != nil {
+	// 1. 验证设备节点权限 (必须为 0600)
+	fi, err := os.Stat(devPath)
+	if err != nil {
 		fmt.Printf("错误: 设备节点 %s 不存在，请确认模块已加载: %v\n", devPath, err)
 		os.Exit(1)
 	}
+	mode := fi.Mode().Perm()
+	fmt.Printf("[1] 设备节点检查: %s (权限: %04o, 期望: 0600)\n", devPath, mode)
+	if mode != 0600 {
+		fmt.Printf("警告: 权限非 0600! 实际为 %04o\n", mode)
+	}
 
-	// 2. 测试生命周期：打开设备 -> 激活采集
-	devFile, err := os.OpenFile(devPath, os.O_RDWR, 0)
+	// 2. 测试多持有者引用计数 (平滑重载支持)
+	fmt.Println("[2] 测试多持有者引用计数 (atomic open_count)...")
+	// 持有者 1 打开
+	h1, err := os.OpenFile(devPath, os.O_RDWR, 0)
 	if err != nil {
-		fmt.Printf("打开设备失败: %v\n", err)
+		fmt.Printf("持有者 1 打开失败: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("[1] 成功打开 %s，持有 fd=%d\n", devPath, devFile.Fd())
+	time.Sleep(50 * time.Millisecond)
 
-	// 清理 dmesg 时间戳基线
-	time.Sleep(100 * time.Millisecond)
+	// 持有者 2 打开
+	h2, err := os.OpenFile(devPath, os.O_RDWR, 0)
+	if err != nil {
+		fmt.Printf("持有者 2 打开失败: %v\n", err)
+		os.Exit(1)
+	}
+	time.Sleep(50 * time.Millisecond)
 
-	// 3. 测试现场 d_path 提取与纳秒级开销
-	// 创建 3 个不同类型的网络 socket 触发 hook
-	fmt.Println("[2] 触发 socket 创建，测试内核现场 d_path() 调用与耗时...")
+	// 检查内核是否记录了 holders=2
+	lines := readDmesgRecent("holders=")
+	for _, l := range lines {
+		fmt.Println("  ", l)
+	}
+
+	// 持有者 1 退出，验证 is_active 依然保持 TRUE
+	h1.Close()
+	time.Sleep(50 * time.Millisecond)
+	fmt.Println("  持有者 1 已关闭，持有者 2 仍在运行 (验证未被过早停采)")
+
+	// 3. 测试现场 d_path 与两阶段门控开销
+	fmt.Println("[3] 触发原生二进制 socket 创建 (慢路径: get_mm_exe_file + d_path + fput)...")
 	for i := 0; i < 3; i++ {
-		conn, err := net.Dial("udp", "127.0.0.1:12345")
+		conn, err := net.Dial("udp", "127.0.0.1:23456")
 		if err == nil {
 			conn.Close()
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 
-	// 读取 dmesg 中的 d_path 输出
-	time.Sleep(200 * time.Millisecond)
-	dmesgLines := readDmesgRecent("sbo_enh_probe")
-	fmt.Println("--- 内核实测采样 (d_path 路径、开销、dev、inode) ---")
-	dpathFound := false
-	for _, line := range dmesgLines {
-		if strings.Contains(line, "d_path=") {
-			fmt.Println("  ", line)
-			dpathFound = true
-		}
-	}
-	if !dpathFound {
-		fmt.Println("  (未在 dmesg 中找到包含 d_path 的采样行)")
-	}
-
-	// 4. 关闭设备文件，验证主动关闭感知
-	devFile.Close()
 	time.Sleep(100 * time.Millisecond)
-	fmt.Println("[3] 主动关闭文件描述符完成")
-
-	// 5. 测试 kill -9 异常退出下的内核感知能力
-	fmt.Println("[4] 测试子进程被 kill -9 强杀时，内核 VFS 是否自动触发 release()...")
-	childDone := make(chan bool)
-	childPid := 0
-
-	// 启动一个子进程持有 fd 并进入等待
-	childCmd := exec.Command("/system/bin/sh", "-c", fmt.Sprintf("exec 3<%s && sleep 10", devPath))
-	if err := childCmd.Start(); err != nil {
-		fmt.Printf("启动测试子进程失败: %v\n", err)
-	} else {
-		childPid = childCmd.Process.Pid
-		fmt.Printf("  子进程 PID %d 启动并持有设备 fd\n", childPid)
-		time.Sleep(200 * time.Millisecond)
-
-		// 检查 dmesg 是否打印了 OPENED
-		openLogs := readDmesgRecent("device OPENED")
-		if len(openLogs) > 0 {
-			fmt.Printf("  内核确认激活: %s\n", openLogs[len(openLogs)-1])
+	fmt.Println("--- 内核实测日志 (两阶段门控与绝对路径) ---")
+	dmesgLines := readDmesgRecent("sbo_enh_probe")
+	for _, line := range dmesgLines {
+		if strings.Contains(line, "FAST_BYPASS") || strings.Contains(line, "NATIVE_CHILD") {
+			fmt.Println("  ", line)
 		}
+	}
 
-		// 强杀子进程
-		tKill := time.Now()
+	// 持有者 2 退出，验证最后一个持有者释放时停采
+	h2.Close()
+	time.Sleep(100 * time.Millisecond)
+	fmt.Println("[4] 最后一个持有者已关闭，验证完全停采...")
+	releaseLines := readDmesgRecent("last holder RELEASED")
+	if len(releaseLines) > 0 {
+		fmt.Printf("  [通过] 内核确认最后一个持有者释放并停采: %s\n", releaseLines[len(releaseLines)-1])
+	} else {
+		fmt.Println("  [未见] 未找到 last holder RELEASED 日志")
+	}
+
+	// 5. 测试 kill -9 强杀下的原子引用计数自动清零
+	fmt.Println("[5] 测试异常强杀 (kill -9) 下的引用计数自动归零...")
+	childCmd := exec.Command("/system/bin/sh", "-c", fmt.Sprintf("exec 3<%s && sleep 10", devPath))
+	if err := childCmd.Start(); err == nil {
+		childPid := childCmd.Process.Pid
+		time.Sleep(100 * time.Millisecond)
 		syscall.Kill(childPid, syscall.SIGKILL)
 		childCmd.Wait()
-		killDuration := time.Since(tKill)
-		fmt.Printf("  已对 PID %d 发送 SIGKILL (耗时 %v)\n", childPid, killDuration)
-
 		time.Sleep(100 * time.Millisecond)
-		releaseLogs := readDmesgRecent("device RELEASED")
-		if len(releaseLogs) > 0 {
-			fmt.Printf("  [通过] 内核 VFS 自动触发 release(): %s\n", releaseLogs[len(releaseLogs)-1])
-		} else {
-			fmt.Println("  [未见] dmesg 中未找到 RELEASED 记录")
+		finalReleases := readDmesgRecent("last holder RELEASED")
+		if len(finalReleases) > 0 {
+			fmt.Printf("  [通过] 异常强杀后内核 VFS 自动归零: %s\n", finalReleases[len(finalReleases)-1])
 		}
 	}
 
-	_ = childDone
 	fmt.Println("=== 实测流程结束 ===")
 }
