@@ -500,6 +500,24 @@ E1–E3 纯函数解析）。只引用上面已记录的实测；没有测过的
   标记“继承”；继承的是 listener 创建者，对服务进程而言即发送者。
 - 原生子进程路径按 exe inode 按需走 /proc：与上表第 ① 项相同，赞同。
 
+**第三版补充核查**（`E:\0001.txt`，2026-10-04）：
+- “124 条 1051 是小米开启 `enforceDnsUid` 所致”：**未证实**。源码引用属实：`DnsProxyListener.cpp`
+  `isUidNetworkingBlocked()` 中“enforceDnsUid is an OEM feature … if
+  (resolv_is_enforceDnsUid_enabled_network(netId)) return false;”。但它与研究结论 28（真机见 App UID）
+  矛盾。当日在蜂窝网络（rmnet_data4）用 `dnsuid/` 复测：以 root 查询，netd 发出 2 个 UID 0 的包；以
+  GMS（10136，netpolicy `effective=NONE`）和 Chrome（10309，`APP_BACKGROUND` 被拦）查询，netd 一个包
+  都没发，ping 立即 unknown host。若开关开启，按上面源码拦截检查应被跳过、以 1051 发包，所以结果更像是
+  **未开启**；但生产 sing-box 正在接管 DNS（root 查询随机域名也“成功”），环境有干扰，**本次不作结论**。
+  定论需要停用生产服务、让 App 在前台查询后重测。即使开启，按用户要求路由也按发送者，DNS 请求方只用于诊断。
+- `BPF_F_CLONE` 的 TC 接受规则（cookie 不符但快照有效即视为“继承”并置标志）：可行。克隆只发生在
+  accept，生产者写入时 cookie 必等于自身，故 cookie 不符的有效快照只能来自克隆。
+- 免模块路线的 TCP 时序：**正确**。`tcp_v4_connect` 先 `tcp_set_state(sk, TCP_SYN_SENT)`
+  （`net/ipv4/tcp_ipv4.c`，函数内第 87 行），经 `inet_sk_state_store` 触发 `trace_inet_sock_set_state`
+  （`net/ipv4/af_inet.c:1365/1372`），之后才 `tcp_connect(sk)` 发 SYN（第 126 行），且在 connect 调用者
+  上下文。程序须只处理 `newstate == TCP_SYN_SENT`（其他转换多在软中断，`current` 无关）。UDP 仍是缺口：
+  `sock_send_length` 在首包过 TC 之后触发，需 TC 不再缓存“缺失”并在后续包补读，单包 UDP 流无法补齐。
+- 原生子进程路径、可选停止即停采：与已列后续项一致。
+
 可采纳的后续项（按收益/成本）：① UID 快路径为 App 原生子进程补可执行路径（用户态）；② 查明整服务验收中
 App DNS 请求方缺失的原因；③ 可选“停止即停采”开关；④ accept 子 socket 用 `BPF_F_CLONE` 继承；
 ⑤ 若用户希望去掉模块，先用独立探针评估 `inet_sock_set_state` + `sock_send_length` 的时序与覆盖。
