@@ -348,3 +348,52 @@ binder 仅适合诊断；DNS 仍需一次测量包 socket UID 的复测。落地
 4. binder 调用方仅作诊断，先验证“事务 ↔ socket”对应关系，不参与路由。
 
 开销一律以三态 `socket()` 对比或扣除时钟开销的分段计时实测。
+
+---
+
+# 第七次审查：对 Gemini 回应（`E:\work_sb\007.txt`）的意见（2026-10-04）
+
+本节只记录意见，不修改探针文件。
+
+## 当日核实的事实
+
+- 设备 BTF 中 `struct inode`：`i_ino` 位于 bit 512（第 64 字节），`i_generation` 位于 bit 992（第 124 字节），
+  相距 60 字节；`i_sb` 位于第 40 字节。f2fs 的 inode 嵌在 `f2fs_inode_info` 中，起始对齐不固定。
+- 设备内核 `CONFIG_PREEMPT=y`（可抢占）。
+- `include/linux/percpu-defs.h:291-295`：`#define get_cpu_ptr(var) ({ preempt_disable(); this_cpu_ptr(var); })`，
+  对应 `put_cpu_ptr` 在第 297 行执行 `preempt_enable()`；`Documentation/locking/locktypes.rst`：
+  非 PREEMPT_RT 内核上 local_lock 即关闭抢占的包装。
+
+## 认可
+
+1. 缓存键改为 `(dev, ino, generation)`：正确。读取 `i_generation` 开销很小；但“与 `i_ino` 天然同一 cache line”
+   不能保证（见上，相距 60 字节且对齐不固定），最坏多一次访存。
+2. 每 CPU 一份缓存：方向正确，可避免跨核锁争用。
+3. exe 信息作为 typed tracepoint 参数交给 BPF，BPF 不再重复读取：设计正确。
+
+## 分歧与更正
+
+1. **“Per-CPU 完全不使用任何锁”不成立，须关闭抢占。** 钩子运行在可抢占进程上下文（`CONFIG_PREEMPT=y`），
+   访问 Per-CPU 数据须经 `get_cpu_ptr()`（先 `preempt_disable()`）或 `local_lock`；否则任务读到一半被抢占、
+   同 CPU 另一任务改写同一槽位，恢复后读到撕裂数据。关闭抢占只需几纳秒，但“零锁”说法不对。未命中时的
+   `d_path` 应在关闭抢占的区间之外执行，仅写入槽位时关闭抢占。
+2. **“整段链路净减少约 1 µs”基准用错。** 现行 v2 只有 BPF 读一次指针链，模块不读；改为模块读、BPF 不读，
+   总开销基本不变（读取从 BPF 挪到模块）。仅当模块因门控本就需读该链时，才避免了“读两次”。
+   “不增加净开销”成立，“净减少 1 µs”不成立。
+3. **三态微基准数据不能支撑结论。** 未加载模块 18.331 µs、已加载停采 7.360 µs、采集中 17.074 µs：“未加载”
+   反比“停采”慢 2.5 倍，说明结果由调频与噪声主导；且“采集中”未加载 BPF producer，其开销不在测量范围内。
+   “无可感知损耗”的结论大体不错，但这组数字支撑不了。准确测法：三态多轮交替、绑定固定 CPU 核
+   （此前 `creator_v2_probe` 的 `sockbench-pinned` 已显示差别落在 1–2 µs 噪声内）。
+4. **“动态基线免疫 OverlayFS”未被证明。** `kern_path` 在调用者（加载模块或打开设备的进程）的挂载命名空间解析
+   路径；App 进程有各自的挂载命名空间，KSU/Zygisk 模块可能在其中对 `/system/bin` 叠加 overlay，此时 exe 可能是
+   另一设备号上的 inode，被误判为原生程序。后果只是该类 socket 走慢路径（路径仍为 app_process），本机未观察到，
+   但“免疫”不成立。
+5. **第三阶段仍写“诊断与策略增强”（第三次指出）。** 用户要求按发送者路由，binder 调用方不得进入路由策略；
+   “事务 ↔ socket”对应关系仍未验证。
+6. 架构图仍有“被动连接 100% 自动继承”“<200 ns 静默”等已更正或缺少依据的说法。
+
+## 结论与落地顺序
+
+本轮吸收了第六次审查的两条核心建议（缓存键、避免重复读取），设计已接近可开工。落地顺序沿用第六次审查版本，
+第 2 项补充：**Per-CPU 缓存在关闭抢占（`get_cpu_ptr`/`put_cpu_ptr` 或 `local_lock`）的区间内读写，`d_path`
+在区间之外执行**。binder 仅作诊断。
