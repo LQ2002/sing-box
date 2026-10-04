@@ -174,3 +174,72 @@ binder 仅适合诊断；DNS 仍需一次测量包 socket UID 的复测。落地
 4. binder 调用方作为诊断：BPF 挂标准 tracepoint，不进模块、不参与路由。
 
 每项先用探针在真机验证，再接入生产；测试前后记录 taint，做长时间运行测试。
+
+---
+
+# 第四次审查：对 Gemini 回应（`E:\work_sb\004.txt`）的意见（2026-10-04）
+
+用户坚持“全能模块、高效率、极致性能”方向，要求分歧处给出源码或网上依据。本节只记录意见，不修改探针文件。
+
+## 当日核实的事实
+
+- `BPF_F_CLONE` 的克隆路径（`net/core/bpf_sk_storage.c`）：`bpf_sk_storage_clone()` 由
+  `sk_clone_lock()` 调用（`net/core/sock.c:2485`）；对每个带 `BPF_F_CLONE` 的元素调用
+  `bpf_sk_storage_clone_elem()`，其中 `bpf_selem_alloc(smap, newsk, NULL, true, GFP_ATOMIC)`
+  分配新元素（第 140 行），值以 `copy_map_value()` 原样复制（第 148 行）；子 socket 首个元素还需
+  `bpf_local_storage_alloc(newsk, smap, copy_selem, GFP_ATOMIC)`（第 198 行），并 `bpf_selem_link_map()`
+  挂入 map 哈希桶（第 195 行）。
+- `TrafficStats`（已迁至 Connectivity 模块 `framework-t/src/android/net/TrafficStats.java`）：
+  `setThreadStatsUid` 的说明为“Set specific UID to use when accounting Socket traffic originating from
+  the current thread. Designed for use when performing an operation on behalf of another application”，
+  并注明只有持有 `UPDATE_DEVICE_STATS` 的调用方才能把流量记到其他 UID；没有任何“必须调用”的表述。
+
+## 认可
+
+1. **accept 继承改用 `BPF_F_CLONE`。** 在“极致性能”前提下，克隆由内核在 `sk_clone_lock()` 内完成，
+   省去 tracepoint 分发、BPF 程序执行与一次查表，比“钩子 → tracepoint → BPF”更轻。上一轮接受钩子方案
+   只是为避免改 TC；按用户的性能优先级，`BPF_F_CLONE` 更合适。需更正三处细节（见下）。
+2. **UDP 与 DNS 的实质结论**同第三次审查：DNS 已由 `dnsuid` 实测证实 App 明文 DNS 带 App UID。
+
+## 对 `BPF_F_CLONE` 方案细节的更正
+
+1. **不是“<10 纳秒、0 内存分配”。** 每次克隆以 `GFP_ATOMIC` 分配元素，子 socket 还分配一次存储并挂入
+   哈希桶（行号见上）。只是开销小于钩子方案。手机上被动接受的连接很少，两者在整机层面差别基本不可感知。
+2. **对方提议的 TC 条件永远不成立。** 值是原样复制的，子 socket 的快照不会出现
+   `SB_SOCKET_CREATOR_INHERITED` 标志，`creator->flags & SB_SOCKET_CREATOR_INHERITED` 恒为假。正确规则：
+   快照有效且“快照 cookie ≠ 当前 socket cookie”即判为继承（producer 写快照时总写自身 cookie，
+   不等只可能来自克隆），并在 assignment 中标记“继承”。
+3. **需要改的不止 TC。** 当前三处都明确拒绝 CLONE 标志，须一并放开：
+   - producer map：`common/socketidentity/bpf/creator.bpf.c` 只设 `BPF_F_NO_PREALLOC`；
+   - collector 校验：`common/socketidentity/identity.go` `loadSpec` 要求 `m.Flags == 1`；
+   - sing-ebpf 校验：`internal/core/socket_creator.go` `validateSocketCreatorMapInfo` 要求 flags 恰为
+     NO_PREALLOC（另有对应单元测试 `CLONE flag` 用例期望拒绝）。
+   放开后应同时验证：克隆值的 cookie 与子 socket 不同、TC 按上述规则接受，producer 自身写入不受影响。
+
+## 仍不同意及依据
+
+1. **“AOSP 规范要求异步代发必须调用 `setThreadStatsTagUid`”不成立。** 见上引 `TrafficStats` 原文：可选的
+   计费接口，且跨 UID 记账需 `UPDATE_DEVICE_STATS`。主动调用的组件（如 DownloadManager）可覆盖，未调用的
+   覆盖不到，“双保险 / 完整闭环”只能算部分覆盖。
+2. **binder 字段仍不应在模块里读。** 本轮未回应第三次审查的依据：模块读 `t->sender_euid` 依赖编译时结构体
+   布局，不在 CRC 保护范围内；binder 编进内核、类型在 vmlinux BTF 中，用 BPF 挂标准 tracepoint
+   `binder_transaction_received` 以 CO-RE 读取更安全且无需模块。用户按发送者路由，此信息只作诊断，
+   对性能与路由无影响。
+3. **架构图里的“全能模块”名不副实。** 第 2 项（`BPF_F_CLONE`）是 BPF map 标志，第 3 项（UDP 首包覆盖）
+   是现行 v2 桥接已有能力，都不是模块新增功能。“<0.3 ns 静默”“Java 快速比对 <2 µs”仍无实测数据。
+
+## 落地顺序（按“全能模块 + 极致性能”方向，替代第三次审查的顺序）
+
+1. **accept 继承：`BPF_F_CLONE`。** producer map 加 `BPF_F_CLONE`；collector 与 sing-ebpf 校验放开该标志；
+   TC 规则改为“快照有效且 cookie 不等即为继承”，assignment 中标记继承；用户态把继承快照视为监听进程
+   （服务端，即发送者）。
+2. **模块在创建现场取可执行路径**：仅对 `(s_dev, i_ino)` 不同于 app_process 的原生程序执行
+   `get_file_rcu` + `d_path` + `fput`，路径或其哈希与长度经 typed tracepoint 参数交给 BPF 写入快照，
+   用户态不再读 /proc。
+3. **字符设备生命周期开关**：设备 0600、按持有者原子计数、最后一个持有者关闭即停采；作为可选配置，
+   默认保持 pin 持久化以覆盖重启窗口。
+4. **binder 调用方作为诊断**：BPF 挂标准 tracepoint `binder_transaction_received`，以 CO-RE 读取发送方，
+   不进模块、不参与路由。
+
+每项先用探针在真机验证，再接入生产；测试前后记录 taint，做长时间运行与分段开销测量（含
+“停采后开销”“原生程序取路径开销”的实测，而非估算）。
