@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Enhanced kernel module feasibility probe.
+/* All-in-One Enhanced Kernel Module Feasibility Probe.
  * Demonstrates:
  * 1. Safe RCU fast-path bypass for app_process (<20 ns);
- * 2. get_mm_exe_file() + d_path() + fput() safe extraction for native children;
+ * 2. get_file_rcu() + d_path() + fput() safe extraction for native children;
  * 3. Dynamic baseline dev/ino resolution (OverlayFS safe);
- * 4. Miscdevice with mode 0600 and atomic refcounted lifecycle.
+ * 4. Miscdevice mode 0600 with atomic refcounted lifecycle;
+ * 5. TCP accept child socket clone hook (android_vh_inet_csk_clone_lock);
+ * 6. Binder IPC caller attribution hook (android_vh_binder_transaction_received).
  */
 #include <linux/init.h>
 #include <linux/module.h>
@@ -19,10 +21,19 @@
 #include <linux/ktime.h>
 #include <linux/uaccess.h>
 #include <linux/tracepoint.h>
+#include <net/sock.h>
 
 struct sockaddr;
 struct sk_buff;
+struct request_sock;
 #include <trace/hooks/net.h>
+
+/* Binder structures and hook headers */
+struct binder_proc;
+struct binder_thread;
+struct binder_transaction;
+#include "binder_internal.h"
+#include <trace/hooks/binder.h>
 
 MODULE_DESCRIPTION("SBO All-in-One Enhanced Module Feasibility Probe");
 MODULE_LICENSE("GPL");
@@ -31,10 +42,13 @@ static bool is_active;
 static atomic_t open_count = ATOMIC_INIT(0);
 static atomic_t fast_sample_count = ATOMIC_INIT(0);
 static atomic_t slow_sample_count = ATOMIC_INIT(0);
+static atomic_t clone_sample_count = ATOMIC_INIT(0);
+static atomic_t binder_sample_count = ATOMIC_INIT(0);
 
 static dev_t app_process_dev;
 static unsigned long app_process_ino;
 
+/* 1. Socket Creation Hook */
 static void on_socket_create(void *unused, struct sock *sk)
 {
 	u64 t0, t1;
@@ -79,7 +93,6 @@ static void on_socket_create(void *unused, struct sock *sk)
 		u64 t_slow_0, t_slow_1;
 
 		t_slow_0 = ktime_get_ns();
-		/* get_file_rcu() safely increments refcount under RCU, avoiding UAF on concurrent execve */
 		rcu_read_lock();
 		exe = get_file_rcu(&current->mm->exe_file);
 		rcu_read_unlock();
@@ -101,12 +114,41 @@ static void on_socket_create(void *unused, struct sock *sk)
 	}
 }
 
+/* 2. TCP Accept Child Socket Clone Hook */
+static void on_inet_csk_clone(void *unused, struct sock *newsk, const struct request_sock *req)
+{
+	if (!READ_ONCE(is_active))
+		return;
+
+	if (newsk && atomic_inc_return(&clone_sample_count) <= 5) {
+		pr_info("sbo_enh_probe [TCP_ACCEPT_CLONE]: newsk=%px family=%d state=%d\n",
+			newsk, newsk->sk_family, newsk->sk_state);
+	}
+}
+
+/* 3. Binder IPC Caller Attribution Hook */
+static void on_binder_received(void *unused, struct binder_transaction *t,
+			       struct binder_proc *proc, struct binder_thread *thread, uint32_t cmd)
+{
+	if (!READ_ONCE(is_active))
+		return;
+
+	if (t && atomic_inc_return(&binder_sample_count) <= 5) {
+		uid_t client_uid = from_kuid(&init_user_ns, t->sender_euid);
+		pr_info("sbo_enh_probe [BINDER_TRANSACTION]: receiver_pid=%d receiver_comm=%s client_uid=%u client_pid=%d\n",
+			current->pid, current->comm, client_uid, t->from_pid);
+	}
+}
+
+/* 4. Misc Device Lifecycle Management (Mode 0600 + Atomic Refcount) */
 static int probe_open(struct inode *inode, struct file *file)
 {
 	int count = atomic_inc_return(&open_count);
 	if (count == 1) {
 		atomic_set(&fast_sample_count, 0);
 		atomic_set(&slow_sample_count, 0);
+		atomic_set(&clone_sample_count, 0);
+		atomic_set(&binder_sample_count, 0);
 		WRITE_ONCE(is_active, true);
 		pr_info("sbo_enh_probe: first holder OPENED (holders=%d), is_active set to TRUE\n", count);
 	} else {
@@ -144,6 +186,8 @@ static int __init probe_init(void)
 {
 	int err;
 	struct path p;
+
+	/* Dynamic baseline resolution: read real app_process64 dev & ino via kern_path */
 	if (kern_path("/system/bin/app_process64", LOOKUP_FOLLOW, &p) == 0) {
 		if (p.dentry && d_inode(p.dentry) && d_inode(p.dentry)->i_sb) {
 			app_process_dev = d_inode(p.dentry)->i_sb->s_dev;
@@ -162,24 +206,47 @@ static int __init probe_init(void)
 		return err;
 	}
 
+	/* Register 1: Socket creation hook */
 	err = register_trace_android_vh_sock_create(on_socket_create, NULL);
 	if (err) {
-		pr_err("sbo_enh_probe: failed to register vendor hook: %d\n", err);
+		pr_err("sbo_enh_probe: failed to register sock_create hook: %d\n", err);
 		misc_deregister(&probe_misc);
 		return err;
 	}
 
-	pr_info("sbo_enh_probe: module loaded successfully (/dev/%s mode 0600)\n", probe_misc.name);
+	/* Register 2: TCP accept child socket clone hook */
+	err = register_trace_android_vh_inet_csk_clone_lock(on_inet_csk_clone, NULL);
+	if (err) {
+		pr_err("sbo_enh_probe: failed to register inet_csk_clone hook: %d\n", err);
+		unregister_trace_android_vh_sock_create(on_socket_create, NULL);
+		misc_deregister(&probe_misc);
+		return err;
+	}
+
+	/* Register 3: Binder IPC caller attribution hook */
+	err = register_trace_android_vh_binder_transaction_received(on_binder_received, NULL);
+	if (err) {
+		pr_err("sbo_enh_probe: failed to register binder hook: %d\n", err);
+		unregister_trace_android_vh_inet_csk_clone_lock(on_inet_csk_clone, NULL);
+		unregister_trace_android_vh_sock_create(on_socket_create, NULL);
+		misc_deregister(&probe_misc);
+		return err;
+	}
+
+	pr_info("sbo_enh_probe: All-in-One module loaded successfully (/dev/%s mode 0600, 3 hooks active)\n",
+		probe_misc.name);
 	return 0;
 }
 
 static void __exit probe_exit(void)
 {
 	WRITE_ONCE(is_active, false);
+	unregister_trace_android_vh_binder_transaction_received(on_binder_received, NULL);
+	unregister_trace_android_vh_inet_csk_clone_lock(on_inet_csk_clone, NULL);
 	unregister_trace_android_vh_sock_create(on_socket_create, NULL);
 	tracepoint_synchronize_unregister();
 	misc_deregister(&probe_misc);
-	pr_info("sbo_enh_probe: module unloaded\n");
+	pr_info("sbo_enh_probe: module unloaded successfully\n");
 }
 
 module_init(probe_init);

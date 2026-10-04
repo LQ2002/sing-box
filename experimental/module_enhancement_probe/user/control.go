@@ -81,7 +81,7 @@ func main() {
 	fmt.Println("  持有者 1 已关闭，持有者 2 仍在运行 (验证未被过早停采)")
 
 	// 3. 测试现场 d_path 与两阶段门控开销
-	fmt.Println("[3] 触发原生二进制 socket 创建 (慢路径: get_mm_exe_file + d_path + fput)...")
+	fmt.Println("[3] 触发原生二进制 socket 创建 (慢路径: get_file_rcu + d_path + fput)...")
 	for i := 0; i < 3; i++ {
 		conn, err := net.Dial("udp", "127.0.0.1:23456")
 		if err == nil {
@@ -90,11 +90,33 @@ func main() {
 		time.Sleep(20 * time.Millisecond)
 	}
 
+	// 3.1 测试 TCP Accept 现场克隆 (android_vh_inet_csk_clone_lock)
+	fmt.Println("[3.1] 触发 TCP Listen + Connect + Accept，测试子 socket 现场克隆钩子...")
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err == nil {
+		go func() {
+			c, err := net.Dial("tcp", tcpLn.Addr().String())
+			if err == nil {
+				c.Close()
+			}
+		}()
+		acceptedConn, err := tcpLn.Accept()
+		if err == nil {
+			acceptedConn.Close()
+		}
+		tcpLn.Close()
+	}
+
+	// 3.2 测试 Binder IPC 调用方穿透 (android_vh_binder_transaction_received)
+	fmt.Println("[3.2] 触发 Binder IPC 交互，测试服务端接收事务与客户端 UID 捕获...")
+	_ = exec.Command("/system/bin/getprop", "ro.build.version.release").Run()
+
 	time.Sleep(100 * time.Millisecond)
-	fmt.Println("--- 内核实测日志 (两阶段门控与绝对路径) ---")
+	fmt.Println("--- 内核实测日志 (两阶段门控、TCP克隆、Binder穿透) ---")
 	dmesgLines := readDmesgRecent("sbo_enh_probe")
 	for _, line := range dmesgLines {
-		if strings.Contains(line, "FAST_BYPASS") || strings.Contains(line, "NATIVE_CHILD") {
+		if strings.Contains(line, "FAST_BYPASS") || strings.Contains(line, "NATIVE_CHILD") ||
+			strings.Contains(line, "TCP_ACCEPT_CLONE") || strings.Contains(line, "BINDER_TRANSACTION") {
 			fmt.Println("  ", line)
 		}
 	}
