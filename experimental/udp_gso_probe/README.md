@@ -174,3 +174,29 @@ WiFi.
   47-53 MB during downloads, so this may be noise, but it is consistent
   across both B blocks and must be measured properly (repeated samples, heap
   profile) before B goes into the daily build.
+
+## Memory, measured properly (2026-10-05, results/mem-20261005, results/mem2-20261005)
+
+The soak's single RSS sample per block overstated B by ~18 MB. Re-measured
+with A B A B, 5 min each, the soak's load, RSS every 5 s, Go heap stats every
+30 s and an inuse heap profile per block (pprof enabled in the config for the
+test only):
+
+| build | mean RSS (t >= 60 s) | mean HeapInuse |
+|---|---|---|
+| run 1, A | 54.7 / 54.7 MB | 13.6 / 14.6 MB |
+| run 1, B limit 64 (`c56f897eb`) | 57.9 / 54.4 MB | 17.1 / 16.8 MB |
+| run 2, A | 51.5 / 51.6 MB | 13.2 / 13.5 MB |
+| run 2, B limit 16 (`42b961696`) | 52.4 / 54.5 MB | 14.8 / 14.6 MB |
+
+- `go tool pprof -diff_base` B vs A: +2.6 MB in both run-1 B blocks, all in
+  sing's buffer pool class `buf.newDefaultAllocator.func10`, i.e. buffers the
+  reader had already taken while the writer was busy. Lowering the queue
+  limit to 16 halved the heap difference (+2.9 -> +1.4 MB). RSS differences
+  of 1-3 MB are within the run-to-run spread of A itself (54.7 vs 51.5).
+- Saturated A/B with limit 16 (looping HTTP/3 downloads, 30 s windows): the
+  network was poor for A (26 and 46 Mbit/s, one failed download each) and
+  normal for B (74-77 Mbit/s, none failed); per 100 Mbit/s B used 61/48% of a
+  core against A's 90/82% and less softirq. Fixed per-connection costs inflate
+  the A figures at low throughput, so this run only shows B is not worse; the
+  clean limit-64 run (-19% CPU, -30% softirq) remains the magnitude estimate.
