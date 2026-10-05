@@ -43,7 +43,7 @@ func (i *Inbound) newTCConnection(
 	metadata.InboundType = i.Type()
 	metadata.Source = M.SocksaddrFromNetIP(source)
 	metadata.Destination = M.SocksaddrFromNetIP(destination)
-	metadata.ProcessInfo = i.lookupProcessInfo(ctx, assignment.SocketCookie)
+	metadata.ProcessInfo = i.ownerFromIdentity(ctx, identityFromAssignment(assignment))
 	if assignment.Path == commonEBPF.TCPathShared && assignment.SourceMACValid != 0 {
 		metadata.SourceMACAddress = net.HardwareAddr(assignment.SourceMAC[:])
 	}
@@ -90,7 +90,8 @@ func (i *Inbound) newTCPacket(
 		SocketCookie:   assignment.SocketCookie,
 		InterfaceIndex: assignment.InterfaceIndex,
 	}
-	i.udpClientTable.setDirectBinding(key, destination, sourceMAC, assignment.SocketCookie)
+	identity := identityFromAssignment(assignment)
+	i.udpClientTable.setDirectBindingWithIdentity(key, destination, sourceMAC, identity)
 	if takeOwnership {
 		i.udpNat.NewPacketBuffer(key, buffer, source, M.SocksaddrFromNetIP(destination), nil)
 		return true
@@ -101,22 +102,19 @@ func (i *Inbound) newTCPacket(
 
 // lookupProcessInfo 把 socket cookie 解析成路由规则可用的归属信息。
 //
-// 这里不走上游的 i.processInfoCache，解析改由 socket_owner_resolve.go 承担，
-// 原因有两条，都在那个文件里有详述：
-//
-//   - 上游的缓存键是 (PID, UID)。PID 会回绕复用，只有把创建者进程的
-//     start_boottime 一起纳入键才能唯一确定一个进程实例；内核模块来源正好能
-//     提供这个字段。
-//   - 上游最终调用 process.FindProcessInfoByPID()，它按 UID 无条件填一整组
-//     共享 UID 的包名，在 Android 上会让 package_name 规则误匹配到守护进程。
+// socket_owner_resolve.go 使用 (PID, UID, start_boottime) 缓存经核对的 procfs
+// 信息，并逐次核对包管理器中的唯一包归属。未知结果也必须显式返回，避免路由器
+// 再走通用查询，把共享 UID 的候选包名重新带回来。
 func (i *Inbound) lookupProcessInfo(ctx context.Context, socketCookie uint64) *adapter.ConnectionOwner {
 	if socketCookie == 0 || i.processTracker == nil {
-		return nil
+		return &adapter.ConnectionOwner{UserId: -1}
 	}
 	owner, err := i.processTracker.LookupSocketOwner(socketCookie)
 	if err != nil {
 		i.logger.Trace("lookup eBPF socket process owner: ", err)
-		return nil
+		// nil would allow Router.searchProcessInfo to reintroduce the generic
+		// shared-UID package candidates after this authoritative source missed.
+		return &adapter.ConnectionOwner{UserId: -1}
 	}
 	return i.resolveSocketOwner(ctx, owner)
 }

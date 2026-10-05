@@ -6,9 +6,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/sagernet/sing-box/common/androidpackages"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-tun"
 	E "github.com/sagernet/sing/common/exceptions"
+	"github.com/sagernet/sing/common/logger"
 	"github.com/sagernet/sing/common/ranges"
 )
 
@@ -18,6 +20,17 @@ type androidUIDOptions struct {
 	includeAndroidUser []int
 	includePackage     []string
 	excludePackage     []string
+
+	// The numeric include/exclude UID ranges exactly as configured, before
+	// package names were expanded into them. resolveAndroidUIDPolicy
+	// overwrites localPolicy with the expanded result, so without this copy a
+	// second resolution would start from already-expanded UIDs and keep the
+	// UIDs of uninstalled packages forever. Captured on first resolution;
+	// stage 2 of ANDROID_ATTRIBUTION_PLAN.md recompiles from it when the
+	// package table changes.
+	configuredIncludeUID []uidRange
+	configuredExcludeUID []uidRange
+	configuredCaptured   bool
 }
 
 func newAndroidUIDOptions(options option.EBPFLocalOptions) *androidUIDOptions {
@@ -36,21 +49,40 @@ func (i *Inbound) resolveAndroidUIDPolicy() error {
 	if (len(i.androidUIDOptions.includePackage) > 0 || len(i.androidUIDOptions.excludePackage) > 0) && packageManager == nil {
 		return E.New("Android package manager is unavailable")
 	}
+	if !i.androidUIDOptions.configuredCaptured {
+		i.androidUIDOptions.configuredIncludeUID = slices.Clone(i.localPolicy.IncludeUID)
+		i.androidUIDOptions.configuredExcludeUID = slices.Clone(i.localPolicy.ExcludeUID)
+		i.androidUIDOptions.configuredCaptured = true
+	}
+	// One table for the whole resolution, so a publish in the middle cannot
+	// mix two package tables (androidpackages.View).
+	if snapshotter, loaded := packageManager.(interface{ Snapshot() androidpackages.View }); loaded {
+		packageManager = snapshotter.Snapshot()
+	}
 	warnSharedUID := make(map[uint32]struct{})
 	i.inspectAndroidPackages(packageManager, "include", i.androidUIDOptions.includePackage, warnSharedUID)
 	i.inspectAndroidPackages(packageManager, "exclude", i.androidUIDOptions.excludePackage, warnSharedUID)
+	i.localPolicy.IncludeUID, i.localPolicy.ExcludeUID = resolveAndroidUIDRanges(i.androidUIDOptions, packageManager, i.logger)
+	return nil
+}
+
+// resolveAndroidUIDRanges is the pure part of the Android UID policy: the
+// configured numeric UIDs, users and package names, resolved against one
+// package table. Startup and the package-change updater (android_uid_update.go)
+// both call it, so the rules applied after an install are exactly the rules a
+// restart would produce. logger receives sing-tun's per-package debug lines;
+// the updater passes nil to keep package churn out of the log.
+func resolveAndroidUIDRanges(options *androidUIDOptions, packageManager tun.PackageManager, logger logger.Logger) (include, exclude []uidRange) {
 	tunOptions := tun.Options{
-		IncludeUID:         toTunUIDRanges(i.localPolicy.IncludeUID),
-		ExcludeUID:         toTunUIDRanges(i.localPolicy.ExcludeUID),
-		IncludeAndroidUser: slices.Clone(i.androidUIDOptions.includeAndroidUser),
-		IncludePackage:     slices.Clone(i.androidUIDOptions.includePackage),
-		ExcludePackage:     slices.Clone(i.androidUIDOptions.excludePackage),
-		Logger:             i.logger,
+		IncludeUID:         toTunUIDRanges(options.configuredIncludeUID),
+		ExcludeUID:         toTunUIDRanges(options.configuredExcludeUID),
+		IncludeAndroidUser: slices.Clone(options.includeAndroidUser),
+		IncludePackage:     slices.Clone(options.includePackage),
+		ExcludePackage:     slices.Clone(options.excludePackage),
+		Logger:             logger,
 	}
 	tunOptions.BuildAndroidRules(packageManager)
-	i.localPolicy.IncludeUID = fromTunUIDRanges(tunOptions.IncludeUID)
-	i.localPolicy.ExcludeUID = fromTunUIDRanges(tunOptions.ExcludeUID)
-	return nil
+	return fromTunUIDRanges(tunOptions.IncludeUID), fromTunUIDRanges(tunOptions.ExcludeUID)
 }
 
 func (i *Inbound) inspectAndroidPackages(packageManager tun.PackageManager, mode string, packageNames []string, warnedSharedUID map[uint32]struct{}) {
@@ -60,10 +92,15 @@ func (i *Inbound) inspectAndroidPackages(packageManager tun.PackageManager, mode
 			packageID, loaded = packageManager.IDByPackage(packageName)
 		}
 		if !loaded {
-			i.logger.Warn(
-				mode, "_package not found at startup: ", packageName,
-				"; restart sing-box after the package is installed or its UID changes",
-			)
+			if i.localTCEnabled() {
+				// android_uid_update.go applies it once the package appears.
+				i.logger.Info(mode, "_package not installed yet: ", packageName, "; the rule applies when it is installed")
+			} else {
+				i.logger.Warn(
+					mode, "_package not found at startup: ", packageName,
+					"; restart sing-box after the package is installed or its UID changes",
+				)
+			}
 			continue
 		}
 		if _, warned := warnedSharedUID[packageID]; warned {

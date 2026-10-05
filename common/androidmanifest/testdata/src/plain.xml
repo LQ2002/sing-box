@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="p.plain">
+  <application android:process=":main">
+    <activity android:name=".A" />
+    <service android:name=".S" android:process="global.proc" />
+    <provider android:name=".P" android:authorities="p.plain.p" android:process=":prov" />
+    <receiver android:name=".R" android:process="system" />
+  </application>
+</manifest>

@@ -203,6 +203,14 @@ type EBPFDiagnostics struct {
 	UDPReplySockets udpReplySocketPoolSnapshot `json:"udp_reply_sockets"`
 
 	Counters EBPFCounters `json:"counters"`
+
+	// AndroidUIDPolicy is present when include_package/exclude_package rules
+	// follow the package table (android_uid_update.go).
+	AndroidUIDPolicy *AndroidUIDPolicyDiagnostics `json:"android_uid_policy,omitempty"`
+
+	// Attribution is present when the TC program records socket identity
+	// (socket_identity.go).
+	Attribution *AttributionDiagnostics `json:"attribution,omitempty"`
 }
 
 type udpReleasePathDiagnostics interface {
@@ -539,6 +547,8 @@ func (i *Inbound) Diagnostics() EBPFDiagnostics {
 			diagnostics.LocalSelfBypassMode = i.selfBypass.Mode().String()
 			diagnostics.LocalSelfBypassCleanupMode = i.selfBypass.CleanupMode()
 		}
+		diagnostics.AndroidUIDPolicy = i.androidUIDPolicyDiagnostics()
+		diagnostics.Attribution = i.attributionDiagnostics()
 	}
 	if backend := i.cgroupBackendInstance(); backend != nil && !backend.IsClosed() {
 		diagnostics.LocalCgroupAttachMode = backend.AttachMode()

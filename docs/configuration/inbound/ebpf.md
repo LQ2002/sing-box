@@ -114,6 +114,66 @@ prefers multi-program attachment and falls back to legacy exclusive attachment
 only for compatible errors. Use local `tc` if the device cannot safely share
 the root cgroup hook.
 
+### local.socket_creator
+
+Optional socket-creation collector, disabled by default. Requires arm64 and
+`local.data_plane=tc`, without a platform-provided process finder. The creation
+hook, persistent collector and existing TC programs have passed isolated tests
+on the target Android kernel. Real-app coverage, full-service rollout and
+performance comparisons remain pending; existing package attribution rules
+remain in use.
+
+```json
+{
+  "local": {
+    "enabled": true,
+    "data_plane": "tc",
+    "socket_creator": {
+      "enabled": true,
+      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v3"
+    }
+  }
+}
+```
+
+`pin_path` defaults to the value shown and must be an absolute, dedicated bpffs
+directory owned by root with mode `0700`. Its ancestors must be root-owned;
+writable ancestors must have the sticky bit, as Android's usual `01777` bpffs
+mount does. Symlinks are rejected. An administrator must first load a matching `sbo_identity`
+kernel module (`kernel/sbo_identity`) with `capture_all=1`. sing-box neither loads the
+module nor changes its switch. Sockets whose creator is the process its Android cgroup
+(`.../uid_X/pid_<pid>`) is named after get no record: the socket's cgroup, which TC
+records, identifies the process and its name and executable come from `/proc`. For
+every other socket the collector records the creation PID, thread ID, creator UID,
+process birth time, truncated comm, an argv[0] hash and the executable path resolved
+in the kernel at creation, then delivers them through the existing TC path; the path
+survives the creator's exit. Socket accounting UID and comm are not proof of an exact
+package.
+
+An explicitly enabled collector failing to load prevents the inbound from
+starting. Sockets without creation records, including older sockets and accepted
+children, retain the existing attribution fallback. Diagnostics count valid
+snapshots (`creator_snapshots`), missing or invalid snapshots
+(`creator_snapshot_missing`, `creator_snapshot_invalid`), and actual legacy
+queries (`creator_cookie_fallbacks`). Ordinary apps do not incur additional
+per-connection `/proc` reads.
+
+Normal shutdown keeps the creation attachment and storage, so sockets created
+while sing-box is stopped can still be recorded. Forwarding TC and routes retain
+their normal cleanup. Restart validates persistent object versions and layouts;
+it refuses to overwrite incompatible objects. Disabling this configuration does
+not remove a previously pinned collector. To remove it, stop every sing-box
+instance using the directory, then run:
+
+```shell
+sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v3
+```
+
+This command does not unload the bridge module. Removal refuses active users.
+For an incompatible upgrade, remove the old collector with the old executable
+before starting the new version. Removal loses existing socket snapshots, which
+cannot be reconstructed after creation.
+
 ### local.dns_mode
 
 | Value | Behavior for destination port 53 |
@@ -299,6 +359,25 @@ interception. DNS mode and local UID/shared source selection run before port,
 private-address, and the path-specific rule-set bypass. Path-specific rule-set
 policies remain independent. Shared CIDR and MAC includes are OR'ed;
 any matching exclude selector takes precedence.
+
+## Android connection attribution
+
+Local connections use the socket cookie to look up the creator's PID, UID, and
+process start time. A routing `package_name` is populated only when procfs
+start time, UID, and executable checks pass and the package manager maps an
+ordinary application UID to exactly one package without a declared shared UID.
+
+Neither `cmdline`, `comm`, nor a process-start package establishes the package
+behind each connection. Package identity stays unknown for shared, isolated,
+SDK-sandbox, and system UIDs, or when records are missing or validation fails.
+Those connections do not match package rules. A socket lookup miss also does
+not fall back to a generic lookup that lists candidate packages by UID.
+Available UID metadata still supports `user_id` rules; native processes retain
+their verified executable paths.
+
+This differs from `local.include_package` / `local.exclude_package`, which
+still resolve packages to UIDs and apply interception policy to all traffic
+with those UIDs. Downstream device traffic has no local Android package owner.
 
 ## Diagnostics
 

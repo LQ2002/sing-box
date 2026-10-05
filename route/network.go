@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/androidpackages"
 	"github.com/sagernet/sing-box/common/settings"
 	"github.com/sagernet/sing-box/common/taskmonitor"
 	C "github.com/sagernet/sing-box/constant"
@@ -185,16 +186,16 @@ func (r *NetworkManager) Start(stage adapter.StartStage, scope *adapter.Scope) e
 	case adapter.StartStateStart:
 		if C.IsAndroid && r.platformInterface == nil {
 			monitor.Start("initialize package manager")
-			packageManager, err := tun.NewPackageManager(tun.PackageManagerOptions{
+			// Local replacement for tun.NewPackageManager, whose packages.xml
+			// watcher stops after Android's first rewrite; see
+			// common/androidpackages.
+			packageManager := androidpackages.New(androidpackages.Options{
 				Callback: r,
 				Logger:   r.logger,
 			})
 			monitor.Finish()
-			if err != nil {
-				return E.Cause(err, "create package manager")
-			}
 			monitor.Start("start package manager")
-			err = packageManager.Start()
+			err := packageManager.Start()
 			monitor.Finish()
 			if err != nil {
 				r.logger.Warn("initialize package manager: ", err)

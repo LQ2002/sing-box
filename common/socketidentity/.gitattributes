@@ -1,0 +1,6 @@
+*.sh text eol=lf
+# clang embeds each source file's MD5 in DWARF 5 line tables, so CRLF and LF
+# checkouts of the same C source build objects with different SHA-256. The
+# collector pins the embedded object's SHA, so the sources must stay LF.
+*.c text eol=lf
+*.h text eol=lf
