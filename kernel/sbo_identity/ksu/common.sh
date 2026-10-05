@@ -50,8 +50,12 @@ stats_summary() {
 collector_active() { [ -n "$(ls -A $PINS 2>/dev/null)" ]; }
 singbox_running() { [ -n "$(pidof sing-box 2>/dev/null)" ]; }
 
+# describe_loaded [stats]: right after insmod the counters are all zero, so
+# they are shown only when asked (the Action button refreshes them).
 describe_loaded() {
-    set_description "✅ 已加载（$(date '+%m-%d %H:%M')）· 内核与 BTF 校验通过 · $(stats_summary) · 点「动作」可卸载"
+    counts=""
+    [ "$1" = stats ] && counts=" · $(stats_summary)"
+    set_description "✅ 已加载（$(date '+%m-%d %H:%M')）· 内核与 BTF 校验通过$counts · 点「动作」可卸载"
 }
 
 # check_kernel: returns 0 when the running kernel matches the build; on

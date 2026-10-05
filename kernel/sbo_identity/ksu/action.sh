@@ -19,7 +19,7 @@ if loaded; then
     if singbox_running && collector_active; then
         echo "sing-box 正在使用本模块（socket_creator），已取消卸载。"
         echo "请先停止 sing-box，再点「动作」卸载。"
-        describe_loaded
+        describe_loaded stats
         exit 0
     fi
     echo "正在卸载…"
@@ -30,7 +30,7 @@ if loaded; then
     else
         log "action unload failed: $reason"
         echo "✘ 卸载失败：$reason"
-        if loaded; then describe_loaded; fi
+        if loaded; then describe_loaded stats; fi
     fi
     exit 0
 fi
