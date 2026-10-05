@@ -114,3 +114,32 @@ probe's per-datagram costs, batching them would take the write-back from
 CPU. At light load (video, ~500 datagrams/s, see 6dc97eda) the absolute
 saving is negligible but the batcher adds no latency if it never waits for
 more datagrams.
+
+## Device A/B of the batcher (2026-10-05)
+
+Ref_sing-box `c56f897eb` (branch `claude/udp-downlink-batching`,
+`udp_downlink_batcher.go`) against the daily build, interleaved A B A B,
+30 s windows. Load: Ref_sing-box `experimental/h3probe` looping HTTP/3
+downloads of a 9 MB file from dl.google.com through the daily config
+(Chrome falls back to TCP for a while after every sing-box restart, so it
+cannot drive an A/B). Per 100 Mbit/s of wlan0 receive:
+
+| window | Mbit/s | sing-box CPU | system softirq | udp_out/s | downloads |
+|---|---|---|---|---|---|
+| A round 1 | 85.8 | 38.7% | 16.8% | 11 766 | 35 ok |
+| B round 1 | 89.9 | 27.1% | 10.6% | 2 028 | 37 ok |
+| A round 2 | 88.0 | 36.1% | 15.9% | 12 069 | 36 ok |
+| B round 2 | 78.7 | 33.4% | 12.4% | 2 057 | 30 ok, 1 failed |
+
+- sing-box CPU per 100 Mbit/s: 37.4% -> 30.3% (-19%); system softirq
+  16.4% -> 11.5% (-30%); together -22%.
+- `Udp OutDatagrams` fell ~5.8x: GSO sends count once per batch, so the
+  average batch was ~6 datagrams, smaller than the run lengths measured with
+  the timing probe (the drain keeps up, so the queue rarely gets deep).
+- Throughput is the proxy server's limit in both builds. Single HTTP/3
+  downloads before the A/B: A 82-87 Mbit/s, B 91-97 Mbit/s; google.com,
+  youtube.com and cloudflare-quic.com load over HTTP/3 on both.
+- One B download in 68 failed (0 of 71 on A). Not reproduced or explained
+  yet; a longer run is needed before calling it noise.
+- The earlier estimate (-25% to -33% for sing-box) was optimistic because it
+  assumed batches near the measured run lengths.
