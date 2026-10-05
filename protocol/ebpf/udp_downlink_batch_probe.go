@@ -35,7 +35,11 @@ import (
 var downlinkGapBoundsUs = [...]int64{2, 5, 10, 20, 30, 50, 100, 1000}
 
 type downlinkBatchStats struct {
-	access    sync.Mutex
+	access sync.Mutex
+	downlinkCounters
+}
+
+type downlinkCounters struct {
 	packets   uint64
 	batchCall uint64
 	gaps      [len(downlinkGapBoundsUs) + 1]uint64
@@ -137,10 +141,8 @@ func maybeLogDownlinkStats(w *tcPacketWriter) {
 	}
 	stats := &downlinkStats
 	stats.access.Lock()
-	snapshot := *stats //nolint:govet // copied under the lock for formatting
-	stats.packets, stats.batchCall, stats.pairs, stats.gsoPairs = 0, 0, 0, 0
-	stats.gaps = [len(downlinkGapBoundsUs) + 1]uint64{}
-	stats.runPackets = [2][8]uint64{}
+	snapshot := stats.downlinkCounters
+	stats.downlinkCounters = downlinkCounters{}
 	stats.access.Unlock()
 	if snapshot.packets == 0 {
 		return
