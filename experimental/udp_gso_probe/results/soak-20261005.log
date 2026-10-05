@@ -1,0 +1,53 @@
+11:54:37 soak start, waiting 600s; A=1.14.2-c71e88dba-strict-attribution B=1.15.0-alpha.9-c56f897eb-udpbatch
+12:04:46 running 1.14.2-c71e88dba-strict-attribution pid=13185
+12:04:48 A-1 big net=rmnet_data3 rate=48.3 Mbit/s
+12:05:47 A-1 big net=rmnet_data3 rate=57.4 Mbit/s
+12:06:49 A-1 big net=rmnet_data3 rate=47.8 Mbit/s
+12:07:53 A-1 big net=rmnet_data3 rate=14.0 Mbit/s
+12:08:50 A-1 big net=rmnet_data3 rate=32.0 Mbit/s
+12:09:52 A-1 big net=rmnet_data3 rate=33.4 Mbit/s
+12:10:54 A-1 big net=rmnet_data3 rate=22.0 Mbit/s
+12:11:55 A-1 big net=rmnet_data3 rate=38.8 Mbit/s
+12:12:55 A-1 big net=rmnet_data3 rate=48.1 Mbit/s
+12:13:56 A-1 big net=rmnet_data3 rate=36.9 Mbit/s
+12:14:46 A-1 SUMMARY small ok=158 fail=0 big ok=10 fail=0 pid_same=yes cpu_ticks=786 softirq_ticks=742 rx_MB=0 udp_out=119362 rcvbuf_err=0 rss_kB=37252 requests_on_wifi=0 on_other=168
+12:14:55 running 1.15.0-alpha.9-c56f897eb-udpbatch pid=20410
+12:14:57 B-1 big net=rmnet_data3 rate=41.7 Mbit/s
+12:15:57 B-1 big net=rmnet_data3 rate=45.8 Mbit/s
+12:16:58 B-1 big net=rmnet_data3 rate=50.2 Mbit/s
+12:17:58 B-1 big net=rmnet_data3 rate=54.5 Mbit/s
+12:19:01 B-1 big net=rmnet_data3 rate=48.2 Mbit/s
+12:20:02 B-1 big net=rmnet_data3 rate=51.0 Mbit/s
+12:21:03 B-1 big net=rmnet_data3 rate=32.7 Mbit/s
+12:22:02 B-1 big net=rmnet_data3 rate=55.2 Mbit/s
+12:23:02 B-1 big net=rmnet_data3 rate=45.3 Mbit/s
+12:24:05 B-1 big net=rmnet_data3 rate=39.4 Mbit/s
+12:24:57 B-1 SUMMARY small ok=160 fail=0 big ok=10 fail=0 pid_same=yes cpu_ticks=630 softirq_ticks=722 rx_MB=0 udp_out=21411 rcvbuf_err=0 rss_kB=60408 requests_on_wifi=0 on_other=170
+12:25:06 running 1.14.2-c71e88dba-strict-attribution pid=25495
+12:25:08 A-2 big net=rmnet_data3 rate=38.6 Mbit/s
+12:26:08 A-2 big net=rmnet_data3 rate=50.3 Mbit/s
+12:27:09 A-2 big net=rmnet_data3 rate=40.8 Mbit/s
+12:28:09 A-2 big net=rmnet_data3 rate=46.7 Mbit/s
+12:29:10 A-2 big net=rmnet_data3 rate=37.1 Mbit/s
+12:30:10 A-2 big net=rmnet_data3 rate=44.0 Mbit/s
+12:31:12 A-2 big net=rmnet_data3 rate=25.0 Mbit/s
+12:32:12 A-2 big net=rmnet_data3 rate=37.0 Mbit/s
+12:33:12 A-2 big net=rmnet_data3 rate=71.2 Mbit/s
+12:33:55 A-2 FAIL net=wlan0 https://www.google.com/ :: H3 0 ERROR after 5.008s: Get "https://www.google.com/": timeout: no recent network activity
+12:34:13 A-2 big net=rmnet_data3 rate=68.9 Mbit/s
+12:35:20 A-2 SUMMARY small ok=154 fail=1 big ok=10 fail=0 pid_same=yes cpu_ticks=755 softirq_ticks=733 rx_MB=0 udp_out=116798 rcvbuf_err=0 rss_kB=41752 requests_on_wifi=6 on_other=159
+12:35:33 running 1.15.0-alpha.9-c56f897eb-udpbatch pid=4677
+12:35:45 B-2 FAIL net=rmnet_data3 https://dl.google.com/android/repository/platform-tools-latest-linux.zip :: H3 0 ERROR timeout: no recent network activity proto=HTTP/3.0 code=200 ttfb=199ms bytes=227656 time=11.503s rate=0.2 Mbit/s
+12:36:35 B-2 big net=wlan0 rate=81.4 Mbit/s
+12:37:36 B-2 big net=wlan0 rate=81.2 Mbit/s
+12:38:37 B-2 big net=wlan0 rate=88.6 Mbit/s
+12:39:38 B-2 big net=wlan0 rate=74.9 Mbit/s
+12:40:39 B-2 big net=wlan0 rate=72.8 Mbit/s
+12:41:41 B-2 big net=wlan0 rate=88.8 Mbit/s
+12:42:42 B-2 big net=wlan0 rate=79.5 Mbit/s
+12:43:44 B-2 big net=wlan0 rate=92.9 Mbit/s
+12:44:45 B-2 big net=wlan0 rate=70.6 Mbit/s
+12:45:36 B-2 SUMMARY small ok=164 fail=0 big ok=9 fail=1 pid_same=yes cpu_ticks=544 softirq_ticks=729 rx_MB=128 udp_out=28199 rcvbuf_err=0 rss_kB=56828 requests_on_wifi=173 on_other=1
+12:45:45 running 1.14.2-c71e88dba-strict-attribution pid=10880
+12:45:45 restored A
+12:45:45 soak done

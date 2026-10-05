@@ -143,3 +143,34 @@ cannot drive an A/B). Per 100 Mbit/s of wlan0 receive:
   yet; a longer run is needed before calling it noise.
 - The earlier estimate (-25% to -33% for sing-box) was optimistic because it
   assumed batches near the measured run lengths.
+
+## 50-minute offline soak (2026-10-05, results/soak-20261005.log)
+
+A B A B, 10 min each, same request schedule in every block: an HTTP/3 GET of
+google.com every ~3 s and a 9 MB dl.google.com download every 60 s. The user
+was out: A-1, B-1 and most of A-2 ran on cellular (rmnet_data3), B-2 on
+WiFi.
+
+| block | net | small ok/fail | 9 MB ok/fail | sing-box CPU ticks | udp_out | RSS at end |
+|---|---|---|---|---|---|---|
+| A-1 | cellular | 158/0 | 10/0 | 786 | 119 362 | 37.3 MB |
+| B-1 | cellular | 160/0 | 10/0 | 630 | 21 411 | 60.4 MB |
+| A-2 | cellular→WiFi | 154/1 | 10/0 | 755 | 116 798 | 41.8 MB |
+| B-2 | WiFi | 164/0 | 9/1 | 544 | 28 199 | 56.8 MB |
+
+- Failures: one per build, both at 12:33-12:35 when the phone moved from
+  cellular to WiFi ("no recent network activity": the QUIC path died with the
+  network). No failure unrelated to a network change in 343 requests on B.
+- sing-box CPU over identical work: A 770 ticks per block on average, B 587
+  (-24%). B-1 vs A-1 on the same cellular network: -20%. udp_out fell ~5x
+  (GSO batches).
+- System softirq barely moved (742/722/733/729 ticks): at this load it is
+  dominated by other traffic and the modem path.
+- Receive bytes on cellular read 0: rmnet_data3's /proc/net/dev counters stay
+  at zero on this phone (Qualcomm IPA offload), so throughput normalisation
+  works on WiFi only.
+- RSS at the end of each block: A 37-42 MB, B 57-60 MB. One sample per
+  block, taken at an arbitrary point of a download cycle; earlier A runs read
+  47-53 MB during downloads, so this may be noise, but it is consistent
+  across both B blocks and must be measured properly (repeated samples, heap
+  profile) before B goes into the daily build.
