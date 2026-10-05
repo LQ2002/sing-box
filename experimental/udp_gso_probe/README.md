@@ -200,3 +200,23 @@ test only):
   core against A's 90/82% and less softirq. Fixed per-connection costs inflate
   the A figures at low throughput, so this run only shows B is not worse; the
   clean limit-64 run (-19% CPU, -30% softirq) remains the magnitude estimate.
+
+## Sockmap/SK_MSG for direct TCP: no target in this config (2026-10-05)
+
+Proposal evaluated: splice an app's TCP socket to sing-box's in the kernel
+(sockmap + SK_MSG). Another session showed the mechanism works on this phone
+(IPv4/IPv6, 2 MiB each way, no new module). It can only help one-to-one raw
+TCP forwarding (direct outbound); proxied traffic still needs sing-box's
+encryption and framing.
+
+How much direct TCP actually passes through sing-box:
+- A 15 s download from mirrors.ustc.edu.cn (130 MB, ~69 Mbit/s) never
+  appeared in sing-box's connection list and cost sing-box 6 ticks: Chinese
+  domains resolve to real IPs, which bypass_rule_set (chnroutes) passes in the
+  kernel.
+- Clash API sampling every 10 s, 17:13-17:34, normal use: 146 connections,
+  12.4 MB. Proxied TCP 84.9%, proxied UDP 15.0%, direct TCP through sing-box
+  2 connections, 0.2%.
+
+Conclusion: in this configuration direct traffic is already kernel-forwarded
+without sing-box; the SK_MSG path would optimise ~0.2% of bytes. Not pursued.
