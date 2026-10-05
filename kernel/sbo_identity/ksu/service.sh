@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Boot-time loader for sbo_identity (KernelSU/Magisk late_start service).
+# Boot-time loader for sbo_identity (KernelSU/SukiSU/Magisk late_start service).
 #
 # Rules carried over from experimental/sb_sockowner_probe/magisk/service.sh,
 # which learned them from a module pack that force-loaded mismatched modules
@@ -24,17 +24,14 @@
 # does not load the module, sing-box with local.socket_creator enabled fails
 # to start the eBPF inbound and says so in its log.
 #
+# The manager shows the outcome: common.sh set_description replaces the
+# static description with the current state. action.sh (the Action button)
+# loads or unloads the module for the running boot.
+#
 # Escape hatch: boot holding volume-down for KernelSU/Magisk safe mode.
 
 MODDIR=${0%/*}
-NAME=sbo_identity
-LOG=$MODDIR/load.log
-FAILCOUNT=$MODDIR/fail-count
-MAXFAIL=3
-
-log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"
-}
+. "$MODDIR/common.sh"
 
 fail() {
     log "not loaded: $*"
@@ -44,42 +41,27 @@ fail() {
     if [ "$count" -ge "$MAXFAIL" ]; then
         log "failed $count times in a row, disabling; remove $MODDIR/disable and $FAILCOUNT after fixing"
         touch "$MODDIR/disable"
+        set_description "⛔ 连续 $count 次加载失败，已自动禁用：$* · 修复后删除 disable 与 fail-count"
+    else
+        set_description "❌ 未加载（$(date '+%m-%d %H:%M')）：$* · 失败 $count/$MAXFAIL · 点「动作」可重试"
     fi
     exit 0
 }
 
 : > "$LOG"
 log "start"
+set_description "⏳ 开机加载中…"
 
-if [ -d /sys/module/$NAME ]; then
+if loaded; then
     log "already loaded: $(cat /sys/module/$NAME/parameters/stats 2>/dev/null)"
+    describe_loaded
     exit 0
 fi
 
-KO=$MODDIR/$NAME.ko
-[ -f "$KO" ] || fail "missing $KO"
-
-EXPECTED=$(cat "$MODDIR/kernel-release" 2>/dev/null)
-RUNNING=$(uname -r)
-[ -n "$EXPECTED" ] || fail "package has no kernel-release"
-if [ "$EXPECTED" != "$RUNNING" ]; then
-    log "  built for: $EXPECTED"
-    log "  running:   $RUNNING"
-    fail "kernel changed; regenerate the layout and rebuild (kernel/sbo_identity/README.md)"
-fi
-
-EXPECTED_BTF=$(cut -d' ' -f1 "$MODDIR/base-btf.sha256" 2>/dev/null)
-RUNNING_BTF=$(sha256sum /sys/kernel/btf/vmlinux 2>/dev/null | cut -d' ' -f1)
-[ -n "$EXPECTED_BTF" ] || fail "package has no base-btf.sha256"
-if [ "$EXPECTED_BTF" != "$RUNNING_BTF" ]; then
-    log "  built for BTF: $EXPECTED_BTF"
-    log "  running BTF:   $RUNNING_BTF"
-    fail "kernel BTF differs from the module build base"
-fi
-
-if ERR=$(insmod "$KO" capture_all=1 2>&1); then
+if reason=$(load_module); then
     log "loaded: $(cat /sys/module/$NAME/parameters/capture_all 2>/dev/null) $(cat /sys/module/$NAME/parameters/stats 2>/dev/null)"
     rm -f "$FAILCOUNT"
+    describe_loaded
     exit 0
 fi
-fail "insmod: $ERR"
+fail "$reason"

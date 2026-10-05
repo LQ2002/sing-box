@@ -3,4 +3,4 @@ name=sbo_identity
 version=unset
 versionCode=1
 author=local
-description=Socket-creation identity for the sing-box eBPF socket_creator collector (android_vh_sock_create). Loads only when the kernel release and BTF match the build.
+description=sing-box socket_creator 的套接字创建身份模块（android_vh_sock_create）。仅在内核版本与 BTF 匹配时加载；开机后此处显示实际加载状态，「动作」按钮可切换加载/卸载。

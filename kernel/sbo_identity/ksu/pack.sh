@@ -28,10 +28,10 @@ python3 "$MOD/verify_btf.py"
 
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
-for f in service.sh uninstall.sh module.prop; do
+for f in service.sh action.sh common.sh uninstall.sh module.prop; do
     tr -d '\r' < "$HERE/$f" > "$STAGE/$f"
 done
-chmod 755 "$STAGE/service.sh" "$STAGE/uninstall.sh"
+chmod 755 "$STAGE/service.sh" "$STAGE/action.sh" "$STAGE/common.sh" "$STAGE/uninstall.sh"
 cp "$KO" "$STAGE/"
 tr -d '\r' < "$RELEASE_FILE" > "$STAGE/kernel-release"
 cut -d' ' -f1 "$BTF_HASH" > "$STAGE/base-btf.sha256"
