@@ -1,0 +1,11 @@
+sing-box background ticks in 3s: 0
+RESULT mode=single batch=1 gro=false calls=160000 sent=160000 received=160000 pps=19998 proc_cpu=33.7% softirq_all=11.2% ns_per_datagram=16875 (incl softirq 22500)
+RESULT mode=mmsg batch=4 gro=false calls=160000 sent=160000 received=160000 pps=19999 proc_cpu=35.9% softirq_all=11.1% ns_per_datagram=17938 (incl softirq 23500)
+RESULT mode=mmsg batch=16 gro=false calls=256000 sent=256000 received=256000 pps=31999 proc_cpu=36.5% softirq_all=11.6% ns_per_datagram=11406 (incl softirq 15039)
+RESULT mode=gso batch=4 gro=false calls=40000 sent=160000 received=160000 pps=20000 proc_cpu=22.7% softirq_all=7.5% ns_per_datagram=11375 (incl softirq 15125)
+RESULT mode=gso batch=16 gro=false calls=16000 sent=256000 received=256000 pps=31997 proc_cpu=24.5% softirq_all=7.4% ns_per_datagram=7656 (incl softirq 9961)
+RESULT mode=single batch=1 gro=true calls=160000 sent=160000 received=160000 pps=19998 proc_cpu=33.9% softirq_all=11.4% ns_per_datagram=16938 (incl softirq 22625)
+RESULT mode=mmsg batch=4 gro=true calls=160000 sent=160000 received=160000 pps=19998 proc_cpu=35.2% softirq_all=11.1% ns_per_datagram=17625 (incl softirq 23188)
+RESULT mode=mmsg batch=16 gro=true calls=255968 sent=255968 received=255968 pps=31994 proc_cpu=38.1% softirq_all=12.0% ns_per_datagram=11916 (incl softirq 15666)
+RESULT mode=gso batch=4 gro=true calls=40000 sent=160000 received=160000 pps=19997 proc_cpu=16.2% softirq_all=4.4% ns_per_datagram=8125 (incl softirq 10312)
+RESULT mode=gso batch=16 gro=true calls=16000 sent=256000 received=256000 pps=31998 proc_cpu=11.7% softirq_all=2.6% ns_per_datagram=3672 (incl softirq 4492)
