@@ -771,6 +771,35 @@ LSPosed、su shell 在根 cgroup。在模块内计时实测中，建 sk_storage 
 | 目标设计 | creator v2（创建时进程名哈希、exe inode）、netd 请求方、E1–E3 解析 | **实现完成；本机、隔离真机、整服务真实 App（正确 22/错误 0）与新旧配对（稳态无可测差异，内存经 `madvdontneed=1` 持平）均已验收**；sing-ebpf 已推送（`6ab9da7`），`go.mod` 已升级（`6f291cf8`） | 分支 `claude/attribution-target-design`；sing-ebpf `aa849f4`、`6ab9da7`；见“Claude 目标设计”的预验证与验收矩阵 |
 | cgroup 分工 | 创建者在自己的 `pid_<tgid>` cgroup 时不建快照，由 socket cgroup 定位进程 | **实现完成；本机测试、真机 producer 门控、整链路真实 App（错误 0）验收通过** | 见“cgroup 分工（2026-10-04）” |
 | 增强模块 | `sbo_identity` 模块取代桥接模块：自有 cgroup 门控移入模块、创建现场解析可执行文件完整路径，producer v3 | **实现完成；本机测试、真机 producer、整链路（错误 0）、1 小时长跑（错误 0、内核告警 0）与开销复测通过** | 见“增强模块 sbo_identity（2026-10-04）” |
+| 日常机部署 | 移植到日常机实际运行的 `E:\Ref_sing-box`（生产配置用了本仓库不接受的字段），打包开机加载模块 | **移植与构建完成，未部署**：Ref 分支 `claude/attribution-port` `b629fa643`（本地，未推送）；Android vet/测试通过，新二进制对未改动的生产配置 `check` 返回 0；`kernel/sbo_identity/ksu/` 打出的包通过 CRC 与 BTF 布局校验。往日常机装开机模块、改配置、换二进制被自动权限审查拒绝，等用户决定 | 见下方“日常机部署（2026-10-05）” |
+
+### 日常机部署（2026-10-05）
+
+- 为什么移植：日常机运行的是 `E:\Ref_sing-box`（reF1nd 分叉）构建的
+  `1.15.0-alpha.9-c71e88dba`，其配置用到 `experimental.urltest_unified_delay`、`group` DNS 传输，
+  本仓库构建会拒绝。
+- 移植方式（细节在 Ref 提交 `b629fa643` 的说明里）：
+  - 整包复制 `protocol/ebpf`：Ref 的 eBPF 包是较旧 CHIZI 快照，与本分支基线的差异只有格式化和旧快照缺少的功能；
+    Ref 本地的 sockowner 文件逐个核对过，其 blob 都出现在本分支祖先提交中。
+  - 新增包原样复制。
+  - `route/network.go` 只打 androidpackages 补丁；Ref 的 `process_cache.go` 保留不动。
+  - sing-ebpf replace 改到 LQ2002 `6ab9da7`；`release/LDFLAGS` 加 `madvdontneed=1`。
+- 已验证：
+  - WSL go1.26.7，用 Ref 的 BASE_TAGS 做 Android vet，相关包 `go test` 全部通过。
+  - `release/build-android-ebpf.sh` 构建成功，依赖 libc/libdl/liblog，tags 中无 CR。
+  - 手机上对未修改的生产 `config.json` 跑 `sing-box check`，返回 0。
+- 开机加载包：`kernel/sbo_identity/ksu/`（`pack.sh` 打包前重新做 CRC 与 BTF 布局校验）。
+  - `service.sh` 先比对内核版本串和 `/sys/kernel/btf/vmlinux` 的 sha256，然后用普通 `insmod … capture_all=1` 加载。
+  - 连续失败 3 次自禁用。
+  - 打出的包对应模块 sha256 `dd675fa8…`，正是 1 小时长跑用的那份；BTF `37d2c7e7…` 与设备一致。
+- 未完成：设备侧操作被自动权限审查拒绝，未执行任何一步。
+  - 被拒的操作：`ksud module install`，以及写一份会安装开机模块、改配置、换二进制的部署脚本。
+  - 部署还需要的配置改动：在 eBPF 入站 `local` 里加 `"socket_creator": {"enabled": true}`。
+  - collector 要求模块已带 `capture_all=1` 加载，否则 eBPF 入站启动失败。
+- 部署时的注意点：
+  - 日常机上还装着旧的 KernelSU 模块 `sb_sockowner_probe`（当前未加载，下次开机会加载）。
+  - 新构建先用创建快照，旧模块只作回退。两者同时挂 `android_vh_sock_create` 会让每个 socket 多付一次钩子开销。
+  - 是否禁用旧模块由用户决定。
 
 阶段 1、2 已有实现及验收记录；阶段 3 已修正 cgroup 进程归属假设，并补做真实数据回包验证。
 阶段是否通过以实际证据为准；未执行和不适用的检查分别列出，不用勾选掩盖未完成项。

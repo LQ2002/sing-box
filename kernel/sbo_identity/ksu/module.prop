@@ -1,0 +1,6 @@
+id=sbo_identity
+name=sbo_identity
+version=unset
+versionCode=1
+author=local
+description=Socket-creation identity for the sing-box eBPF socket_creator collector (android_vh_sock_create). Loads only when the kernel release and BTF match the build.
