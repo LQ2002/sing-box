@@ -119,7 +119,7 @@ func TestEBPFDiagnosticsIncludesEffectiveTCState(t *testing.T) {
 		TCLastReconcileAt:        &observedReconcile,
 		TCNetworkGeneration:      3,
 	})
-	if diagnostics.SchemaVersion != 8 || diagnostics.TCBackendMode != "socket_assign" ||
+	if diagnostics.SchemaVersion != 9 || diagnostics.TCBackendMode != "socket_assign" ||
 		diagnostics.TCListenerLookupMode != "sockmap" || diagnostics.TCAttachmentMode != "tcx" ||
 		diagnostics.TCDeliveryInterfaceIndex != 42 || diagnostics.TCAttachmentCount != 2 ||
 		diagnostics.TCNetworkGeneration != 3 || diagnostics.TCLastHealthCheckAt == nil ||
@@ -130,12 +130,29 @@ func TestEBPFDiagnosticsIncludesEffectiveTCState(t *testing.T) {
 }
 
 func TestEBPFDiagnosticsSchemaVersionIncludesEffectiveRuntimeFields(t *testing.T) {
-	if adapter.EBPFDiagnosticsSchemaVersion != 8 {
-		t.Fatalf("schema version = %d, want 8 after removing the per-inbound compatibility field", adapter.EBPFDiagnosticsSchemaVersion)
+	if adapter.EBPFDiagnosticsSchemaVersion != 9 {
+		t.Fatalf("schema version = %d, want 9 after adding policy epoch diagnostics", adapter.EBPFDiagnosticsSchemaVersion)
 	}
 	diagnostics := diagnosticsForAPI(EBPFDiagnostics{SchemaVersion: adapter.EBPFDiagnosticsSchemaVersion, LocalCgroupAttachMode: "link_create"})
-	if diagnostics.SchemaVersion != 8 {
-		t.Fatalf("diagnostics schema version = %d, want 8", diagnostics.SchemaVersion)
+	if diagnostics.SchemaVersion != 9 {
+		t.Fatalf("diagnostics schema version = %d, want 9", diagnostics.SchemaVersion)
+	}
+}
+
+func TestEBPFDiagnosticsExposePolicyEpochConvergence(t *testing.T) {
+	diagnostics := diagnosticsForAPI(EBPFDiagnostics{
+		PolicyEpoch: EBPFPolicyEpochDiagnostics{
+			LocalConfirmed:  7,
+			LocalExpected:   8,
+			SharedConfirmed: 4,
+			SharedExpected:  4,
+			Converged:       false,
+		},
+	})
+	if diagnostics.PolicyEpoch.LocalConfirmed != 7 || diagnostics.PolicyEpoch.LocalExpected != 8 ||
+		diagnostics.PolicyEpoch.SharedConfirmed != 4 || diagnostics.PolicyEpoch.SharedExpected != 4 ||
+		diagnostics.PolicyEpoch.Converged {
+		t.Fatalf("policy epoch was not propagated: %+v", diagnostics.PolicyEpoch)
 	}
 }
 

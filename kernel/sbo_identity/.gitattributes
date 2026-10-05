@@ -1,0 +1,2 @@
+# Built in WSL: shell, Python, Makefile and C sources must stay LF.
+* text eol=lf

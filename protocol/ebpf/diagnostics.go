@@ -65,6 +65,17 @@ type scopedBypassRuleSetDiagnostics struct {
 	BackendState          map[string]BypassRuleSetBackendState
 }
 
+// EBPFPolicyEpochDiagnostics makes the two independently updated policy
+// scopes explicit. A single scalar generation would be misleading because a
+// local update can succeed while a shared update is still pending.
+type EBPFPolicyEpochDiagnostics struct {
+	LocalConfirmed  uint64 `json:"local_confirmed"`
+	LocalExpected   uint64 `json:"local_expected"`
+	SharedConfirmed uint64 `json:"shared_confirmed"`
+	SharedExpected  uint64 `json:"shared_expected"`
+	Converged       bool   `json:"converged"`
+}
+
 // UDPNATDiagnostics reports event-driven userspace UDP NAT state. Cache
 // insertion and capacity-eviction totals come from sing/freelru's existing
 // metrics and therefore restart when the cache is purged (for example after a
@@ -166,6 +177,7 @@ type EBPFDiagnostics struct {
 
 	LocalBypassRuleSet  scopedBypassRuleSetDiagnostics `json:"local_bypass_rule_set"`
 	SharedBypassRuleSet scopedBypassRuleSetDiagnostics `json:"shared_bypass_rule_set"`
+	PolicyEpoch         EBPFPolicyEpochDiagnostics     `json:"policy_epoch"`
 
 	// UDPSessionCount is the number of distinct UDP clients (by source
 	// address:port) this inbound is currently tracking state for, summed
@@ -182,6 +194,14 @@ type EBPFDiagnostics struct {
 	UDPReplySockets udpReplySocketPoolSnapshot `json:"udp_reply_sockets"`
 
 	Counters EBPFCounters `json:"counters"`
+
+	// AndroidUIDPolicy is present when include_package/exclude_package rules
+	// follow the package table (android_uid_update.go).
+	AndroidUIDPolicy *AndroidUIDPolicyDiagnostics `json:"android_uid_policy,omitempty"`
+
+	// Attribution is present when the TC program records socket identity
+	// (socket_identity.go).
+	Attribution *AttributionDiagnostics `json:"attribution,omitempty"`
 }
 
 // tcOutcomeHistory is the small amount of extra bookkeeping Diagnostics
@@ -373,6 +393,13 @@ func diagnosticsForAPI(diagnostics EBPFDiagnostics) adapter.EBPFRuntimeDiagnosti
 			RetryCount:            diagnostics.SharedBypassRuleSet.RetryCount,
 			BackendState:          convertBypassRuleSetBackendState(diagnostics.SharedBypassRuleSet.BackendState),
 		},
+		PolicyEpoch: adapter.EBPFPolicyEpochDiagnostics{
+			LocalConfirmed:  diagnostics.PolicyEpoch.LocalConfirmed,
+			LocalExpected:   diagnostics.PolicyEpoch.LocalExpected,
+			SharedConfirmed: diagnostics.PolicyEpoch.SharedConfirmed,
+			SharedExpected:  diagnostics.PolicyEpoch.SharedExpected,
+			Converged:       diagnostics.PolicyEpoch.Converged,
+		},
 		UDPSessionCount: diagnostics.UDPSessionCount,
 		UDPNAT: adapter.EBPFUDPNATDiagnostics{
 			ActiveSessions:                 diagnostics.UDPNAT.ActiveSessions,
@@ -493,6 +520,8 @@ func (i *Inbound) Diagnostics() EBPFDiagnostics {
 	}
 	if i.localEnabled {
 		diagnostics.LocalDataPlane = i.localDataPlane
+		diagnostics.AndroidUIDPolicy = i.androidUIDPolicyDiagnostics()
+		diagnostics.Attribution = i.attributionDiagnostics()
 	}
 	if backend := i.cgroupBackendInstance(); backend != nil && !backend.IsClosed() {
 		diagnostics.LocalCgroupAttachMode = backend.AttachMode()
@@ -655,6 +684,16 @@ func (i *Inbound) Diagnostics() EBPFDiagnostics {
 	}
 	diagnostics.LocalBypassRuleSet = localState
 	diagnostics.SharedBypassRuleSet = sharedState
+	diagnostics.PolicyEpoch = EBPFPolicyEpochDiagnostics{
+		LocalConfirmed:  localState.PolicyVersion,
+		LocalExpected:   localState.ExpectedPolicyVersion,
+		SharedConfirmed: sharedState.PolicyVersion,
+		SharedExpected:  sharedState.ExpectedPolicyVersion,
+		Converged: localState.Consistent && sharedState.Consistent &&
+			!localState.Pending && !sharedState.Pending &&
+			localState.PolicyVersion == localState.ExpectedPolicyVersion &&
+			sharedState.PolicyVersion == sharedState.ExpectedPolicyVersion,
+	}
 	i.bypassRuleSetAccess.Unlock()
 
 	diagnostics.UDPSessionCount = i.udpClientTable.count()
@@ -832,6 +871,7 @@ func (d EBPFDiagnostics) WriteText(w io.Writer) error {
 	}
 	lines = append(lines, fmt.Sprintf("local.bypass_rule_set: consistent=%t pending=%t version=%d", d.LocalBypassRuleSet.Consistent, d.LocalBypassRuleSet.Pending, d.LocalBypassRuleSet.PolicyVersion))
 	lines = append(lines, fmt.Sprintf("shared.bypass_rule_set: consistent=%t pending=%t version=%d", d.SharedBypassRuleSet.Consistent, d.SharedBypassRuleSet.Pending, d.SharedBypassRuleSet.PolicyVersion))
+	lines = append(lines, fmt.Sprintf("policy_epoch: local=%d/%d shared=%d/%d converged=%t", d.PolicyEpoch.LocalConfirmed, d.PolicyEpoch.LocalExpected, d.PolicyEpoch.SharedConfirmed, d.PolicyEpoch.SharedExpected, d.PolicyEpoch.Converged))
 	lines = append(lines, fmt.Sprintf("UDP sessions: %d", d.UDPSessionCount))
 	lines = append(lines, fmt.Sprintf(
 		"UDP NAT: active=%d created=%d capacity_evictions=%d queue_drops=%d socket_release_events=%d socket_release_matched=%d pending_release_capacity_rejected=%d release_notification_drops=%d",

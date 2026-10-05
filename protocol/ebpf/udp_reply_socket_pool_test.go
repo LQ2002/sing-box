@@ -223,7 +223,7 @@ func TestUDPReplySocketPoolStableUnderManyDestinations(t *testing.T) {
 
 	var wg sync.WaitGroup
 	errs := make(chan error, attempts)
-	for i := range attempts {
+	for i := 0; i < attempts; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

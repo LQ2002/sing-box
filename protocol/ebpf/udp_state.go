@@ -11,10 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
 
-	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
@@ -79,9 +79,12 @@ func udpSessionKeyFromContext(ctx context.Context) (udpSessionKey, bool) {
 }
 
 type udpClientState struct {
-	access          sync.RWMutex
-	sourceMAC       net.HardwareAddr
-	socketCookie    uint64
+	access       sync.RWMutex
+	sourceMAC    net.HardwareAddr
+	socketCookie uint64
+	// identity is the TC socket identity of the client socket (stage 3);
+	// zero, with valid false, on the cgroup data plane.
+	identity        socketIdentity
 	bindings        map[netip.AddrPort]udpRedirectBinding
 	replyAliasCount uint16
 	closed          bool
@@ -261,13 +264,26 @@ func (t *udpClientTable) setDirectBinding(
 	sourceMAC net.HardwareAddr,
 	socketCookie uint64,
 ) {
+	t.setDirectBindingWithIdentity(key, destination, sourceMAC, socketIdentity{cookie: socketCookie})
+}
+
+func (t *udpClientTable) setDirectBindingWithIdentity(
+	key udpSessionKey,
+	destination netip.AddrPort,
+	sourceMAC net.HardwareAddr,
+	identity socketIdentity,
+) {
+	if key.Scope == udpSessionScopeSharedTC || key.Scope == udpSessionScopeSharedRewrite {
+		identity = socketIdentity{}
+	}
 	state := t.loadOrCreate(key)
 	state.access.Lock()
 	defer state.access.Unlock()
 	if len(sourceMAC) > 0 {
 		state.sourceMAC = append(state.sourceMAC[:0], sourceMAC...)
 	}
-	state.socketCookie = socketCookie
+	state.socketCookie = identity.cookie
+	state.identity = identity
 	state.bindings[destination] = udpRedirectBinding{}
 }
 
@@ -498,7 +514,7 @@ func (p *udpReplySocketPool) addCount(delta int64) {
 // shard lock and validates the selected entry before closing it, so concurrent
 // cache hits cannot lose a socket that became active during the scan.
 func (p *udpReplySocketPool) evictOldestIdle() bool {
-	for range 2 {
+	for attempt := 0; attempt < 2; attempt++ {
 		selectedShard := -1
 		var selectedSource netip.AddrPort
 		var selectedEntry *udpReplySocketEntry
@@ -620,7 +636,10 @@ func (p *udpReplySocketPool) runSweeper(ctx context.Context, wake <-chan struct{
 			default:
 			}
 		}
-		delay := max(time.Until(next), 0)
+		delay := time.Until(next)
+		if delay < 0 {
+			delay = 0
+		}
 		timer.Reset(delay)
 		timerChannel = timer.C
 	}
@@ -743,4 +762,15 @@ func (s *udpClientState) processSocketCookie() uint64 {
 	s.access.RLock()
 	defer s.access.RUnlock()
 	return s.socketCookie
+}
+
+// processIdentity returns the recorded socket identity, or one carrying only
+// the cookie (valid false) when none was recorded.
+func (s *udpClientState) processIdentity() socketIdentity {
+	s.access.RLock()
+	defer s.access.RUnlock()
+	if s.identity.valid || s.identity.creator.Flags != 0 {
+		return s.identity
+	}
+	return socketIdentity{cookie: s.socketCookie}
 }

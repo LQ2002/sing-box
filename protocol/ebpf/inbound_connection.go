@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/control"
@@ -18,7 +19,6 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 
-	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 	"golang.org/x/sys/unix"
 )
 
@@ -149,7 +149,7 @@ func (i *Inbound) NewPacketConnectionEx(
 	key, keyLoaded := udpSessionKeyFromContext(ctx)
 	if clientState, loaded := i.udpClientTable.load(key); keyLoaded && loaded {
 		metadata.SourceMACAddress = clientState.sourceMACAddress()
-		metadata.ProcessInfo = i.lookupProcessInfo(ctx, clientState.processSocketCookie())
+		metadata.ProcessInfo = i.ownerFromIdentity(ctx, clientState.processIdentity())
 		if binding, found := clientState.redirectBinding(destination.AddrPort()); found {
 			metadata.UDPConnect = binding.connected
 		}

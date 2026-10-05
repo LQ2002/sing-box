@@ -541,7 +541,10 @@ func runTCInterfaceUpdateLoopWithHealth(
 			}
 			continue
 		}
-		delay := max(states[earliest].deadline.Sub(now), 0)
+		delay := states[earliest].deadline.Sub(now)
+		if delay < 0 {
+			delay = 0
+		}
 		retryTimer.Arm(delay)
 		retryChannel = retryTimer.Expired()
 		if onScheduleChange != nil {

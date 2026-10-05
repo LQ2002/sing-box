@@ -33,6 +33,31 @@ func TestUDPDirectBinding(t *testing.T) {
 	}
 }
 
+func TestUDPBindingPreservesIndependentCreatorAndRejectsSharedIdentity(t *testing.T) {
+	var table udpClientTable
+	client := netip.MustParseAddrPort("192.0.2.10:53000")
+	destination := netip.MustParseAddrPort("198.51.100.1:53")
+	creator := assignmentCreator(42, SocketOwner{ProcessID: 410, UserID: 0, StartTimeNs: 1000000000})
+	// No billing/cgroup identity: this is still an independently valid creator.
+	identity := identityFromAssignment(commonEBPF.TCAssignment{SocketCookie: 42, Creator: creator})
+	for _, scope := range []udpSessionScope{udpSessionScopeLocalTC, udpSessionScopeSharedTC, udpSessionScopeSharedRewrite} {
+		key := udpSessionKey{Source: client, Scope: scope, SocketCookie: 42}
+		table.setDirectBindingWithIdentity(key, destination, nil, identity)
+		state, found := table.load(key)
+		if !found {
+			t.Fatal("UDP state not created")
+		}
+		got := state.processIdentity()
+		if scope == udpSessionScopeLocalTC {
+			if got.creator != creator || !got.hasCreator() || got.valid {
+				t.Fatalf("UDP dropped creator without billing/cgroup identity: %+v", got)
+			}
+		} else if got.cookie != 0 || got.hasCreator() || state.processSocketCookie() != 0 {
+			t.Fatalf("shared UDP retained a local creator or legacy cookie: %+v", got)
+		}
+	}
+}
+
 func TestUDPClientTableSeparatesSocketCookies(t *testing.T) {
 	var table udpClientTable
 	client := netip.MustParseAddrPort("192.0.2.10:53000")
@@ -225,7 +250,7 @@ func TestUDPDirectReplyBindingChecksGeneration(t *testing.T) {
 func TestUDPReplySocketPoolShardsSpreadAcrossDestinationPort(t *testing.T) {
 	var pool udpReplySocketPool
 	counts := make(map[int]int)
-	for i := range 256 {
+	for i := 0; i < 256; i++ {
 		destination := netip.AddrPortFrom(
 			netip.AddrFrom4([4]byte{203, 0, byte(i >> 8), byte(i)}),
 			443,
@@ -251,7 +276,7 @@ func TestUDPReplySocketPoolShardsSpreadAcrossDestinationPort(t *testing.T) {
 func TestUDPClientTableShardsSpreadAcrossClientAddress(t *testing.T) {
 	var table udpClientTable
 	counts := make(map[*udpClientShard]int)
-	for i := range 256 {
+	for i := 0; i < 256; i++ {
 		client := netip.AddrPortFrom(
 			netip.AddrFrom4([4]byte{192, 168, byte(i >> 8), byte(i)}),
 			51413,

@@ -6,10 +6,8 @@ import (
 	kernelRuntime "github.com/CHIZI-0618/sing-ebpf/runtime"
 )
 
-type (
-	sharedKernelRuntime      = kernelRuntime.SharedPacketRewriteRuntime
-	sharedKernelRuntimeHooks = kernelRuntime.SharedPacketRewriteHooks
-)
+type sharedKernelRuntime = kernelRuntime.SharedPacketRewriteRuntime
+type sharedKernelRuntimeHooks = kernelRuntime.SharedPacketRewriteHooks
 
 func newSharedKernelRuntime(hooks sharedKernelRuntimeHooks, priority uint16) sharedKernelRuntime {
 	return kernelRuntime.NewSharedPacketRewriteRuntime(kernelRuntime.SharedPacketRewriteRuntimeConfig{

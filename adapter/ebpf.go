@@ -4,7 +4,7 @@ import "time"
 
 // EBPFDiagnosticsSchemaVersion versions the complete GetEBPFDiagnostics
 // response. It remains available even when no eBPF inbound is running.
-const EBPFDiagnosticsSchemaVersion = 8
+const EBPFDiagnosticsSchemaVersion = 9
 
 // EBPFDiagnosticsProvider exposes a running inbound's eBPF state to the
 // sing-box API without coupling the API service to the optional eBPF package.
@@ -91,11 +91,24 @@ type EBPFRuntimeDiagnostics struct {
 
 	LocalBypassRuleSet  EBPFBypassRuleSetDiagnostics
 	SharedBypassRuleSet EBPFBypassRuleSetDiagnostics
+	PolicyEpoch         EBPFPolicyEpochDiagnostics
 
 	UDPSessionCount int
 	UDPNAT          EBPFUDPNATDiagnostics
 	UDPReplySockets EBPFUDPReplySocketDiagnostics
 	Counters        EBPFCounters
+}
+
+// EBPFPolicyEpochDiagnostics describes convergence of the independently
+// applied local and shared policy generations. Confirmed is the generation
+// known to be applied by every backend in that scope; Expected is the most
+// recent generation an update attempted to converge to.
+type EBPFPolicyEpochDiagnostics struct {
+	LocalConfirmed  uint64
+	LocalExpected   uint64
+	SharedConfirmed uint64
+	SharedExpected  uint64
+	Converged       bool
 }
 
 type EBPFBypassRuleSetDiagnostics struct {

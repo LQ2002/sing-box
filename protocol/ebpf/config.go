@@ -10,11 +10,10 @@ import (
 	"strconv"
 	"strings"
 
+	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 	"github.com/sagernet/sing-box/option"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/json/badoption"
-
-	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 )
 
 func normalizeEnablement(localOption, sharedOption *bool) (bool, bool, error) {
@@ -98,6 +97,9 @@ func validateLocalOptions(enabled bool, options option.EBPFLocalOptions) error {
 	}
 	if options.CgroupPath != "" {
 		return E.New("local.cgroup_path requires local interception")
+	}
+	if options.SocketCreator != nil {
+		return E.New("local.socket_creator requires local interception")
 	}
 	if options.DNSMode != "" {
 		return E.New("local.dns_mode requires local interception")

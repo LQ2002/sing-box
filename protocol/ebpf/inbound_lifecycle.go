@@ -10,10 +10,9 @@ import (
 	"strconv"
 	"strings"
 
+	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 	"github.com/sagernet/sing-box/adapter"
 	E "github.com/sagernet/sing/common/exceptions"
-
-	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 )
 
 func (i *Inbound) Start(stage adapter.StartStage) error {
@@ -55,6 +54,9 @@ func (i *Inbound) startInbound() error {
 	}
 	i.compiledPolicy = compiledPolicy
 	if err := i.checkKernelCapabilities(); err != nil {
+		return err
+	}
+	if err := i.startSocketCreator(); err != nil {
 		return err
 	}
 	if err := i.startProcessTracker(); err != nil {
@@ -112,6 +114,17 @@ func (i *Inbound) startInbound() error {
 		SelfBypass:       i.selfBypass,
 		TrackProcess:     i.processTracker != nil,
 		ICMPEchoReply:    i.fakeIPICMPReply,
+		// The socket UID and creating cgroup of every intercepted local flow
+		// (socket_identity.go). Only when routing needs process information.
+		RecordSocketIdentity: i.recordsSocketIdentity(),
+	}
+	if i.socketCreator != nil {
+		backendConfig.SocketCreatorMap = i.socketCreator.Map()
+		backendConfig.CookieTagMap = i.netdCookieTags
+		backendConfig.RecordSocketIdentity = true
+	}
+	if backendConfig.RecordSocketIdentity && i.cgroupOwners.Load() == nil {
+		i.cgroupOwners.Store(newCgroupOwnerResolver(cgroupRoot))
 	}
 	if runtime.GOOS == "android" {
 		backendConfig.AssignmentCapacity = commonEBPF.CompactTCAssignmentCapacity
@@ -120,7 +133,7 @@ func (i *Inbound) startInbound() error {
 	if localTCEnabled || sharedSocketAssignEnabled {
 		backend, err = commonEBPF.PrepareTC(backendConfig)
 	}
-	if err != nil && i.processTracker != nil {
+	if err != nil && backendConfig.SocketCreatorMap == nil && (i.processTracker != nil || backendConfig.RecordSocketIdentity) {
 		trackingErr := err
 		var closeErr error
 		i.processTracker, closeErr = closeProcessTrackerOwner(i.processTracker)
@@ -129,6 +142,9 @@ func (i *Inbound) startInbound() error {
 		}
 		trackingErr = E.Errors(trackingErr, closeErr)
 		backendConfig.TrackProcess = false
+		// The identity variant needs bpf_skb_cgroup_id; a kernel without
+		// CONFIG_SOCK_CGROUP_DATA rejects it. Fall back to the light variant.
+		backendConfig.RecordSocketIdentity = false
 		backend, err = commonEBPF.PrepareTC(backendConfig)
 		if err == nil {
 			i.logger.Debug("eBPF cgroup process tracking unavailable; using userspace process search: ", trackingErr)
@@ -136,6 +152,11 @@ func (i *Inbound) startInbound() error {
 	}
 	if err != nil {
 		return err
+	}
+	i.socketIdentityActive.Store(backend != nil && backendConfig.RecordSocketIdentity)
+	i.socketCreatorActive.Store(backend != nil && backendConfig.SocketCreatorMap != nil)
+	if i.socketIdentityActive.Load() {
+		i.startProcessIndex()
 	}
 	if backend != nil {
 		if err = i.listeners.registerTCTCPListeners(backend); err != nil {
@@ -319,6 +340,11 @@ func (i *Inbound) startInbound() error {
 		", tc_priority=", i.tcPriority,
 	)
 	i.udpReplySockets.startSweeper(i.ctx)
+	if localTCEnabled {
+		i.startAndroidUIDUpdater(backend)
+	} else if i.localCgroupEnabled() {
+		i.startAndroidUIDUpdater(nil)
+	}
 	i.logStartupSummary()
 	return nil
 }
@@ -337,7 +363,24 @@ func (i *Inbound) startProcessTracker() error {
 		i.processTracker = module
 		return nil
 	}
+	if i.recordsSocketIdentity() {
+		// TC supplies UID/group-level package attribution, not a creator
+		// PID. Keep the module above when available for precise creator and
+		// shared/system attribution. Without it these cases stay unknown;
+		// do not attach additional system-wide hooks just to infer names.
+		i.logger.Debug("eBPF socket owner from TC socket identity; cgroup socket tracking not attached: ", moduleErr)
+		return nil
+	}
 	uidDecisions, defaultAction := i.compileProcessUIDPolicy()
+	if i.followsAndroidPackageChanges() {
+		// The tracker's UID filter is fixed when it attaches; sing-ebpf has no
+		// way to update it. With package rules that follow the package table
+		// (android_uid_update.go) a fixed filter would go stale on the first
+		// install and silently stop recording owners for the new app. So it
+		// records every socket instead, and the TC policy alone decides what
+		// is intercepted.
+		uidDecisions, defaultAction = nil, commonEBPF.DecisionIntercept
+	}
 	tracker, err := commonEBPF.AttachProcessTracker(commonEBPF.ProcessTrackerConfig{
 		EnableTCP:    i.enableTCP,
 		EnableUDP:    i.enableUDP,
@@ -352,7 +395,9 @@ func (i *Inbound) startProcessTracker() error {
 			return E.Cause(err, "rollback partial eBPF process tracker")
 		}
 		// 软失败：内核里没有留下半挂载的资源。模块刚才已经试过且失败了，
-		// 再试一次没有意义，所以两个原因一起记下，落回用户态搜索。
+		// 再试一次没有意义，所以两个原因一起记下，落回用户态搜索。只记最终
+		// 用了哪个来源是不够的——"内核禁止挂载 cgroup 钩子"和"设备节点不
+		// 存在"是完全不同的结论，排查要从这里开始。
 		i.logger.Debug("eBPF socket owner tracking unavailable; using userspace process search: ",
 			E.Errors(err, moduleErr))
 		return nil
@@ -367,8 +412,20 @@ func (i *Inbound) processTrackingMode() string {
 	if i.usePlatformProcessFinder {
 		return "platform"
 	}
+	if i.socketCreatorActive.Load() {
+		if i.processTracker != nil {
+			return "tc_socket_creator+" + i.processTracker.TrackingMode()
+		}
+		return "tc_socket_creator"
+	}
 	if !i.localEnabled || !i.router.NeedFindProcess() {
 		return "off"
+	}
+	if i.socketIdentityActive.Load() {
+		if i.processTracker != nil {
+			return "tc_socket_identity+" + i.processTracker.TrackingMode()
+		}
+		return "tc_socket_identity"
 	}
 	if i.processTracker != nil {
 		// 来源自己报告模式，调用方不再硬编码某一种实现的名字。
@@ -381,7 +438,9 @@ func (i *Inbound) startCgroupUDPReleaseReader(backend *commonEBPF.CgroupBackend)
 	if backend == nil || backend.UDPUserspaceCleanupMode() != "ringbuf" {
 		return
 	}
-	i.cgroupReleaseWait.Go(func() {
+	i.cgroupReleaseWait.Add(1)
+	go func() {
+		defer i.cgroupReleaseWait.Done()
 		for {
 			socketCookie, err := backend.ReadUDPRelease()
 			if err != nil {
@@ -392,7 +451,7 @@ func (i *Inbound) startCgroupUDPReleaseReader(backend *commonEBPF.CgroupBackend)
 			}
 			i.udpNat.ReleaseSocket(socketCookie)
 		}
-	})
+	}()
 }
 
 func (i *Inbound) selfBypassMode() string {
@@ -511,6 +570,9 @@ func (i *Inbound) cleanupStartFailure() error {
 }
 
 func (i *Inbound) closeResources() error {
+	// First, so no UID update races the backend being taken apart.
+	i.stopAndroidUIDUpdater()
+	i.stopProcessIndex()
 	monitorErr := i.stopTCInterfaceMonitor()
 	i.stopBypassRuleSets()
 	sharedRewriteErr := error(nil)
@@ -567,7 +629,8 @@ func (i *Inbound) closeResources() error {
 	if i.processTrackerRollback != nil {
 		i.processTrackerRollback, processTrackerRollbackErr = closeProcessTrackerOwner(i.processTrackerRollback)
 	}
-	return E.Errors(monitorErr, sharedRewriteErr, disableErr, listenerErr, udpNATErr, udpReplySocketErr, dataPlaneErr, cgroupErr, routeErr, processTrackerErr, processTrackerRollbackErr, selfBypassErr)
+	socketCreatorErr := i.closeSocketCreator()
+	return E.Errors(monitorErr, sharedRewriteErr, disableErr, listenerErr, udpNATErr, udpReplySocketErr, dataPlaneErr, cgroupErr, routeErr, processTrackerErr, processTrackerRollbackErr, selfBypassErr, socketCreatorErr)
 }
 
 func closeProcessTrackerOwner(tracker processTrackerOwner) (processTrackerOwner, error) {

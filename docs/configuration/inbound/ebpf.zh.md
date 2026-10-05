@@ -102,6 +102,51 @@ cgroup v2 子树。
 Android 厂商的 netd hook 可能造成挂载冲突。sing-box 优先尝试多程序挂载，只在兼容
 错误下回退旧式独占挂载；设备无法安全共享根 cgroup hook 时应使用 local `tc`。
 
+### local.socket_creator
+
+可选的 socket 创建者采集器，默认关闭。仅用于 arm64、`local.data_plane=tc`，且不能
+与平台提供的进程查询器同时启用。创建钩子、持久采集器和现有 TC 已通过目标 Android
+内核上的隔离测试；真实 App 覆盖、完整服务上线和性能对比仍待验证，仍使用既有包名解析规则。
+
+```json
+{
+  "local": {
+    "enabled": true,
+    "data_plane": "tc",
+    "socket_creator": {
+      "enabled": true,
+      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v3"
+    }
+  }
+}
+```
+
+`pin_path` 可省略，默认如上；必须是 bpffs 上 root 拥有、权限 `0700` 的专用绝对目录。
+父目录均须属于 root；可写父目录须设置 sticky bit，兼容 Android 常见的 `01777`
+bpffs 挂载目录，不接受符号链接。启用前需由管理员加载
+与运行内核匹配的 `sbo_identity` 模块（`kernel/sbo_identity`），并设置 `capture_all=1`。sing-box 不会
+自动加载模块或修改开关。创建者就是其 Android cgroup（`…/uid_X/pid_<pid>`）所对应进程的
+socket 不建记录：TC 记录的 socket cgroup 即可定位该进程，名称与可执行文件取自 `/proc`。
+其余 socket 由采集器在创建时记录 PID、线程 ID、创建者 UID、进程出生时间、截断的 comm、
+argv[0] 哈希，以及内核在创建现场解析出的可执行文件路径，由现有 TC 交付；创建者退出后
+路径仍可得。不会把 socket 记账 UID 或 comm 当作精确包名证据。
+
+显式启用后的加载失败会阻止该入站启动。未采到创建记录的旧 socket、accept child 等
+仍使用既有归因路径；诊断中的 `creator_snapshots`、`creator_snapshot_missing`、
+`creator_snapshot_invalid`、`creator_cookie_fallbacks` 分别记录有效快照、缺失、无效和
+实际回退查询。普通 App 不因此增加逐连接 `/proc` 读取。
+
+正常停止保留创建采集挂载和存储，以继续记录服务停止期间新建的 socket；转发 TC 和
+路由仍按正常流程清理。重启会核对持久对象版本和布局，不兼容时拒绝覆盖。停用配置
+不会删除已持久化的采集器。需要彻底移除时，先停止所有使用该目录的 sing-box 实例，再运行：
+
+```shell
+sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v3
+```
+
+该命令不卸载桥接模块。采集器仍有活跃使用者时拒绝删除；升级导致对象不兼容时应先用
+旧版本命令移除旧采集器，再启动新版。移除会丢失已有 socket 的创建快照，无法事后补采。
+
 ### local.dns_mode
 
 | 值 | 对目标端口 53 的行为 |
@@ -239,6 +284,21 @@ raw-IP、PPP/PPPoE 和受支持的隧道链路应使用 `socket_assign`。local 
 来源筛选早于端口、私网地址和各自数据面的规则集绕过。顶层兼容规则集会应用到所有
 已启用路径，路径级规则集策略仍彼此独立。shared 的 CIDR 与 MAC include 为或关系，
 任一 exclude 命中都优先绕过。
+
+## Android 连接归属
+
+本机连接按 socket cookie 查询创建者的 PID、UID 和进程启动时间。只有 procfs 中的
+启动时间、UID、可执行文件均通过核对，且包管理器把普通应用 UID 唯一映射到一个
+未声明共享 UID 的包时，才填写用于路由的 `package_name`。
+
+`cmdline`、`comm` 和进程启动时报告的包名不作为单次连接的包名证据。共享 UID、
+隔离 UID、SDK sandbox、系统 UID，以及记录缺失或验证失败的连接，包名保持未知，
+不会命中包名规则；查不到 socket 记录时也不会回退到按 UID 罗列候选包名的查询。
+已有的 UID 信息仍可用于 `user_id` 规则，原生进程保留经核对的可执行文件路径。
+
+这里的连接归属不同于 `local.include_package` / `local.exclude_package`：这两个
+接管选项仍将包名解析成 UID，并作用于该 UID 的全部流量。下游设备流量不具有本机
+Android 包归属。
 
 ## 诊断
 

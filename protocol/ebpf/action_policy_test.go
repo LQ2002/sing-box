@@ -4,10 +4,26 @@ package ebpf
 
 import (
 	"net/netip"
+	"reflect"
 	"testing"
 
 	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 )
+
+func TestCompileActionPolicyKeepsDestinationSemanticsInSync(t *testing.T) {
+	var local, shared commonEBPF.ActionScope
+	fakeIPv4 := netip.MustParsePrefix("198.18.0.0/15")
+	fakeIPv6 := netip.MustParsePrefix("fd00:eb0f::/48")
+	ports := []portRange{{Start: 443, End: 443}}
+	appendDestinationPolicy(&local, true, ports, dnsModeRespectPolicy, fakeIPv4, fakeIPv6, true, true)
+	appendDestinationPolicy(&shared, true, ports, dnsModeRespectPolicy, fakeIPv4, fakeIPv6, true, true)
+	if !reflect.DeepEqual(local.DestinationCIDR, shared.DestinationCIDR) {
+		t.Fatalf("local/shared destination CIDR semantics diverged:\nlocal=%+v\nshared=%+v", local.DestinationCIDR, shared.DestinationCIDR)
+	}
+	if !reflect.DeepEqual(local.DestinationPort, shared.DestinationPort) {
+		t.Fatalf("local/shared destination port semantics diverged:\nlocal=%+v\nshared=%+v", local.DestinationPort, shared.DestinationPort)
+	}
+}
 
 func TestCompileProcessUIDPolicySubtractsExcludedRanges(t *testing.T) {
 	inbound := &Inbound{
@@ -32,6 +48,31 @@ func TestCompileProcessUIDPolicySubtractsExcludedRanges(t *testing.T) {
 		if decisions[index] != want[index] {
 			t.Fatalf("decisions = %+v, want %+v", decisions, want)
 		}
+	}
+}
+
+// An exclusion inside an included range must reach the TC/cgroup startup
+// policy. The data-plane compiler drops decisions equal to the default action,
+// so passing include and exclude side by side lost the exclusion.
+func TestBuildActionPolicyLetsExcludeWinInsideInclude(t *testing.T) {
+	inbound := &Inbound{localPolicy: localUIDPolicy{
+		IncludeUIDConfigured: true,
+		IncludeUID:           []uidRange{{Start: 10000, End: 10010}},
+		ExcludeUID:           []uidRange{{Start: 10005, End: 10005}},
+	}}
+	policy := inbound.buildActionPolicy()
+	if policy.Local.Default != commonEBPF.DecisionPass {
+		t.Fatalf("local default = %v, want pass", policy.Local.Default)
+	}
+	for _, decision := range policy.Local.UID {
+		if decision.Action == commonEBPF.DecisionIntercept && decision.Start <= 10005 && 10005 <= decision.End {
+			t.Fatalf("excluded UID 10005 is intercepted by %+v (decisions %+v)", decision, policy.Local.UID)
+		}
+	}
+	decisions, defaultAction := inbound.compileProcessUIDPolicy()
+	if !reflect.DeepEqual(policy.Local.UID, decisions) || policy.Local.Default != defaultAction {
+		t.Fatalf("startup policy %+v/%v diverges from the process policy %+v/%v",
+			policy.Local.UID, policy.Local.Default, decisions, defaultAction)
 	}
 }
 
