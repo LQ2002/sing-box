@@ -79,9 +79,12 @@ func udpSessionKeyFromContext(ctx context.Context) (udpSessionKey, bool) {
 }
 
 type udpClientState struct {
-	access          sync.RWMutex
-	sourceMAC       net.HardwareAddr
-	socketCookie    uint64
+	access       sync.RWMutex
+	sourceMAC    net.HardwareAddr
+	socketCookie uint64
+	// identity is the TC socket identity of the client socket (stage 3);
+	// zero, with valid false, on the cgroup data plane.
+	identity        socketIdentity
 	bindings        map[netip.AddrPort]udpRedirectBinding
 	replyAliasCount uint16
 	closed          bool
@@ -275,13 +278,26 @@ func (t *udpClientTable) setDirectBinding(
 	sourceMAC net.HardwareAddr,
 	socketCookie uint64,
 ) {
+	t.setDirectBindingWithIdentity(key, destination, sourceMAC, socketIdentity{cookie: socketCookie})
+}
+
+func (t *udpClientTable) setDirectBindingWithIdentity(
+	key udpSessionKey,
+	destination netip.AddrPort,
+	sourceMAC net.HardwareAddr,
+	identity socketIdentity,
+) {
+	if key.Scope == udpSessionScopeSharedTC || key.Scope == udpSessionScopeSharedRewrite {
+		identity = socketIdentity{}
+	}
 	state := t.loadOrCreate(key)
 	state.access.Lock()
 	defer state.access.Unlock()
 	if len(sourceMAC) > 0 {
 		state.sourceMAC = append(state.sourceMAC[:0], sourceMAC...)
 	}
-	state.socketCookie = socketCookie
+	state.socketCookie = identity.cookie
+	state.identity = identity
 	state.bindings[destination] = udpRedirectBinding{}
 }
 
@@ -292,13 +308,21 @@ func (t *udpClientTable) setDirectAssignmentBinding(
 	assignmentKeyInterfaceIndex uint32,
 	assignment commonEBPF.TCAssignment,
 ) {
+	// The assignment also carries the client socket's identity. Shared scopes
+	// keep none of it, exactly as setDirectBindingWithIdentity does: a shared
+	// or rewritten client is not the local socket that TC looked up.
+	identity := identityFromAssignment(assignment)
+	if key.Scope == udpSessionScopeSharedTC || key.Scope == udpSessionScopeSharedRewrite {
+		identity = socketIdentity{}
+	}
 	state := t.loadOrCreate(key)
 	state.access.Lock()
 	defer state.access.Unlock()
 	if len(sourceMAC) > 0 {
 		state.sourceMAC = append(state.sourceMAC[:0], sourceMAC...)
 	}
-	state.socketCookie = assignment.SocketCookie
+	state.socketCookie = identity.cookie
+	state.identity = identity
 	state.bindings[destination] = udpRedirectBinding{
 		tcAssignmentKeyInterfaceIndex: assignmentKeyInterfaceIndex,
 		tcAssignmentKeyValid:          true,
@@ -809,4 +833,15 @@ func (s *udpClientState) processSocketCookie() uint64 {
 	s.access.RLock()
 	defer s.access.RUnlock()
 	return s.socketCookie
+}
+
+// processIdentity returns the recorded socket identity, or one carrying only
+// the cookie (valid false) when none was recorded.
+func (s *udpClientState) processIdentity() socketIdentity {
+	s.access.RLock()
+	defer s.access.RUnlock()
+	if s.identity.valid || s.identity.creator.Flags != 0 {
+		return s.identity
+	}
+	return socketIdentity{cookie: s.socketCookie}
 }

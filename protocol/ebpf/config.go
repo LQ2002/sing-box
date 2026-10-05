@@ -98,6 +98,9 @@ func validateLocalOptions(enabled bool, options option.EBPFLocalOptions) error {
 	if options.CgroupPath != "" {
 		return E.New("local.cgroup_path requires local interception")
 	}
+	if options.SocketCreator != nil {
+		return E.New("local.socket_creator requires local interception")
+	}
 	if options.DNSMode != "" {
 		return E.New("local.dns_mode requires local interception")
 	}

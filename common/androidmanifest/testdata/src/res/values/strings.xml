@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_process">p.ref.custom</string>
+    <string name="alias_process">@string/service_process</string>
+    <string name="service_process">:svc</string>
+    <string name="split_process">:fromBase</string>
+    <string name="unused_a">a</string>
+    <string name="unused_b">b</string>
+</resources>

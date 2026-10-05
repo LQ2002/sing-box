@@ -51,6 +51,31 @@ func TestCompileProcessUIDPolicySubtractsExcludedRanges(t *testing.T) {
 	}
 }
 
+// An exclusion inside an included range must reach the TC/cgroup startup
+// policy. The data-plane compiler drops decisions equal to the default action,
+// so passing include and exclude side by side lost the exclusion.
+func TestBuildActionPolicyLetsExcludeWinInsideInclude(t *testing.T) {
+	inbound := &Inbound{localPolicy: localUIDPolicy{
+		IncludeUIDConfigured: true,
+		IncludeUID:           []uidRange{{Start: 10000, End: 10010}},
+		ExcludeUID:           []uidRange{{Start: 10005, End: 10005}},
+	}}
+	policy := inbound.buildActionPolicy()
+	if policy.Local.Default != commonEBPF.DecisionPass {
+		t.Fatalf("local default = %v, want pass", policy.Local.Default)
+	}
+	for _, decision := range policy.Local.UID {
+		if decision.Action == commonEBPF.DecisionIntercept && decision.Start <= 10005 && 10005 <= decision.End {
+			t.Fatalf("excluded UID 10005 is intercepted by %+v (decisions %+v)", decision, policy.Local.UID)
+		}
+	}
+	decisions, defaultAction := inbound.compileProcessUIDPolicy()
+	if !reflect.DeepEqual(policy.Local.UID, decisions) || policy.Local.Default != defaultAction {
+		t.Fatalf("startup policy %+v/%v diverges from the process policy %+v/%v",
+			policy.Local.UID, policy.Local.Default, decisions, defaultAction)
+	}
+}
+
 func TestCompileProcessUIDPolicyUsesExcludeActionsByDefault(t *testing.T) {
 	inbound := &Inbound{localPolicy: localUIDPolicy{
 		ExcludeUID: []uidRange{{Start: 10000, End: 10010}},
