@@ -745,8 +745,13 @@ LSPosed、su shell 在根 cgroup。在模块内计时实测中，建 sk_storage 
 - **建议方案（未实施）**：TCP 用“首包纯 SYN”判别——请求 socket 或无 socket 的 SYN-ACK 直接放行；full socket 首次经过时
   首包为纯 SYN 才按原规则选流，否则（被动子连接、sing-box 启动前已存在的连接）永久放行，来源位存入
   `sb_tc_socket_verdict` 的保留字节，避免策略代号刷新时被重算。参考 dae（TCP 仅 SYN 进入路由）、OpenNHP PR #1749。
-  UDP 可用连接跟踪的 REPLY 方向，但逐包约 1.3 µs，需在真实 UDP 负载下实测后再定。待用户决定：启动前已存在的连接
-  改为放行（不再被重置）是否接受。
+  UDP 可用连接跟踪的 REPLY 方向，但逐包约 1.3 µs，需在真实 UDP 负载下实测后再定。
+- **用户决定（2026-10-05）：不做。** 代价已向用户说明：sing-box 未运行期间直连建立的 TCP 连接会在 sing-box 启动后
+  继续直连到自然结束，而不是像现在这样被截进 sing-box 后断开、重连后走代理；sing-box 重启前由它代理的连接两种做法下
+  都会断开。用户选择保持现状（手机作公网 TCP 服务端时握手失败的问题因此保留）。同日另行评审并否决：TC 中
+  `bpf_sk_storage_delete` 阅后即焚（sk_storage 无容量上限、随 socket 释放，删除反而丢失策略重算所需的快照）、
+  Go 侧“UID + 可执行路径哈希”索引（App 与系统服务的路径都是 app_process64，现用“进程名 + UID”的 Manifest 进程索引）、
+  无快照时扫描 `/proc/net/tcp` 加否定缓存（现无此扫描，归属按连接只做一次）。
 
 ## 仓库与范围
 
