@@ -62,11 +62,16 @@ type downlinkWriter interface {
 	N.PacketBatchWriter
 }
 
-// downlinkBatchLimit bounds the queue per session. UDP buffers are 16 KiB
-// (sing buf.UDPBufferSize), so a saturated session holds at most ~1 MiB, and
-// 64 covers one full UDP_SEGMENT message (65507 / 1350 = 48 segments). When
-// the queue is full the copy goroutine waits: backpressure instead of loss.
-const downlinkBatchLimit = 64
+// downlinkBatchLimit bounds the queue per session. When it is full the copy
+// goroutine waits: backpressure instead of loss.
+//
+// 16, not more: a 2026-10-05 device A/B with 64 measured an average GSO batch
+// of ~6 datagrams (Udp OutDatagrams fell ~5.8x), while the heap profile showed
+// the extra queued buffers as +2.6 MB in use in sing's 16 KiB buffer class
+// (RSS +1.5 MB on average) under looping HTTP/3 downloads. 16 bounds a
+// saturated session at 256 KiB and keeps the probe's x16 GSO cost
+// (7.7 us/datagram vs 16.9 for sendto).
+const downlinkBatchLimit = 16
 
 func newDownlinkBatcher(writer downlinkWriter) *downlinkBatcher {
 	b := &downlinkBatcher{writer: writer}
