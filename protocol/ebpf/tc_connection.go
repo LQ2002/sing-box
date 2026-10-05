@@ -127,8 +127,11 @@ func (i *Inbound) prepareTCPacketConnection(
 ) (bool, context.Context, N.PacketWriter, N.CloseHandlerFunc) {
 	ctx := log.ContextWithNewID(i.ctx)
 	clientState := i.udpClientTable.loadOrCreate(key)
-	writer := &tcPacketWriter{inbound: i, key: key, clientState: clientState}
+	// The batcher (udp_downlink_batcher.go) is what reaches tcPacketWriter's
+	// batch/GSO path; the downlink copy itself only ever writes one datagram.
+	writer := newDownlinkBatcher(&tcPacketWriter{inbound: i, key: key, clientState: clientState})
 	return true, ctx, writer, func(error) {
+		writer.close()
 		cleanup := i.udpClientTable.deleteWithCleanup(key, clientState)
 		i.deleteCgroupUDPRedirects(cleanup.cgroupRedirects)
 		i.deleteTCAssignments(key, cleanup.tcAssignments)
