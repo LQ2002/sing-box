@@ -1,0 +1,31 @@
+OBSERVING iface=wlan0 watch=192.168.10.128 duration=40s
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12738 flags=SA ct=REPLY err=0 sk_state=12
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12738 flags=PA ct=REPLY err=0 sk_state=1
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12738 flags=A ct=REPLY err=0 sk_state=1
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12738 flags=FA ct=REPLY err=0 sk_state=4
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12738 flags=A ct=REPLY err=0 sk_state=7
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12739 flags=SA ct=REPLY err=0 sk_state=12
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12739 flags=PA ct=REPLY err=0 sk_state=1
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12739 flags=A ct=REPLY err=0 sk_state=1
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12739 flags=FA ct=REPLY err=0 sk_state=4
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12738 flags=R ct=REPLY err=0 sk_state=7
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12740 flags=SA ct=REPLY err=0 sk_state=12
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12739 flags=A ct=REPLY err=0 sk_state=7
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12740 flags=PA ct=REPLY err=0 sk_state=1
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12740 flags=A ct=REPLY err=0 sk_state=1
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12740 flags=FA ct=REPLY err=0 sk_state=4
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12740 flags=A ct=REPLY err=0 sk_state=7
+PKT udp 192.168.10.156:18081 -> 192.168.10.128:64067 flags= ct=REPLY err=0 sk_state=7
+PKT udp 192.168.10.156:18081 -> 192.168.10.128:64067 flags= ct=REPLY err=0 sk_state=7
+PKT udp 192.168.10.156:18081 -> 192.168.10.128:64067 flags= ct=REPLY err=0 sk_state=7
+PKT tcp 192.168.10.156:44314 -> 1.1.1.1:80 flags=S ct=ORIGINAL err=0 sk_state=2
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12738 flags=R ct=REPLY err=0 sk_state=7
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12740 flags=R ct=REPLY err=0 sk_state=7
+PKT tcp 192.168.10.156:44324 -> 1.1.1.1:80 flags=S ct=ORIGINAL err=0 sk_state=2
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12740 flags=R ct=REPLY err=0 sk_state=7
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12738 flags=R ct=REPLY err=0 sk_state=7
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12738 flags=R ct=REPLY err=0 sk_state=7
+PKT tcp 192.168.10.156:18080 -> 192.168.10.128:12738 flags=R ct=REPLY err=0 sk_state=7
+TOTAL tcp original=41 reply=22 miss=1
+TOTAL udp original=0 reply=3 miss=0
+COST lookups=67 mean_ns=1321 (includes one ktime pair, 52 ns tick)

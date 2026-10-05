@@ -728,6 +728,26 @@ LSPosed、su shell 在根 cgroup。在模块内计时实测中，建 sk_storage 
     路径——路径表不存、回退 `/proc` 得完整路径——和运行中被删除的程序，均为正确路径）；内核日志全程捕获，
     标记后 20717 行 **0 个告警**；`get_file_rcu=fput=31`；taint 4608；测试实例 RSS 稳定在约 18 MB。
 
+### 被动连接与 accept 子连接（2026-10-05，核查结论，未改代码）
+
+- **accept 子连接的身份：不实施**（BPF_F_CLONE、`android_vh_inet_csk_clone_lock`、cgroup/connect4、SOCKMAP+sk_msg
+  均已核查）。原因相同：数据面用不到它。sing-ebpf `native/tc.bpf.c` 的 `local_selected` 只按目的地、UID、端口选流，
+  被动连接的回包要么因 `bypass_private_address` 放行，要么被重定向进 sing-box 而握手失败；两种情况下身份都不参与分流。
+  另：App 监听者的子连接本就继承其 cgroup（`cgroup_sk_clone`）。BPF_F_CLONE 的分配失败会使内核放弃该连接。
+- **真正的问题**是 TC 截走被动连接的回包（手机作服务端被公网访问时握手失败），与身份无关。依据：
+  SYN-ACK 由请求 socket 发出（`net/ipv4/tcp_output.c:3753-3754`，SYN cookie 时不挂 socket :3756），
+  TC 的 `bpf_sk_storage_get` 对非 full socket 返回 NULL（`net/core/bpf_sk_storage.c:230`）而退回普通选流；
+  SYN-ACK 先于子 socket（`tcp_input.c:7375` 收 SYN 即发；子 socket 在最终 ACK 时由 `tcp_minisocks.c:852/513` 创建），
+  所以“clone 时登记、回包时查表”赶不上第一个 SYN-ACK。AOSP `cgroupskb/ingress/stats`（`bpf_traffic_account`）
+  只做按 UID 的计费与防火墙，解决不了出口拦截。
+- 真机只读探针 `experimental/conntrack_probe`：入站 TCP 的 SYN-ACK `sk_state=12`、连接跟踪方向 REPLY，后续包均 REPLY；
+  入站 UDP 回复 REPLY 3/3；主动 SYN 为 ORIGINAL；`bpf_skb_ct_lookup` 平均约 1.3 µs/次。
+- **建议方案（未实施）**：TCP 用“首包纯 SYN”判别——请求 socket 或无 socket 的 SYN-ACK 直接放行；full socket 首次经过时
+  首包为纯 SYN 才按原规则选流，否则（被动子连接、sing-box 启动前已存在的连接）永久放行，来源位存入
+  `sb_tc_socket_verdict` 的保留字节，避免策略代号刷新时被重算。参考 dae（TCP 仅 SYN 进入路由）、OpenNHP PR #1749。
+  UDP 可用连接跟踪的 REPLY 方向，但逐包约 1.3 µs，需在真实 UDP 负载下实测后再定。待用户决定：启动前已存在的连接
+  改为放行（不再被重置）是否接受。
+
 ## 仓库与范围
 
 - 主实施仓库：`E:\ebpf_sing-box`。
