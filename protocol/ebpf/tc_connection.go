@@ -137,11 +137,13 @@ type tcPacketWriter struct {
 	key            udpSessionKey
 	clientState    *udpClientState
 	newReplySocket func(netip.AddrPort) (*net.UDPConn, error)
+	batchProbe     downlinkBatchProbe
 }
 
 func (w *tcPacketWriter) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
 	defer buffer.Release()
 	destinationAddress := destination.AddrPort()
+	defer w.batchProbe.begin(w, buffer.Len(), destinationAddress)()
 	binding, err := w.ensureReplyBinding(destinationAddress)
 	if err != nil {
 		return err
@@ -205,6 +207,7 @@ func (w *tcPacketWriter) ensureReplyBinding(destinationAddress netip.AddrPort) (
 }
 
 func (w *tcPacketWriter) WritePacketBatch(buffers []*buf.Buffer, destinations []M.Socksaddr) error {
+	countDownlinkBatchCall()
 	if len(buffers) == 0 || len(buffers) != len(destinations) {
 		buf.ReleaseMulti(buffers)
 		return os.ErrInvalid
