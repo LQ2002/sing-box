@@ -79,3 +79,38 @@ So the open question is batch size, not GSO support: how many downlink
 datagrams are already available when one is read. Not measured yet. At
 ~18k datagrams/s the write-back costs ~0.30 core with sendto; batches of 4
 would make it ~0.21, of 16 ~0.14 (no-GRO column).
+
+## Achievable batch size on real traffic (2026-10-05)
+
+Measured with a timing probe in `tcPacketWriter.WritePacket` (Ref_sing-box
+branch `claude/udp-batch-measure`, `2f9e854a5` + `1c3d986ee`, deployed for a
+few minutes only, then the daily binary was restored). A write that starts
+within 10/30 us of the previous write's end found its datagram already
+queued; runs of such writes are what an opportunistic batcher would get.
+
+Two minutes of a full-speed Chrome QUIC download (115 283 datagrams; one
+earlier 10 s window alone had 74 303):
+
+| run length (30 us threshold) | share of datagrams |
+|---|---|
+| 1 | 0.8% |
+| 2-4 | 6.7% |
+| 5-8 | 11.4% |
+| 9-16 | 22.6% |
+| 17-32 | 32.5% |
+| 33-64 | 19.9% |
+| >64 | 6.0% |
+
+- Gaps: 83% under 10 us, 6% at 1 ms or more. At a 10 us threshold the
+  distribution shifts down a little (9-16: 25%, 17-32: 30%), so the answer
+  is not sensitive to the threshold.
+- 99.3% of back-to-back pairs (104 441 / 105 153) were GSO-mergeable: same
+  reply socket, size not larger than the previous datagram.
+- `WritePacketBatch` was called 0 times: the batch/GSO path is dead today.
+
+So about 80% of downlink datagrams arrive in runs of 9 or more. With the
+probe's per-datagram costs, batching them would take the write-back from
+~16.9 us towards ~7.7 us per datagram (the x16 row), roughly halving its
+CPU. At light load (video, ~500 datagrams/s, see 6dc97eda) the absolute
+saving is negligible but the batcher adds no latency if it never waits for
+more datagrams.
