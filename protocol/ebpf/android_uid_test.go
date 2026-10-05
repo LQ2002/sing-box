@@ -82,6 +82,48 @@ func TestResolveAndroidUIDPolicy(t *testing.T) {
 	}
 }
 
+// A second resolution must start from the configured numeric UIDs, not from
+// the previous result; otherwise the UID of an uninstalled or reinstalled
+// package stays in the policy for good.
+func TestResolveAndroidUIDPolicyStartsFromConfiguredUIDs(t *testing.T) {
+	packageManager := &testPackageManager{
+		idByPackage:  map[string]uint32{"com.example.include": 10001},
+		packagesByID: map[uint32][]string{10001: {"com.example.include"}},
+	}
+	inbound := &Inbound{
+		logger:            log.NewNOPFactory().Logger(),
+		networkManager:    &testNetworkManager{packageManager: packageManager},
+		androidUIDOptions: &androidUIDOptions{includePackage: []string{"com.example.include"}},
+		localPolicy: localUIDPolicy{
+			IncludeUID: []uidRange{{Start: 2000, End: 2000}},
+		},
+	}
+	if err := inbound.resolveAndroidUIDPolicy(); err != nil {
+		t.Fatal(err)
+	}
+	if !uidInRanges(10001, inbound.localPolicy.IncludeUID) {
+		t.Fatalf("expected 10001 after the first resolution: %+v", inbound.localPolicy.IncludeUID)
+	}
+
+	// The package is reinstalled and receives a new UID.
+	packageManager.idByPackage["com.example.include"] = 10050
+	packageManager.packagesByID = map[uint32][]string{10050: {"com.example.include"}}
+	if err := inbound.resolveAndroidUIDPolicy(); err != nil {
+		t.Fatal(err)
+	}
+	if uidInRanges(10001, inbound.localPolicy.IncludeUID) {
+		t.Fatalf("stale UID 10001 survived a second resolution: %+v", inbound.localPolicy.IncludeUID)
+	}
+	for _, uid := range []uint32{2000, 10050} {
+		if !uidInRanges(uid, inbound.localPolicy.IncludeUID) {
+			t.Fatalf("expected UID %d after the second resolution: %+v", uid, inbound.localPolicy.IncludeUID)
+		}
+	}
+	if len(inbound.androidUIDOptions.configuredIncludeUID) != 1 || inbound.androidUIDOptions.configuredIncludeUID[0] != (uidRange{Start: 2000, End: 2000}) {
+		t.Fatalf("configured UIDs changed: %+v", inbound.androidUIDOptions.configuredIncludeUID)
+	}
+}
+
 func TestResolveAndroidUIDPolicyRequiresPackageManager(t *testing.T) {
 	inbound := &Inbound{
 		logger:            log.NewNOPFactory().Logger(),

@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="p.ref">
+  <application android:process="@string/app_process">
+    <activity android:name=".A" />
+    <service android:name=".S" android:process="@string/alias_process" />
+  </application>
+</manifest>

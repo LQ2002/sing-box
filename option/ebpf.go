@@ -31,6 +31,7 @@ type EBPFLocalOptions struct {
 	DNSMode              string                           `json:"dns_mode,omitempty" enum:"hijack,respect_policy,off"`
 	DataPlane            string                           `json:"data_plane,omitempty" enum:"tc,cgroup"`
 	CgroupPath           string                           `json:"cgroup_path,omitempty"`
+	SocketCreator        *EBPFSocketCreatorOptions        `json:"socket_creator,omitempty"`
 	IPv6                 *bool                            `json:"ipv6,omitempty"`
 	BypassPrivateAddress *bool                            `json:"bypass_private_address,omitempty"`
 	BypassRuleSet        badoption.Listable[string]       `json:"bypass_rule_set,omitempty" reference:"rule_set"`
@@ -44,6 +45,13 @@ type EBPFLocalOptions struct {
 	ExcludePackage       badoption.Listable[string]       `json:"exclude_package,omitempty"`
 	BypassPort           badoption.Listable[uint16]       `json:"bypass_port,omitempty"`
 	BypassPortRange      badoption.Listable[string]       `json:"bypass_port_range,omitempty"`
+}
+
+// EBPFSocketCreatorOptions enables the persistent socket-creation collector.
+// Omitted or disabled keeps the existing attribution sources unchanged.
+type EBPFSocketCreatorOptions struct {
+	Enabled bool   `json:"enabled,omitempty"`
+	PinPath string `json:"pin_path,omitempty"`
 }
 
 type EBPFSharedOptions struct {

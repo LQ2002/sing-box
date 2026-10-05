@@ -149,7 +149,7 @@ func (i *Inbound) NewPacketConnectionEx(
 	key, keyLoaded := udpSessionKeyFromContext(ctx)
 	if clientState, loaded := i.udpClientTable.load(key); keyLoaded && loaded {
 		metadata.SourceMACAddress = clientState.sourceMACAddress()
-		metadata.ProcessInfo = i.lookupProcessInfo(ctx, clientState.processSocketCookie())
+		metadata.ProcessInfo = i.ownerFromIdentity(ctx, clientState.processIdentity())
 		if binding, found := clientState.redirectBinding(destination.AddrPort()); found {
 			metadata.UDPConnect = binding.connected
 		}

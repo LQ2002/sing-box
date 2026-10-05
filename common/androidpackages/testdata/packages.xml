@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<packages>
+    <version sdkVersion="37" databaseVersion="3" fingerprint="test" />
+    <package name="com.example.app" codePath="/data/app/~~a/com.example.app-b" publicFlags="0" userId="10123" version="1">
+        <sigs count="1" schemeVersion="2">
+            <cert index="0" />
+        </sigs>
+        <perms>
+            <item name="android.permission.INTERNET" granted="true" flags="0" />
+        </perms>
+    </package>
+    <package name="com.android.settings" codePath="/system_ext/priv-app/Settings" sharedUserId="1000" />
+    <package name="com.android.providers.settings" codePath="/system/priv-app/SettingsProvider" sharedUserId="1000" />
+    <package name="com.android.phone" codePath="/system/priv-app/TeleService" sharedUserId="1001" />
+    <package name="android" codePath="/system/framework/framework-res.apk" sharedUserId="1000" />
+    <shared-user name="android.uid.system" userId="1000">
+        <sigs count="1" schemeVersion="3">
+            <cert index="1" />
+        </sigs>
+        <perms />
+    </shared-user>
+    <shared-user name="android.uid.phone" userId="1001" />
+    <keyset-settings version="1">
+        <keys>
+            <public-key identifier="1" value="AAAA" />
+        </keys>
+        <lastIssuedKeyId value="1" />
+    </keyset-settings>
+</packages>

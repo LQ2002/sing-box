@@ -1,0 +1,10 @@
+# Build outputs (build.sh in WSL); the module is built per device kernel.
+.build/
+__pycache__/
+*.ko
+*.o
+*.mod
+*.mod.c
+.*.cmd
+Module.symvers
+modules.order

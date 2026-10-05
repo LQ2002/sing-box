@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
@@ -58,36 +59,48 @@ func RegisterInbound(registry *inbound.Registry) {
 
 type Inbound struct {
 	inbound.Adapter
-	ctx                       context.Context
-	router                    adapter.Router
-	logger                    log.ContextLogger
-	networkManager            adapter.NetworkManager
-	localEnabled              bool
-	localDataPlane            string
-	cgroupPath                string
-	cgroupBackend             *commonEBPF.CgroupBackend
-	localRoutes               *commonEBPF.LocalRouteSet
-	redirectIPv4Prefix        netip.Prefix
-	redirectIPv6Prefix        netip.Prefix
-	selfBypass                *commonEBPF.SelfBypass
-	selfBypassCgroup          bool
-	processTracker            processTrackerOwner
-	processTrackerRollback    processTrackerOwner
-	processInfoCache          *processInfoCache
-	usePlatformProcessFinder  bool
-	listeners                 internalListenerSet
-	udpNat                    *udpNATService
-	tcDataPlane               tcRuntime
-	udpTimeout                time.Duration
-	udpFragment               bool
-	enableTCP                 bool
-	enableUDP                 bool
-	localDNSMode              string
-	sharedDNSMode             string
-	localIPv6                 bool
-	localPolicy               localUIDPolicy
-	compiledPolicy            commonEBPF.CompiledPolicy
-	androidUIDOptions         *androidUIDOptions
+	ctx                      context.Context
+	router                   adapter.Router
+	logger                   log.ContextLogger
+	networkManager           adapter.NetworkManager
+	localEnabled             bool
+	localDataPlane           string
+	cgroupPath               string
+	cgroupBackend            *commonEBPF.CgroupBackend
+	localRoutes              *commonEBPF.LocalRouteSet
+	redirectIPv4Prefix       netip.Prefix
+	redirectIPv6Prefix       netip.Prefix
+	selfBypass               *commonEBPF.SelfBypass
+	selfBypassCgroup         bool
+	processTracker           processTrackerOwner
+	processTrackerRollback   processTrackerOwner
+	socketCreator            socketCreatorCollector
+	socketCreatorPinPath     string
+	socketCreatorActive      atomic.Bool
+	netdCookieTags           netdCookieTagMap
+	processInfoCache         *processInfoCache
+	usePlatformProcessFinder bool
+	listeners                internalListenerSet
+	udpNat                   *udpNATService
+	tcDataPlane              tcRuntime
+	udpTimeout               time.Duration
+	udpFragment              bool
+	enableTCP                bool
+	enableUDP                bool
+	localDNSMode             string
+	sharedDNSMode            string
+	localIPv6                bool
+	localPolicy              localUIDPolicy
+	compiledPolicy           commonEBPF.CompiledPolicy
+	androidUIDOptions        *androidUIDOptions
+	androidUIDUpdater        *androidUIDUpdater
+	// Set during startInbound while listeners may already accept, hence
+	// atomic.
+	cgroupOwners              atomic.Pointer[cgroupOwnerResolver]
+	processIndex              atomic.Pointer[processPackageIndex]
+	socketIdentityActive      atomic.Bool
+	identityCounters          identityCounters
+	androidUIDUpdaterAccess   sync.Mutex
 	sharedOptions             option.EBPFSharedOptions
 	sharedEnabled             bool
 	sharedDataPlane           string
@@ -236,6 +249,10 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		return nil, err
 	}
 	localDataPlane, cgroupPath, sharedDataPlane := selection.localDataPlane, selection.cgroupPath, selection.sharedDataPlane
+	socketCreatorPinPath, err := normalizeSocketCreator(options.Local.SocketCreator, localEnabled, localDataPlane)
+	if err != nil {
+		return nil, err
+	}
 	fakeIPICMPReply, err := normalizeFakeIPICMP(options.FakeIPICMP)
 	if err != nil {
 		return nil, E.Cause(err, "parse fakeip_icmp")
@@ -322,28 +339,29 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 			platform := service.FromContext[adapter.PlatformInterface](ctx)
 			return platform != nil && platform.UsePlatformConnectionOwnerFinder()
 		}(),
-		localEnabled:        localEnabled,
-		localDataPlane:      localDataPlane,
-		cgroupPath:          cgroupPath,
-		selfBypass:          selfBypass,
-		processInfoCache:    newProcessInfoCache(),
-		enableTCP:           enableTCP,
-		enableUDP:           enableUDP,
-		localDNSMode:        localDNSMode,
-		sharedDNSMode:       sharedDNSMode,
-		localIPv6:           localEnabled && enabledByDefault(options.Local.IPv6),
-		sharedOptions:       sharedOptions,
-		sharedEnabled:       sharedEnabled,
-		sharedDataPlane:     sharedDataPlane,
-		sharedIPv6:          sharedEnabled && enabledByDefault(options.Shared.IPv6),
-		sharedBypassPrivate: options.Shared.BypassPrivateAddress == nil || *options.Shared.BypassPrivateAddress,
-		localBypassPort:     localBypassPort,
-		sharedBypassPort:    sharedBypassPort,
-		localBypassExclude:  localBypassExclude,
-		sharedBypassExclude: sharedBypassExclude,
-		tcPriority:          uint16(options.TCPriority),
-		sharedIncludeMAC:    sharedIncludeMAC,
-		sharedExcludeMAC:    sharedExcludeMAC,
+		localEnabled:         localEnabled,
+		localDataPlane:       localDataPlane,
+		cgroupPath:           cgroupPath,
+		socketCreatorPinPath: socketCreatorPinPath,
+		selfBypass:           selfBypass,
+		processInfoCache:     newProcessInfoCache(),
+		enableTCP:            enableTCP,
+		enableUDP:            enableUDP,
+		localDNSMode:         localDNSMode,
+		sharedDNSMode:        sharedDNSMode,
+		localIPv6:            localEnabled && enabledByDefault(options.Local.IPv6),
+		sharedOptions:        sharedOptions,
+		sharedEnabled:        sharedEnabled,
+		sharedDataPlane:      sharedDataPlane,
+		sharedIPv6:           sharedEnabled && enabledByDefault(options.Shared.IPv6),
+		sharedBypassPrivate:  options.Shared.BypassPrivateAddress == nil || *options.Shared.BypassPrivateAddress,
+		localBypassPort:      localBypassPort,
+		sharedBypassPort:     sharedBypassPort,
+		localBypassExclude:   localBypassExclude,
+		sharedBypassExclude:  sharedBypassExclude,
+		tcPriority:           uint16(options.TCPriority),
+		sharedIncludeMAC:     sharedIncludeMAC,
+		sharedExcludeMAC:     sharedExcludeMAC,
 		localPolicy: localUIDPolicy{
 			BypassPrivateAddress: options.Local.BypassPrivateAddress == nil || *options.Local.BypassPrivateAddress,
 			IncludeUIDConfigured: len(options.Local.IncludeUID) > 0 ||
