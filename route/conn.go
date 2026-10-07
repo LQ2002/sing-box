@@ -112,6 +112,10 @@ func notifyConnectionFailure(ctx context.Context, chain []adapter.Outbound) {
 
 func (m *ConnectionManager) NewConnection(ctx context.Context, this N.Dialer, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	ctx = adapter.WithContext(ctx, &metadata)
+	// Lets the download copy coalesce writes to conn without delaying them
+	// (coalesce_writer.go): the outbound's read-buffered conn flushes it
+	// before each socket read.
+	ctx, _ = dialer.WithReadFlushHook(ctx)
 	var (
 		remoteConn net.Conn
 		err        error
@@ -308,7 +312,23 @@ func (m *ConnectionManager) NewPacketConnection(ctx context.Context, this N.Dial
 }
 
 func (m *ConnectionManager) connectionCopy(ctx context.Context, source net.Conn, destination net.Conn, direction bool, done *atomic.Bool, onClose N.CloseHandlerFunc) {
-	_, err := bufio.CopyWithIncreateBuffer(destination, source, bufio.DefaultIncreaseBufferAfter, bufio.DefaultBatchSize)
+	var copyDestination io.Writer = destination
+	var coalescer *coalescingWriter
+	// Only the download copy, and only when the outbound conn adopted the
+	// hook: then its socket reads flush the coalesced writes.
+	if flushHook := dialer.ReadFlushHookFromContext(ctx); direction && flushHook.Attached() {
+		coalescer = newCoalescingWriter(destination)
+		flushHook.SetFlush(coalescer.FlushBeforeRead)
+		defer flushHook.SetFlush(nil)
+		copyDestination = coalescer
+	}
+	_, err := bufio.CopyWithIncreateBuffer(copyDestination, source, bufio.DefaultIncreaseBufferAfter, bufio.DefaultBatchSize)
+	if coalescer != nil {
+		// Write out the tail before CloseWrite below.
+		if flushErr := coalescer.Close(); err == nil {
+			err = flushErr
+		}
+	}
 	if err != nil {
 		common.Close(source, destination)
 	} else {

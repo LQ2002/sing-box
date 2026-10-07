@@ -444,7 +444,7 @@ func (d *DefaultDialer) trackConn(ctx context.Context, destination M.Socksaddr, 
 	}
 	conn = bindEBPFSelfBypassConnLifecycle(d.networkManager, conn)
 	if d.readBuffer && !isUDPConn {
-		conn = newReadBufferedConn(conn)
+		conn = newReadBufferedConn(conn, ReadFlushHookFromContext(ctx))
 	}
 	if d.connectionManager != nil {
 		conn = d.connectionManager.TrackConn(conn)
