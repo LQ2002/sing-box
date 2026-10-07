@@ -58,10 +58,14 @@ func NewWithOptions(options Options) (N.Dialer, error) {
 		}
 		dialer = NewDefaultOutboundDetour(outboundManager)
 	} else {
-		dialer, err = NewDefault(options.Context, dialOptions)
+		var defaultDialer *DefaultDialer
+		defaultDialer, err = NewDefault(options.Context, dialOptions)
 		if err != nil {
 			return nil, err
 		}
+		// The direct outbound keeps raw sockets for splice (read_buffer.go).
+		defaultDialer.readBuffer = !options.DirectOutbound
+		dialer = defaultDialer
 	}
 	if detour, loaded := dialer.(*DetourDialer); loaded {
 		detour.disableGSO = udpgso.Disabled(dialOptions.UDPGSO)
