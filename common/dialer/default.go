@@ -51,6 +51,9 @@ type DefaultDialer struct {
 	fallbackNetworkType    []C.InterfaceType
 	networkFallbackDelay   time.Duration
 	networkLastFallback    common.TypedValue[time.Time]
+	// readBuffer wraps dialed TCP conns in readBufferedConn (read_buffer.go);
+	// set for every dialer except the direct outbound's.
+	readBuffer bool
 }
 
 func NewDefault(ctx context.Context, options option.DialerOptions) (*DefaultDialer, error) {
@@ -429,7 +432,8 @@ func (d *DefaultDialer) trackConn(ctx context.Context, destination M.Socksaddr, 
 	if err != nil {
 		return conn, err
 	}
-	if nativeConn, isUDPConn := conn.(*net.UDPConn); isUDPConn {
+	nativeConn, isUDPConn := conn.(*net.UDPConn)
+	if isUDPConn {
 		var rawConn syscall.RawConn
 		rawConn, err = nativeConn.SyscallConn()
 		if err != nil {
@@ -439,6 +443,9 @@ func (d *DefaultDialer) trackConn(ctx context.Context, destination M.Socksaddr, 
 		conn = &udpConn{Conn: conn, rawConn: rawConn}
 	}
 	conn = bindEBPFSelfBypassConnLifecycle(d.networkManager, conn)
+	if d.readBuffer && !isUDPConn {
+		conn = newReadBufferedConn(conn)
+	}
 	if d.connectionManager != nil {
 		conn = d.connectionManager.TrackConn(conn)
 	}
