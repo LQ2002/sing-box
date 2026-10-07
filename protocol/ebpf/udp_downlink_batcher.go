@@ -21,12 +21,12 @@ import (
 // loopback and the inline receive softirq.
 //
 // Here WritePacket only queues the buffer and returns, so the copy goroutine
-// goes straight back to reading while a drain goroutine writes. Whatever
+// goes straight back to reading while the session's drain goroutine writes. Whatever
 // accumulates while a write is in flight goes out as one WritePacketBatch,
 // which sing's syscall batch writer turns into sendmmsg with UDP_SEGMENT
 // (packet_batch_offload_linux.go). Nothing ever waits to fill a batch: an
 // idle session writes each datagram as soon as it arrives, so latency only
-// gains one goroutine start.
+// gains one goroutine wakeup.
 //
 // Measured on the daily phone (experimental/udp_gso_probe in ebpf_sing-box,
 // 2026-10-05): one locally delivered 1350-byte datagram costs 16.9 us with
@@ -34,7 +34,7 @@ import (
 // during a saturated QUIC download ~80% of downlink datagrams arrived back to
 // back in runs of 9 or more and 99.3% of consecutive pairs were GSO-mergeable.
 //
-// Ordering: one drain goroutine at a time, FIFO. A drained batch is split into
+// Ordering: one drain goroutine per session, FIFO. A drained batch is split into
 // consecutive runs with the same reply source, because WritePacketBatch
 // groups by source through a map and would otherwise reorder datagrams from
 // different sources.
@@ -47,11 +47,13 @@ type downlinkBatcher struct {
 
 	access   sync.Mutex
 	notFull  *sync.Cond
+	hasData  *sync.Cond
 	buffers  []*buf.Buffer
 	sources  []M.Socksaddr
 	spare    []*buf.Buffer
 	spareSrc []M.Socksaddr
 	running  bool
+	waiting  bool
 	closed   bool
 	err      error
 }
@@ -76,6 +78,7 @@ const downlinkBatchLimit = 16
 func newDownlinkBatcher(writer downlinkWriter) *downlinkBatcher {
 	b := &downlinkBatcher{writer: writer}
 	b.notFull = sync.NewCond(&b.access)
+	b.hasData = sync.NewCond(&b.access)
 	return b
 }
 
@@ -98,16 +101,34 @@ func (b *downlinkBatcher) WritePacket(buffer *buf.Buffer, destination M.Socksadd
 	if !b.running {
 		b.running = true
 		go b.drain()
+	} else if b.waiting {
+		b.hasData.Signal()
 	}
 	b.access.Unlock()
 	return nil
 }
 
+// drain is started by the first WritePacket and then lives as long as the
+// session: while the queue is empty it parks on hasData, and close (or a write
+// error) ends it.
+//
+// It used to exit whenever the queue ran dry and be restarted by the next
+// WritePacket. The 2026-10-07 device profile (QUIC download through SS2022 UDP)
+// put ~2% of sing-box CPU in runtime.newproc for those restarts plus thread
+// wakeups around them. Device A/B the same day (WiFi, HTTP/3 downloads of
+// 8 x 9 MB, alternating on/off/on/off, 3 reps each, simpleperf on the sing-box
+// pid): cycles per MB 49.2-52.2M parked (mean 50.5M) vs 52.4-54.6M restarted
+// (mean 53.1M), ~5% less; instructions ~3% and syscalls ~6% fewer.
 func (b *downlinkBatcher) drain() {
 	for {
 		b.access.Lock()
-		if len(b.buffers) == 0 || b.closed || b.err != nil {
-			// After a write error the session is ending; drop the rest.
+		for len(b.buffers) == 0 && !b.closed && b.err == nil {
+			b.waiting = true
+			b.hasData.Wait()
+			b.waiting = false
+		}
+		if b.closed || b.err != nil {
+			// Closed, or after a write error the session is ending; drop the rest.
 			leftover := b.buffers
 			b.buffers, b.sources = nil, nil
 			b.running = false
@@ -170,6 +191,7 @@ func (b *downlinkBatcher) close() {
 	buffers := b.buffers
 	b.buffers, b.sources = nil, nil
 	b.notFull.Broadcast()
+	b.hasData.Broadcast()
 	b.access.Unlock()
 	buf.ReleaseMulti(buffers)
 }
