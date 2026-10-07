@@ -1,6 +1,7 @@
 package dialer
 
 import (
+	"context"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -50,12 +51,19 @@ type readBufferedConn struct {
 	// holding is set while bytes or a deferred error are buffered. It is
 	// atomic so ReaderReplaceable never waits on a Read blocked in the socket.
 	holding atomic.Bool
+	// hook, when the dial context carried one, runs before every socket
+	// read: that is where a read may block, so the connection's download
+	// copy writes out what it has coalesced (route/coalesce_writer.go).
+	hook *ReadFlushHook
 }
 
 const readBufferSize = 32 * 1024
 
-func newReadBufferedConn(conn net.Conn) net.Conn {
-	return &readBufferedConn{Conn: conn}
+func newReadBufferedConn(conn net.Conn, hook *ReadFlushHook) net.Conn {
+	if hook != nil {
+		hook.attached.Store(true)
+	}
+	return &readBufferedConn{Conn: conn, hook: hook}
 }
 
 func (c *readBufferedConn) Read(p []byte) (int, error) {
@@ -68,6 +76,7 @@ func (c *readBufferedConn) Read(p []byte) (int, error) {
 			c.holding.Store(false)
 			return 0, err
 		}
+		c.hook.beforeSocketRead()
 		if len(p) >= readBufferSize {
 			return c.Conn.Read(p)
 		}
@@ -128,3 +137,54 @@ var (
 	_ N.WriterWithUpstream = (*readBufferedConn)(nil)
 	_ N.WithUpstreamWriter = (*readBufferedConn)(nil)
 )
+
+// ReadFlushHook links an outbound connection's socket reads to the download
+// copy that writes what it reads to the local client.
+//
+// route.ConnectionManager puts one in the dial context of each connection;
+// every readBufferedConn dialed with that context adopts it (Attached) and
+// calls the registered flush right before each socket read, the only place
+// its reads can block. The copy then coalesces small writes to the client
+// and loses no latency: whatever it holds is written before the outbound
+// waits for more. Conns dialed for something else under the same context
+// (a DoH lookup for the server name, a losing parallel dial) also call it;
+// a flush with nothing pending is a no-op.
+type ReadFlushHook struct {
+	attached atomic.Bool
+	flush    atomic.Pointer[func()]
+}
+
+type readFlushHookKey struct{}
+
+func WithReadFlushHook(ctx context.Context) (context.Context, *ReadFlushHook) {
+	hook := &ReadFlushHook{}
+	return context.WithValue(ctx, readFlushHookKey{}, hook), hook
+}
+
+func ReadFlushHookFromContext(ctx context.Context) *ReadFlushHook {
+	hook, _ := ctx.Value(readFlushHookKey{}).(*ReadFlushHook)
+	return hook
+}
+
+// Attached reports whether a read-buffered conn was dialed with this hook.
+func (h *ReadFlushHook) Attached() bool {
+	return h != nil && h.attached.Load()
+}
+
+// SetFlush registers the function run before socket reads; nil removes it.
+func (h *ReadFlushHook) SetFlush(flush func()) {
+	if flush == nil {
+		h.flush.Store(nil)
+		return
+	}
+	h.flush.Store(&flush)
+}
+
+func (h *ReadFlushHook) beforeSocketRead() {
+	if h == nil {
+		return
+	}
+	if flush := h.flush.Load(); flush != nil {
+		(*flush)()
+	}
+}
