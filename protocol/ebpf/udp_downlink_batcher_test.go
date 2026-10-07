@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -71,7 +72,8 @@ func waitDrained(t *testing.T, b *downlinkBatcher) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		b.access.Lock()
-		idle := !b.running && len(b.buffers) == 0
+		// The drain goroutine stays running, parked on hasData.
+		idle := len(b.buffers) == 0 && (!b.running || b.waiting)
 		b.access.Unlock()
 		if idle {
 			return
@@ -280,3 +282,28 @@ func TestDownlinkBatcherThroughTCPacketWriter(t *testing.T) {
 }
 
 var _ N.PacketBatchWriter = (*fakeDownlinkWriter)(nil)
+
+// The drain goroutine parks while the queue is empty and close ends it.
+func TestDownlinkBatcherDrainParksAndExitsOnClose(t *testing.T) {
+	before := runtime.NumGoroutine()
+	writer := &fakeDownlinkWriter{}
+	b := newDownlinkBatcher(writer)
+	if err := b.WritePacket(packet("x"), sourceA); err != nil {
+		t.Fatal(err)
+	}
+	waitDrained(t, b)
+	b.access.Lock()
+	parked := b.running && b.waiting
+	b.access.Unlock()
+	if !parked {
+		t.Fatal("drain goroutine is not parked after draining")
+	}
+	b.close()
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before {
+		if time.Now().After(deadline) {
+			t.Fatalf("goroutines = %d, want <= %d after close", runtime.NumGoroutine(), before)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
