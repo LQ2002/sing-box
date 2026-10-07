@@ -67,12 +67,7 @@ func (i *Inbound) newTCPacket(
 		return false
 	}
 	client := source.AddrPort()
-	assignmentKeyInterfaceIndex := interfaceIndex
-	assignment, err := backend.LookupAssignment(commonEBPF.ProtocolUDP, client, destination, assignmentKeyInterfaceIndex, false)
-	if err != nil && interfaceIndex != 0 {
-		assignmentKeyInterfaceIndex = 0
-		assignment, err = backend.LookupAssignment(commonEBPF.ProtocolUDP, client, destination, assignmentKeyInterfaceIndex, false)
-	}
+	assignment, assignmentKeyInterfaceIndex, err := i.lookupUDPAssignment(backend, client, destination, interfaceIndex)
 	if err != nil {
 		i.counters.assignmentLookupFailures.Add(1)
 		i.udpWarnings.originalDestination.warn(i.logger, "lookup TC eBPF UDP assignment: ", err)

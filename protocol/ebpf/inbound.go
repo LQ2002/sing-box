@@ -197,14 +197,17 @@ type Inbound struct {
 	sharedBypassRuleSetTC              bypassRuleSetBackendVersion
 	sharedBypassRuleSetShared          bypassRuleSetBackendVersion
 
-	udpClientTable    udpClientTable
-	udpReplySockets   udpReplySocketPool
-	udpWarnings       udpWarningLimiters
-	tcpWarnings       warningLimiter
-	policyWarnings    warningLimiter
-	interfaceWarnings interfaceWarningLimiters
-	diagnostics       tcOutcomeHistory
-	counters          ebpfCounters
+	udpClientTable udpClientTable
+	// udpAssignZeroFirst: client addresses whose UDP assignments are keyed
+	// with interface index 0 (udp_assignment_lookup.go).
+	udpAssignZeroFirst sync.Map
+	udpReplySockets    udpReplySocketPool
+	udpWarnings        udpWarningLimiters
+	tcpWarnings        warningLimiter
+	policyWarnings     warningLimiter
+	interfaceWarnings  interfaceWarningLimiters
+	diagnostics        tcOutcomeHistory
+	counters           ebpfCounters
 	// diagnosticsAPICache is request-driven only. API polling can be frequent,
 	// so native per-CPU counter reads are coalesced for a short
 	// window without adding a timer or background wakeup.
