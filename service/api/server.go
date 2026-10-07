@@ -112,7 +112,17 @@ func (s *Service) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	if err != nil {
 		return err
 	}
-	scope.Add(s.listener.Close)
+	// httpServer.Close (registered below, so run first: the scope closes in
+	// reverse) already closes this listener's socket; the second close then
+	// failed with "use of closed network connection" and every shutdown logged
+	// "sing-box did not closed properly". That double close is expected here.
+	scope.Add(func() error {
+		err := s.listener.Close()
+		if E.IsClosed(err) {
+			return nil
+		}
+		return err
+	})
 	if s.tlsConfig != nil {
 		tcpListener = aTLS.NewListener(tcpListener, s.tlsConfig)
 	}
