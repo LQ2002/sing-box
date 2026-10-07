@@ -45,7 +45,7 @@ func (c *countingConn) Close() error { return nil }
 
 func newTestReadBufferedConn(t *testing.T, inner net.Conn) *readBufferedConn {
 	t.Helper()
-	conn, isBuffered := newReadBufferedConn(inner).(*readBufferedConn)
+	conn, isBuffered := newReadBufferedConn(inner, nil).(*readBufferedConn)
 	require.True(t, isBuffered)
 	return conn
 }
@@ -196,4 +196,34 @@ func hasReadBuffer(conn any) bool {
 		conn = upstream.Upstream()
 	}
 	return false
+}
+
+// The hook runs before every socket read, on both read paths, and not when
+// the read is served from the buffer.
+func TestReadBufferedConnHookBeforeSocketRead(t *testing.T) {
+	inner := &countingConn{segments: [][]byte{bytes.Repeat([]byte{1}, 100), bytes.Repeat([]byte{2}, readBufferSize+10)}}
+	ctx, hook := WithReadFlushHook(context.Background())
+	var calls int
+	hook.SetFlush(func() { calls++ })
+	conn, isBuffered := newReadBufferedConn(inner, ReadFlushHookFromContext(ctx)).(*readBufferedConn)
+	require.True(t, isBuffered)
+	require.True(t, hook.Attached())
+
+	_, err := conn.Read(make([]byte, 10)) // socket read into the buffer
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+	_, err = conn.Read(make([]byte, 10)) // served from the buffer
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+	_, err = io.ReadFull(conn, make([]byte, 80))
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+	_, err = conn.Read(make([]byte, readBufferSize+10)) // large read, bypass path
+	require.NoError(t, err)
+	require.Equal(t, 2, calls)
+	require.Equal(t, inner.reads, calls)
+
+	hook.SetFlush(nil)
+	_, _ = conn.Read(make([]byte, 10))
+	require.Equal(t, 2, calls)
 }
