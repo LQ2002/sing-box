@@ -68,6 +68,12 @@ func (w *oobPacketBatchReadWaiter) InitializeReadWaiter(options N.ReadWaitOption
 	for index := range w.control {
 		w.control[index] = make([]byte, w.oobSize)
 	}
+	// Buffers that recvmmsg did not fill stay in w.buffers for the next call;
+	// only slots handed to the caller are refilled. Batches here are usually
+	// a few packets, so allocating all BatchSize buffers per call (and again
+	// after every EAGAIN) and releasing the unused ones cost 8-10% of
+	// sing-box cycles on an uplink QUIC upload through the eBPF inbound.
+	// The price is BatchSize buffers held while the socket is idle.
 	w.readFunc = func(fd uintptr) bool {
 		for index := range w.messages {
 			buffer := w.buffers[index]
@@ -95,11 +101,9 @@ func (w *oobPacketBatchReadWaiter) InitializeReadWaiter(options N.ReadWaitOption
 			case syscall.EINTR:
 				continue
 			case syscall.EAGAIN:
-				w.releaseBuffers()
 				return false
 			default:
 				if errno == syscall.EWOULDBLOCK {
-					w.releaseBuffers()
 					return false
 				}
 				w.readErr = os.NewSyscallError("recvmmsg", errno)
@@ -131,12 +135,13 @@ func (w *oobPacketBatchReadWaiter) WaitReadOOBPackets() (buffers []*buf.Buffer, 
 	if w.readFunc == nil {
 		return nil, nil, nil, os.ErrInvalid
 	}
-	defer w.releaseBuffers()
 	err = w.rawConn.Read(w.readFunc)
 	if err != nil {
+		w.releaseBuffers()
 		return
 	}
 	if w.readErr != nil {
+		w.releaseBuffers()
 		if w.readErr == io.EOF {
 			return nil, nil, nil, io.EOF
 		}
@@ -147,6 +152,7 @@ func (w *oobPacketBatchReadWaiter) WaitReadOOBPackets() (buffers []*buf.Buffer, 
 	for index := 0; index < w.readN; index++ {
 		buffers[index] = w.buffers[index]
 		w.buffers[index] = nil
+		w.iovecs[index] = unix.Iovec{}
 		sources[index] = w.sources[index]
 	}
 	oobs = w.oobs[:w.readN]
