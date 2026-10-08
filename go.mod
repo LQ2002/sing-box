@@ -217,3 +217,5 @@ require (
 	lukechampine.com/blake3 v1.3.0 // indirect
 	zombiezen.com/go/capnproto2 v2.18.2+incompatible // indirect
 )
+
+replace github.com/sagernet/sing-shadowsocks2 => github.com/LQ2002/sing-shadowsocks2 v0.2.2-0.20261008013541-af4f191ff4d4
