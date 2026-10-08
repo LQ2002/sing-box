@@ -201,13 +201,16 @@ type Inbound struct {
 	// udpAssignZeroFirst: client addresses whose UDP assignments are keyed
 	// with interface index 0 (udp_assignment_lookup.go).
 	udpAssignZeroFirst sync.Map
-	udpReplySockets    udpReplySocketPool
-	udpWarnings        udpWarningLimiters
-	tcpWarnings        warningLimiter
-	policyWarnings     warningLimiter
-	interfaceWarnings  interfaceWarningLimiters
-	diagnostics        tcOutcomeHistory
-	counters           ebpfCounters
+	// udpAssignCache: recent uplink UDP assignments, valid while the TC
+	// assignment generation is unchanged (udp_assignment_cache.go).
+	udpAssignCache    udpAssignmentCache
+	udpReplySockets   udpReplySocketPool
+	udpWarnings       udpWarningLimiters
+	tcpWarnings       warningLimiter
+	policyWarnings    warningLimiter
+	interfaceWarnings interfaceWarningLimiters
+	diagnostics       tcOutcomeHistory
+	counters          ebpfCounters
 	// diagnosticsAPICache is request-driven only. API polling can be frequent,
 	// so native per-CPU counter reads are coalesced for a short
 	// window without adding a timer or background wakeup.

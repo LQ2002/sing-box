@@ -10,8 +10,8 @@ filippo.io/edwards25519 v1.2.0/go.mod h1:xzAOLCNug/yB62zG1bQ8uziwrIqIuxhctzJT18Q
 filippo.io/hpke v0.4.0 h1:p575VVQ6ted4pL+it6M00V/f2qTZITO0zgmdKCkd5+A=
 filippo.io/hpke v0.4.0/go.mod h1:EmAN849/P3qdeK+PCMkDpDm83vRHM5cDipBJ8xbQLVY=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261006085210-5a3fbaaed36a h1:ltHCkkdSg6ZVoArwuRymmUztROiHvHGXTLiAaxd8ZpA=
-github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261006085210-5a3fbaaed36a/go.mod h1:oSoJNXBL46MKyiUJ2qCgyKSPsRWGE8k1mMCq8W3mjh8=
+github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261008024554-a40c4ef42c15 h1:1yTLGkWZL4eK//0cKlRrEqxEeZwQjXxzDHsZV9LZ18w=
+github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261008024554-a40c4ef42c15/go.mod h1:oSoJNXBL46MKyiUJ2qCgyKSPsRWGE8k1mMCq8W3mjh8=
 github.com/LQ2002/tailscale v0.0.0-20260918084915-8f35b78440d7 h1:I8tMtnQ8dA1tK0tv3z7bXluQzE0atuHn/kjl30ECx6w=
 github.com/LQ2002/tailscale v0.0.0-20260918084915-8f35b78440d7/go.mod h1:xGiEZax5sZ6gHJcwQxp0GmJVtDHGUXPXTgr6Ksm+yIc=
 github.com/RyuaNerin/go-krypto v1.3.0 h1:smavTzSMAx8iuVlGb4pEwl9MD2qicqMzuXR2QWp2/Pg=
