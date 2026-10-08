@@ -74,25 +74,35 @@ func TestOOBPacketBatchReadWriteIPv4(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	readBuffers, readOOBs, sources, err := reader.WaitReadOOBPackets()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer buf.ReleaseMulti(readBuffers)
-	if len(readBuffers) != len(sourceAddresses) || len(readOOBs) != len(sourceAddresses) || len(sources) != len(sourceAddresses) {
-		t.Fatalf("unexpected batch sizes: buffers=%d oobs=%d sources=%d", len(readBuffers), len(readOOBs), len(sources))
-	}
-	for index, buffer := range readBuffers {
-		payloadIndex := int(buffer.Byte(0)) - 1
-		if payloadIndex < 0 || payloadIndex >= len(sourceAddresses) {
-			t.Fatalf("unexpected payload: %v", buffer.Bytes())
+	// Loopback delivery goes through the receive backlog, so the three
+	// packets are not always queued by the time recvmmsg runs: about one run
+	// in four read them as 2+1, 1+2 or 1+1+1. Read until all have arrived,
+	// checking each batch before the next wait reuses its ancillary data.
+	seen := make([]bool, len(sourceAddresses))
+	for received := 0; received < len(sourceAddresses); {
+		readBuffers, readOOBs, sources, err := reader.WaitReadOOBPackets()
+		if err != nil {
+			t.Fatalf("after %d packets: %v", received, err)
 		}
-		if sources[index].Addr != sourceAddresses[payloadIndex] {
-			t.Fatalf("payload %d has source %v, want %v", payloadIndex, sources[index], sourceAddresses[payloadIndex])
+		if len(readBuffers) == 0 || len(readOOBs) != len(readBuffers) || len(sources) != len(readBuffers) {
+			buf.ReleaseMulti(readBuffers)
+			t.Fatalf("unexpected batch sizes: buffers=%d oobs=%d sources=%d", len(readBuffers), len(readOOBs), len(sources))
 		}
-		if !containsPacketInfo(readOOBs[index], unix.IPPROTO_IP, unix.IP_PKTINFO) {
-			t.Fatalf("payload %d is missing IP_PKTINFO: %v", payloadIndex, readOOBs[index])
+		for index, buffer := range readBuffers {
+			payloadIndex := int(buffer.Byte(0)) - 1
+			if payloadIndex < 0 || payloadIndex >= len(sourceAddresses) || seen[payloadIndex] {
+				t.Fatalf("unexpected payload: %v", buffer.Bytes())
+			}
+			seen[payloadIndex] = true
+			if sources[index].Addr != sourceAddresses[payloadIndex] {
+				t.Fatalf("payload %d has source %v, want %v", payloadIndex, sources[index], sourceAddresses[payloadIndex])
+			}
+			if !containsPacketInfo(readOOBs[index], unix.IPPROTO_IP, unix.IP_PKTINFO) {
+				t.Fatalf("payload %d is missing IP_PKTINFO: %v", payloadIndex, readOOBs[index])
+			}
 		}
+		received += len(readBuffers)
+		buf.ReleaseMulti(readBuffers)
 	}
 }
 
