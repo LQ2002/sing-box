@@ -64,20 +64,22 @@ func (i *Inbound) NewConnection(
 }
 
 func (i *Inbound) NewPacket(buffer *buf.Buffer, oob []byte, source M.Socksaddr) {
-	i.handlePacket(buffer, oob, source, false)
+	i.handlePacket(nil, buffer, oob, source, false)
 }
 
-func (i *Inbound) handlePacket(buffer *buf.Buffer, oob []byte, source M.Socksaddr, takeOwnership bool) bool {
+// handlePacket routes one datagram to its session. With a non-nil batch and
+// takeOwnership, the session hand-off waits for batch.flush (udp_nat_batch.go).
+func (i *Inbound) handlePacket(batch *udpNATBatch, buffer *buf.Buffer, oob []byte, source M.Socksaddr, takeOwnership bool) bool {
 	if i.localCgroupEnabled() {
 		if redirectAddress, err := redirectAddressFromOOB(oob); err == nil && i.isCgroupRedirectAddress(redirectAddress) {
-			return i.newCgroupPacket(buffer, oob, source, takeOwnership)
+			return i.newCgroupPacket(batch, buffer, oob, source, takeOwnership)
 		}
 	}
 	backend := i.tcBackend()
 	if backend == nil {
 		return false
 	}
-	return i.newTCPacket(backend, buffer, oob, source, takeOwnership)
+	return i.newTCPacket(batch, backend, buffer, oob, source, takeOwnership)
 }
 
 func (i *Inbound) NewOOBPacketBatch(buffers []*buf.Buffer, oobs [][]byte, sources []M.Socksaddr) {
@@ -85,14 +87,16 @@ func (i *Inbound) NewOOBPacketBatch(buffers []*buf.Buffer, oobs [][]byte, source
 		buf.ReleaseMulti(buffers)
 		return
 	}
+	batch := getUDPNATBatch()
 	for index, buffer := range buffers {
-		if !i.handlePacket(buffer, oobs[index], sources[index], true) {
+		if !i.handlePacket(batch, buffer, oobs[index], sources[index], true) {
 			buffer.Release()
 		}
 	}
+	batch.flush()
 }
 
-func (i *Inbound) newCgroupPacket(buffer *buf.Buffer, oob []byte, source M.Socksaddr, takeOwnership bool) bool {
+func (i *Inbound) newCgroupPacket(batch *udpNATBatch, buffer *buf.Buffer, oob []byte, source M.Socksaddr, takeOwnership bool) bool {
 	redirectAddress, _, _, err := packetDestinationsFromOOB(oob)
 	if err != nil {
 		i.udpWarnings.packetInfo.warn(i.logger, "read cgroup eBPF UDP redirect address: ", err)
@@ -126,7 +130,7 @@ func (i *Inbound) newCgroupPacket(buffer *buf.Buffer, oob []byte, source M.Socks
 		i.udpClientTable.setCgroupBinding(key, original, redirectAddress)
 	}
 	if takeOwnership {
-		i.udpNat.NewPacketBuffer(key, buffer, source, M.SocksaddrFromNetIP(original.Destination), nil)
+		i.udpNat.newPacketBufferInBatch(batch, key, buffer, source, M.SocksaddrFromNetIP(original.Destination), nil)
 		return true
 	}
 	i.udpNat.NewPacket(key, [][]byte{buffer.Bytes()}, source, M.SocksaddrFromNetIP(original.Destination), nil)

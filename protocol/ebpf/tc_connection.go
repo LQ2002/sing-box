@@ -51,6 +51,7 @@ func (i *Inbound) newTCConnection(
 }
 
 func (i *Inbound) newTCPacket(
+	batch *udpNATBatch,
 	backend *commonEBPF.TCBackend,
 	buffer *buf.Buffer,
 	oob []byte,
@@ -90,7 +91,7 @@ func (i *Inbound) newTCPacket(
 	identity := identityFromAssignment(assignment)
 	i.udpClientTable.setDirectBindingWithIdentity(key, destination, sourceMAC, identity)
 	if takeOwnership {
-		i.udpNat.NewPacketBuffer(key, buffer, source, M.SocksaddrFromNetIP(destination), nil)
+		i.udpNat.newPacketBufferInBatch(batch, key, buffer, source, M.SocksaddrFromNetIP(destination), nil)
 		return true
 	}
 	i.udpNat.NewPacket(key, [][]byte{buffer.Bytes()}, source, M.SocksaddrFromNetIP(destination), nil)
