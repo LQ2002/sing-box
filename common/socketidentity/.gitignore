@@ -1,2 +1,3 @@
 .build/
 !bpf/creator.bpf.o
+!bpf/creator_lsm.bpf.o

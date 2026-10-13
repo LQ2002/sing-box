@@ -15,9 +15,14 @@ compiler="${BPF_CC:-/home/likayo/toolchains/clang-r536225/bin/clang}"
 mkdir -p .build
 python3 "$kernel/scripts/bpf_doc.py" --header \
     --file "$kernel/include/uapi/linux/bpf.h" > .build/bpf_helper_defs.h
-"$compiler" -target bpfel -D__TARGET_ARCH_arm64 -O2 -g -Wall -Werror \
-    -fdebug-prefix-map="$PWD"=. -fdebug-prefix-map="$kernel"=kernel \
-    -I"${UAPI_ARCH_INCLUDE:-/usr/include/$(uname -m)-linux-gnu}" \
-    -I.build -I"$kernel/tools/lib/bpf" \
-    -c bpf/creator.bpf.c -o bpf/creator.bpf.o
-sha256sum bpf/creator.bpf.o
+# Two producers, one per source (identity.go producerSources): creator.bpf.o
+# attaches to the sbo_identity module's tracepoint, creator_lsm.bpf.o to BPF
+# LSM socket_post_create. Both include bpf/creator_common.h.
+for producer in creator creator_lsm; do
+    "$compiler" -target bpfel -D__TARGET_ARCH_arm64 -O2 -g -Wall -Werror \
+        -fdebug-prefix-map="$PWD"=. -fdebug-prefix-map="$kernel"=kernel \
+        -I"${UAPI_ARCH_INCLUDE:-/usr/include/$(uname -m)-linux-gnu}" \
+        -I.build -I"$kernel/tools/lib/bpf" \
+        -c "bpf/$producer.bpf.c" -o "bpf/$producer.bpf.o"
+done
+sha256sum bpf/creator.bpf.o bpf/creator_lsm.bpf.o

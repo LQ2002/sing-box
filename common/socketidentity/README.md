@@ -1,19 +1,40 @@
 # Persistent socket creators
 
 `Open(Config{PinPath: ...})` creates or reopens a root-owned bpffs collector.
-The default directory is `/sys/fs/bpf/sing-box/socket-creator-v3`. While the v1 or
-v2 directories (`/sys/fs/bpf/sing-box/socket-creator-v1`, `-v2`) still hold pins,
-opening the default path is refused (two global producers would both run). The
-`sbo_identity` module (`kernel/sbo_identity`) must already be loaded with
-`capture_all=1` and expose its module BTF. The package does not load/unload
-modules, mount bpffs, change module parameters, or attach a TC program. The
-embedded producer supports Linux/Android arm64 little-endian.
+The default directory is `/sys/fs/bpf/sing-box/socket-creator-v4`. While the v1,
+v2 or v3 directories (`/sys/fs/bpf/sing-box/socket-creator-v1`, `-v2`, `-v3`)
+still hold pins, opening the default path is refused (two global producers would
+both run). The package does not load/unload modules, mount bpffs, change module
+parameters, or attach a TC program. The embedded producers support Linux/Android
+arm64 little-endian.
 
-The producer attaches to `tp_btf/sbo_identity_socket`. The module fires it only
-for user IPv4/IPv6 sockets whose creator is not the process its cgroup is named
-after (those are resolved through the socket cgroup instead), and passes the
-creator's executable (dev, inode, generation) with its path resolved in the
-kernel. The producer initializes `socket_creators` (`sb_sk_creator` in the
+There are two producers (`Source`), both built from `bpf/creator_common.h`, and a
+new collector uses the first that attaches:
+
+- `SourceLSM`, `bpf/creator_lsm.bpf.c`: `lsm/socket_post_create`, no module. Needs
+  BPF trampolines (arm64: `FUNCTION_TRACER`, `DYNAMIC_FTRACE_WITH_DIRECT_CALLS`)
+  and `bpf` in `/sys/kernel/security/lsm`. It does in BPF what the module does
+  below: user inet sockets only (`kern == 0`), the own-cgroup gate, the
+  executable key read without a reference and re-validated, `exe_paths` as the
+  path cache, and on a miss `bpf_get_task_exe_file` + `bpf_path_d_path` +
+  `bpf_put_file` under a real reference. Verified so far only by the verifier of
+  WSL's 6.18 kernel (2786 instructions processed, 256-byte stack); the hook,
+  kfuncs and exe path were checked on the phone's rebuilt 6.12 kernel by
+  `experimental/ftrace_attach_probe` in the ebpf_sing-box repository.
+- `SourceModule`, `bpf/creator.bpf.c`: `tp_btf/sbo_identity_socket`. The
+  `sbo_identity` module (`kernel/sbo_identity`) must already be loaded with
+  `capture_all=1` and expose its module BTF.
+
+The metadata records the source (its `TraceSHA` field) and reopening keeps it;
+`Collector.Source` reports it and `Collector.SkippedSources` why an earlier one
+was not used. `ModuleCapturing` lets the caller warn when the module is still
+capturing next to the LSM source.
+
+The module fires its tracepoint only for user IPv4/IPv6 sockets whose creator is
+not the process its cgroup is named after (those are resolved through the socket
+cgroup instead), and passes the creator's executable (dev, inode, generation)
+with its path resolved in the kernel; the LSM producer computes the same. Either
+producer initializes `socket_creators` (`sb_sk_creator` in the
 kernel) once with the creator's cookie, leader birth time, TGID, TID, UID,
 current thread comm, an FNV-1a 64 hash of argv[0], and the executable's key
 (`ExeKey`, flag `CreatorExeKey`, in the field that held the inode in v2). The
@@ -60,7 +81,7 @@ then deploy the new build and open a fresh collector. Removing pins discards the
 persisted collector once all other kernel references close. A collector restart
 does not backfill sockets that were created before it was installed.
 
-Build the embedded BPF object with `bash common/socketidentity/build-bpf.sh`
+Build the embedded BPF objects with `bash common/socketidentity/build-bpf.sh`
 using the existing prepared Android kernel headers and Clang 19. The object
 retains BTF and CO-RE relocations. Unit tests check the actual embedded BTF against
 Go layout, identity/metadata validation, foreign map references, failure rollback,

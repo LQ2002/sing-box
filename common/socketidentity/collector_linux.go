@@ -17,6 +17,7 @@ import (
 )
 
 type resources struct {
+	source   *producerSource
 	creators *ebpf.Map
 	paths    *ebpf.Map
 	producer *ebpf.Program
@@ -80,6 +81,41 @@ func checkModule() error {
 	return nil
 }
 
+// lsmEnabled reports whether "bpf" is an active LSM (CONFIG_BPF_LSM and the
+// lsm= list). Without it an LSM program still loads but never runs; checking
+// first gives a clear reason. Attaching additionally needs BPF trampolines
+// (FUNCTION_TRACER and DYNAMIC_FTRACE_WITH_DIRECT_CALLS on arm64), which only
+// the attach itself can tell: the stock 6.12 GKI has "bpf" in this list and
+// still refuses with "not supported".
+func lsmEnabled() error {
+	data, err := os.ReadFile("/sys/kernel/security/lsm")
+	if err != nil {
+		return fmt.Errorf("read active LSM list: %w", err)
+	}
+	for _, name := range strings.Split(strings.TrimSpace(string(data)), ",") {
+		if name == "bpf" {
+			return nil
+		}
+	}
+	return errors.New("bpf is not an active LSM")
+}
+
+// ModuleCapturing reports whether the sbo_identity module is loaded with
+// capture_all=1. With the LSM source it is pure overhead: the module still
+// runs its cgroup gate, executable lookup and d_path on every user inet
+// socket (50-787 ns measured) for a tracepoint nobody consumes.
+func ModuleCapturing() bool {
+	return checkModule() == nil
+}
+
+// available tells whether a collector can be created from this source.
+func (s *producerSource) available() error {
+	if s == moduleSource {
+		return checkModule()
+	}
+	return lsmEnabled()
+}
+
 // checkLegacyCollector refuses to start next to a v1 collector that still
 // has pins: its producer link stays attached and keeps capturing globally.
 // An absent or empty directory is fine (v1's Remove leaves the directory).
@@ -99,15 +135,17 @@ func checkLegacyCollector(path string) error {
 
 // Open creates or validates and reuses a pinned map and a pinned producer link.
 // It never loads a module, enables capture, mounts bpffs, or replaces partial pins.
+//
+// A new collector uses the first source in producerSources that works: the
+// BPF LSM, else the sbo_identity module. Reopened pins keep the source they
+// were created with (metadata), so a collector never switches source while
+// pinned; Remove and reopen to switch.
 func Open(config Config) (_ *Collector, result error) {
 	if runtime.GOARCH != "arm64" {
 		return nil, ErrUnsupported
 	}
 	if os.Geteuid() != 0 {
 		return nil, errors.New("socket creator collection requires root")
-	}
-	if err := checkModule(); err != nil {
-		return nil, err
 	}
 	if config.PinPath == "" || config.PinPath == DefaultPinPath {
 		for _, legacy := range LegacyPinPaths {
@@ -146,11 +184,12 @@ func Open(config Config) (_ *Collector, result error) {
 	if err != nil {
 		return nil, fmt.Errorf("inspect collector %s: %w", directory.path, err)
 	}
+	var skipped error
 	if empty {
 		if !exclusive {
 			return nil, fmt.Errorf("collector %s initialization changed; retry Open: %w", directory.path, ErrBusy)
 		}
-		opened, err = createResources(directory, bootID)
+		opened, skipped, err = createResources(directory, bootID)
 		created = err == nil
 	} else {
 		opened, err = loadResources(directory, bootID)
@@ -164,7 +203,7 @@ func Open(config Config) (_ *Collector, result error) {
 		}
 	}
 	ok = true
-	return &Collector{creators: opened.creators, paths: opened.paths, closeFDs: func() error {
+	return &Collector{source: opened.source.source, skipped: skipped, creators: opened.creators, paths: opened.paths, closeFDs: func() error {
 		return errors.Join(opened.close(), directory.Close())
 	}}, nil
 }
@@ -210,8 +249,26 @@ func Remove(pinPath string) (result error) {
 	})
 }
 
-func createResources(directory *pinDirectory, bootID [16]byte) (_ *resources, result error) {
-	r := new(resources)
+// createResources creates the collector from the first source that works.
+// skipped holds why earlier sources were passed over (nil when the first
+// one worked); on failure the error lists every source's reason.
+func createResources(directory *pinDirectory, bootID [16]byte) (_ *resources, skipped error, _ error) {
+	for _, source := range producerSources {
+		err := source.available()
+		if err == nil {
+			var r *resources
+			r, err = createResourcesFrom(directory, bootID, source)
+			if err == nil {
+				return r, skipped, nil
+			}
+		}
+		skipped = errors.Join(skipped, fmt.Errorf("%s source: %w", source.source, err))
+	}
+	return nil, nil, skipped
+}
+
+func createResourcesFrom(directory *pinDirectory, bootID [16]byte, source *producerSource) (_ *resources, result error) {
+	r := &resources{source: source}
 	ok := false
 	var pinned []string
 	defer func() {
@@ -219,7 +276,7 @@ func createResources(directory *pinDirectory, bootID [16]byte) (_ *resources, re
 			result = errors.Join(result, rollbackPins(pinned, os.Remove), r.close())
 		}
 	}()
-	spec, err := loadSpec()
+	spec, err := loadSpec(source)
 	if err != nil {
 		return nil, err
 	}
@@ -232,9 +289,16 @@ func createResources(directory *pinDirectory, bootID [16]byte) (_ *resources, re
 		return nil, fmt.Errorf("load socket creator BPF: %w", err)
 	}
 	r.creators, r.paths, r.producer = objects.Creators, objects.Paths, objects.Producer
-	r.attached, err = link.AttachTracing(link.TracingOptions{Program: r.producer, AttachType: ebpf.AttachTraceRawTp})
-	if err != nil {
-		return nil, fmt.Errorf("attach socket creator typed tracepoint: %w", err)
+	if source == lsmSource {
+		r.attached, err = link.AttachLSM(link.LSMOptions{Program: r.producer})
+		if err != nil {
+			return nil, fmt.Errorf("attach socket creator LSM %s: %w", lsmHook, err)
+		}
+	} else {
+		r.attached, err = link.AttachTracing(link.TracingOptions{Program: r.producer, AttachType: ebpf.AttachTraceRawTp})
+		if err != nil {
+			return nil, fmt.Errorf("attach socket creator typed tracepoint: %w", err)
+		}
 	}
 	actual, err := inspectResources(r)
 	if err != nil {
@@ -242,14 +306,14 @@ func createResources(directory *pinDirectory, bootID [16]byte) (_ *resources, re
 	}
 	meta := metadata{
 		Magic: metadataMagic, Version: abiVersion, ValueSize: ValueSize,
-		BootID: bootID, ProducerSHA: producerSHA, TraceSHA: traceSHA,
+		BootID: bootID, ProducerSHA: source.sha, TraceSHA: source.target,
 		MapID: actual.MapID, LinkID: actual.LinkID, ProgramID: actual.ProgramID, ProgramTag: actual.ProgramTag,
 		PathMapID: actual.PathMapID,
 	}
-	if err := meta.validate(bootID); err != nil {
+	if _, err := meta.validate(bootID); err != nil {
 		return nil, err
 	}
-	if err := validateKernelObjects(meta, actual); err != nil {
+	if err := validateKernelObjects(meta, actual, source); err != nil {
 		return nil, err
 	}
 	r.meta, err = ebpf.NewMap(&ebpf.MapSpec{Name: "sb_creator_meta", Type: ebpf.Array, KeySize: 4, ValueSize: metadataSize, MaxEntries: 1})
@@ -263,8 +327,10 @@ func createResources(directory *pinDirectory, bootID [16]byte) (_ *resources, re
 	if err := r.meta.Freeze(); err != nil {
 		return nil, fmt.Errorf("freeze creator metadata: %w", err)
 	}
-	if err := checkModule(); err != nil {
-		return nil, err
+	if source == moduleSource {
+		if err := checkModule(); err != nil {
+			return nil, err
+		}
 	}
 	for _, object := range []struct {
 		name string
@@ -308,8 +374,16 @@ func loadResources(directory *pinDirectory, bootID [16]byte) (_ *resources, resu
 	if err := r.meta.Lookup(&zero, &meta); err != nil {
 		return nil, err
 	}
-	if err := meta.validate(bootID); err != nil {
+	r.source, err = meta.validate(bootID)
+	if err != nil {
 		return nil, err
+	}
+	if r.source == moduleSource {
+		// A pinned module producer captures nothing unless the module is
+		// still loaded with capture_all=1.
+		if err := checkModule(); err != nil {
+			return nil, err
+		}
 	}
 	r.creators, err = ebpf.LoadPinnedMap(directory.objectPath(mapPin), nil)
 	if err != nil {
@@ -338,7 +412,7 @@ func loadResources(directory *pinDirectory, bootID [16]byte) (_ *resources, resu
 	if err != nil {
 		return nil, err
 	}
-	if err := validateKernelObjects(meta, actual); err != nil {
+	if err := validateKernelObjects(meta, actual, r.source); err != nil {
 		return nil, err
 	}
 	ok = true
@@ -363,14 +437,14 @@ type kernelObjects struct {
 	TraceTarget          string
 }
 
-func validateKernelObjects(meta metadata, actual kernelObjects) error {
+func validateKernelObjects(meta metadata, actual kernelObjects, source *producerSource) error {
 	if actual.MapType != ebpf.SkStorage || actual.KeySize != 4 || actual.ValueSize != ValueSize || actual.MaxEntries != 0 || actual.MapFlags != 1 || actual.MapName != MapName {
 		return errors.New("pinned creator map ABI or owner mismatch")
 	}
 	if actual.MapID != meta.MapID || actual.LinkID != meta.LinkID || actual.ProgramID != meta.ProgramID {
 		return errors.New("pinned kernel object IDs differ from metadata")
 	}
-	if actual.ProgramType != ebpf.Tracing || actual.ProgramName != programName || actual.ProgramTag != meta.ProgramTag || !actual.ProgramRootOwned || !actual.ProgramHasBTF {
+	if actual.ProgramType != source.programType || actual.ProgramName != programName || actual.ProgramTag != meta.ProgramTag || !actual.ProgramRootOwned || !actual.ProgramHasBTF {
 		return errors.New("pinned producer program identity mismatch")
 	}
 	if actual.PathMapID != meta.PathMapID || !actual.PathMapShape {
@@ -384,8 +458,8 @@ func validateKernelObjects(meta metadata, actual kernelObjects) error {
 	if len(actual.ReferencedMaps) != 3 || len(referenced) != 3 || !referenced[meta.MapID] || !referenced[meta.PathMapID] {
 		return errors.New("pinned producer does not reference exactly the pinned creator and path maps")
 	}
-	if actual.TraceTarget != traceName {
-		return errors.New("pinned producer is attached to a different tracepoint")
+	if actual.TraceTarget != source.traceTarget {
+		return errors.New("pinned producer is attached to a different hook")
 	}
 	return nil
 }
@@ -450,7 +524,27 @@ func inspectResources(r *resources) (kernelObjects, error) {
 	}
 	if raw := linkInfo.RawTracepoint(); raw != nil {
 		actual.TraceTarget = raw.Name
-	} else if tracing := linkInfo.Tracing(); tracing != nil {
+	} else if tracing := linkInfo.Tracing(); tracing != nil && uint32(tracing.AttachType) == uint32(ebpf.AttachLSMMac) {
+		// An LSM link targets a bpf_lsm_<hook> function in vmlinux BTF.
+		handle, err := btf.NewHandleFromID(btf.ID(tracing.TargetObjectId))
+		if err != nil {
+			return actual, err
+		}
+		defer handle.Close()
+		info, err := handle.Info()
+		if err != nil || !info.IsKernel || info.Name != "vmlinux" {
+			return actual, errors.New("producer LSM link targets BTF other than vmlinux")
+		}
+		base, err := btf.LoadKernelSpec()
+		if err != nil {
+			return actual, err
+		}
+		typ, err := base.TypeByID(btf.TypeID(tracing.TargetBtfId))
+		if err != nil {
+			return actual, errors.New("producer LSM link target is not in vmlinux BTF")
+		}
+		actual.TraceTarget = typ.TypeName()
+	} else if tracing != nil {
 		if uint32(tracing.AttachType) != uint32(ebpf.AttachTraceRawTp) {
 			return actual, errors.New("producer link has an unexpected tracing attachment")
 		}

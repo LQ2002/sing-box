@@ -1,5 +1,12 @@
 // Package socketidentity maintains a persistent socket-creator BPF collector.
 // Closing a Collector releases local descriptors; only Remove unpins it.
+//
+// The producer has two sources (Source). SourceLSM attaches to BPF LSM
+// socket_post_create and needs no kernel module, only a kernel that runs BPF
+// trampolines with "bpf" in its LSM list. SourceModule attaches to the
+// tracepoint of the sbo_identity module (kernel/sbo_identity), for kernels
+// without trampolines such as the stock Android 16 6.12 GKI. Both write the
+// same snapshots and path entries.
 package socketidentity
 
 import (
@@ -15,7 +22,7 @@ import (
 )
 
 const (
-	DefaultPinPath = "/sys/fs/bpf/sing-box/socket-creator-v3"
+	DefaultPinPath = "/sys/fs/bpf/sing-box/socket-creator-v4"
 	MapSymbol      = "socket_creators"
 	MapName        = "sb_sk_creator"
 	ValueSize      = uint32(64)
@@ -34,7 +41,7 @@ const (
 	CreatorNameValid     = uint32(1 << 1)
 	CreatorExeValid      = uint32(1 << 2)
 	CreatorNameTruncated = uint32(1 << 3)
-	// Set by the sbo_identity producer (v3). CreatorExeKey: ExeInode is the
+	// Set by the v3 and v4 producers. CreatorExeKey: ExeInode is the
 	// key of the creator's executable in the path map (ExeKey), whose path
 	// was resolved in the kernel at creation. CreatorPathTooLong: the path
 	// did not fit 256 bytes and was not stored. CreatorExeDeleted: the
@@ -50,11 +57,26 @@ const (
 	moduleName  = "sbo_identity"
 	traceName   = "sbo_identity_socket"
 	programName = "sb_sk_create"
-	abiVersion  = uint32(3)
+	// lsmHook is the LSM hook of SourceLSM; the kernel names its attach
+	// target bpf_lsm_<hook> (lsmTarget).
+	lsmHook    = "socket_post_create"
+	lsmTarget  = "bpf_lsm_" + lsmHook
+	abiVersion = uint32(4)
+)
+
+// Source is the kernel hook a collector's producer is attached to.
+type Source string
+
+const (
+	// SourceLSM: BPF LSM socket_post_create, no kernel module.
+	SourceLSM Source = "lsm"
+	// SourceModule: tp_btf on the sbo_identity module's tracepoint.
+	SourceModule Source = "module"
 )
 
 // LegacyPinPaths are where earlier collectors pinned themselves (v1: 48-byte
-// snapshots; v2: bridge-module producer). Their producer links keep capturing
+// snapshots; v2: bridge-module producer; v3: sbo_identity module producer
+// only, before the LSM source). Their producer links keep capturing
 // after sing-box exits, so a collector at the default path refuses to start
 // while their pins remain: two global producers would double the per-socket
 // cost and the old one would never be cleaned up. Remove them with the
@@ -62,6 +84,7 @@ const (
 var LegacyPinPaths = []string{
 	"/sys/fs/bpf/sing-box/socket-creator-v1",
 	"/sys/fs/bpf/sing-box/socket-creator-v2",
+	"/sys/fs/bpf/sing-box/socket-creator-v3",
 }
 
 var (
@@ -100,8 +123,8 @@ func (c Creator) NameLength() int {
 	return int(c.Flags >> nameLengthShift & 0xff)
 }
 
-// PathValue mirrors struct exe_path in bpf/creator.bpf.c: one executable,
-// resolved by the kernel module (d_path) when one of its sockets was made.
+// PathValue mirrors struct exe_path in bpf/creator_common.h: one executable,
+// resolved in the kernel (d_path) when one of its sockets was made.
 type PathValue struct {
 	Dev        uint32
 	Generation uint32
@@ -127,7 +150,7 @@ func (v PathValue) String() string {
 
 // ExeKey is the path map key of an executable: FNV-1a 64 over dev and
 // generation (one little-endian u64, dev in the low half) followed by the
-// inode (little-endian u64). bpf/creator.bpf.c exe_key computes the same.
+// inode (little-endian u64). bpf/creator_common.h exe_key computes the same.
 func ExeKey(dev, generation uint32, inode uint64) uint64 {
 	hash := uint64(0xcbf29ce484222325)
 	for _, word := range [2]uint64{uint64(dev) | uint64(generation)<<32, inode} {
@@ -151,9 +174,24 @@ type Config struct {
 // a borrowed descriptor, valid until Close; consumers must close before it does.
 type Collector struct {
 	mu       sync.Mutex
+	source   Source
+	skipped  error
 	creators *ebpf.Map
 	paths    *ebpf.Map
 	closeFDs func() error
+}
+
+// Source reports which kernel hook the producer is attached to.
+func (c *Collector) Source() Source {
+	return c.source
+}
+
+// SkippedSources tells why sources preferred over Source were not used when
+// this collector was created (for example "lsm source: ... not supported" on
+// a kernel without BPF trampolines). nil when the first source was used or
+// the collector was reopened from pins.
+func (c *Collector) SkippedSources() error {
+	return c.skipped
 }
 
 func (c *Collector) Map() *ebpf.Map {
@@ -190,15 +228,50 @@ func (c *Collector) Close() error {
 	return closeFDs()
 }
 
-// The object has BTF and CO-RE relocations and arm64 tracing conventions.
-// It is deliberately not advertised as a portable producer for every kernel.
+// The objects have BTF and CO-RE relocations and arm64 tracing conventions.
+// They are deliberately not advertised as portable producers for every kernel.
 //
 //go:embed bpf/creator.bpf.o
-var producerObject []byte
+var moduleProducerObject []byte
 
-var producerSHA = sha256.Sum256(producerObject)
-var traceSHA = sha256.Sum256([]byte(moduleName + ":" + traceName))
-var metadataMagic = [16]byte{'s', 'b', 'o', '.', 'c', 'r', 'e', 'a', 't', 'o', 'r', '.', 'v', '3'}
+//go:embed bpf/creator_lsm.bpf.o
+var lsmProducerObject []byte
+
+// producerSource is everything that differs between the two producers.
+// target is stored in metadata (TraceSHA) and selects the source again when
+// pins are reopened; sha pins the exact embedded object.
+type producerSource struct {
+	source      Source
+	object      []byte
+	sha         [32]byte
+	target      [32]byte
+	programType ebpf.ProgramType
+	attachType  ebpf.AttachType
+	attachTo    string
+	// traceTarget is what inspectResources reports for a correct link.
+	traceTarget string
+}
+
+var (
+	lsmSource = &producerSource{
+		source: SourceLSM, object: lsmProducerObject, sha: sha256.Sum256(lsmProducerObject),
+		target:      sha256.Sum256([]byte("lsm:" + lsmHook)),
+		programType: ebpf.LSM, attachType: ebpf.AttachLSMMac, attachTo: lsmHook,
+		traceTarget: lsmTarget,
+	}
+	moduleSource = &producerSource{
+		source: SourceModule, object: moduleProducerObject, sha: sha256.Sum256(moduleProducerObject),
+		// Unchanged from v3, which had only this source.
+		target:      sha256.Sum256([]byte(moduleName + ":" + traceName)),
+		programType: ebpf.Tracing, attachType: ebpf.AttachTraceRawTp, attachTo: traceName,
+		traceTarget: traceName,
+	}
+	// producerSources is the order Open tries when it creates a collector:
+	// the LSM needs no module; the module is the fallback.
+	producerSources = []*producerSource{lsmSource, moduleSource}
+)
+
+var metadataMagic = [16]byte{'s', 'b', 'o', '.', 'c', 'r', 'e', 'a', 't', 'o', 'r', '.', 'v', '4'}
 
 // Stored in a frozen, pinned Array map: bpffs does not support ordinary files.
 type metadata struct {
@@ -219,24 +292,32 @@ const metadataSize = 128
 
 var _ [metadataSize]byte = [unsafe.Sizeof(metadata{})]byte{}
 
-func (m metadata) validate(bootID [16]byte) error {
+// validate checks the metadata against this build and returns the source it
+// was created with.
+func (m metadata) validate(bootID [16]byte) (*producerSource, error) {
+	var source *producerSource
+	for _, candidate := range producerSources {
+		if m.TraceSHA == candidate.target {
+			source = candidate
+		}
+	}
 	switch {
 	case m.Magic != metadataMagic || m.Version != abiVersion || m.ValueSize != ValueSize:
-		return errors.New("metadata owner or ABI mismatch")
+		return nil, errors.New("metadata owner or ABI mismatch")
 	case m.BootID != bootID || bootID == [16]byte{}:
-		return errors.New("metadata belongs to another boot")
-	case m.ProducerSHA != producerSHA:
-		return errors.New("producer build changed; remove the old collector using its matching binary before upgrading")
-	case m.TraceSHA != traceSHA:
-		return errors.New("metadata tracepoint mismatch")
+		return nil, errors.New("metadata belongs to another boot")
+	case source == nil:
+		return nil, errors.New("metadata names an unknown producer source")
+	case m.ProducerSHA != source.sha:
+		return nil, errors.New("producer build changed; remove the old collector using its matching binary before upgrading")
 	case m.MapID == 0 || m.PathMapID == 0 || m.LinkID == 0 || m.ProgramID == 0 || m.ProgramTag == [8]byte{}:
-		return errors.New("metadata has incomplete kernel object identities")
+		return nil, errors.New("metadata has incomplete kernel object identities")
 	}
-	return nil
+	return source, nil
 }
 
-func loadSpec() (*ebpf.CollectionSpec, error) {
-	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(producerObject))
+func loadSpec(source *producerSource) (*ebpf.CollectionSpec, error) {
+	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(source.object))
 	if err != nil {
 		return nil, fmt.Errorf("read embedded socket creator BPF: %w", err)
 	}
@@ -260,7 +341,7 @@ func loadSpec() (*ebpf.CollectionSpec, error) {
 	}
 	scratch.Name = scratchMapName
 	p := spec.Programs["capture_creator"]
-	if p.Type != ebpf.Tracing || p.AttachType != ebpf.AttachTraceRawTp || p.AttachTo != traceName {
+	if p.Type != source.programType || p.AttachType != source.attachType || p.AttachTo != source.attachTo {
 		return nil, errors.New("embedded socket creator attachment mismatch")
 	}
 	p.Name = programName

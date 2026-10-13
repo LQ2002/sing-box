@@ -130,7 +130,7 @@ remain in use.
     "data_plane": "tc",
     "socket_creator": {
       "enabled": true,
-      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v3"
+      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v4"
     }
   }
 }
@@ -139,9 +139,23 @@ remain in use.
 `pin_path` defaults to the value shown and must be an absolute, dedicated bpffs
 directory owned by root with mode `0700`. Its ancestors must be root-owned;
 writable ancestors must have the sticky bit, as Android's usual `01777` bpffs
-mount does. Symlinks are rejected. An administrator must first load a matching `sbo_identity`
-kernel module (`kernel/sbo_identity`) with `capture_all=1`. sing-box neither loads the
-module nor changes its switch. Sockets whose creator is the process its Android cgroup
+mount does. Symlinks are rejected.
+
+The collector records each socket where it is created, from one of two sources. A new
+collector uses the first that works:
+
+1. BPF LSM `socket_post_create`, with no kernel module. The kernel must run BPF
+   trampolines (on arm64: `FUNCTION_TRACER` and `DYNAMIC_FTRACE_WITH_DIRECT_CALLS`)
+   and list `bpf` in `/sys/kernel/security/lsm`. The stock Android 16 6.12 GKI does
+   not, and the attach fails with "not supported".
+2. The tracepoint of the `sbo_identity` kernel module (`kernel/sbo_identity`). An
+   administrator must first load a module matching the running kernel with
+   `capture_all=1`; sing-box neither loads the module nor changes its switch.
+
+Both write identical records. The source is stored in the persistent metadata when the
+collector is created and kept across restarts; to switch, remove the collector (below)
+and start again. With the LSM source, a module still loaded with `capture_all=1` is
+logged as a warning: it keeps doing per-socket work nobody reads. Sockets whose creator is the process its Android cgroup
 (`.../uid_X/pid_<pid>`) is named after get no record: the socket's cgroup, which TC
 records, identifies the process and its name and executable come from `/proc`. For
 every other socket the collector records the creation PID, thread ID, creator UID,
@@ -166,10 +180,13 @@ not remove a previously pinned collector. To remove it, stop every sing-box
 instance using the directory, then run:
 
 ```shell
-sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v3
+sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v4
 ```
 
-This command does not unload the bridge module. Removal refuses active users.
+This command does not unload the `sbo_identity` module. A collector created by an
+older version without the LSM source (`socket-creator-v3`) makes the new version
+refuse to start; remove it first with the old executable's same command and
+`--pin-path /sys/fs/bpf/sing-box/socket-creator-v3`. Removal refuses active users.
 For an incompatible upgrade, remove the old collector with the old executable
 before starting the new version. Removal loses existing socket snapshots, which
 cannot be reconstructed after creation.
