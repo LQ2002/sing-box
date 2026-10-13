@@ -51,13 +51,16 @@ int BPF_PROG(capture_creator, struct sock *sk, dev_t dev, unsigned long ino, __u
         return 0;
 
     struct task_struct *task = bpf_get_current_task_btf();
+    struct task_struct *leader = task ? task->group_leader : 0;
     struct socket_creator creator = {};
-    if (!fill_creator(sk, task, &creator))
+    if (!fill_creator(sk, leader ? leader->start_boottime : 0, &creator))
         return 0;
     if (event & SBO_EVENT_KERNEL) {
         creator.flags |= CREATOR_KERNEL;
     } else {
-        record_process_name(task, &creator);
+        struct mm_struct *mm = BPF_CORE_READ(task, mm);
+        if (mm) // else a kernel thread
+            record_process_name(BPF_CORE_READ(mm, arg_start), BPF_CORE_READ(mm, arg_end), &creator);
     }
     if (event & (SBO_EVENT_PATH | SBO_EVENT_TOO_LONG)) {
         __u64 key = exe_key(dev, gen, ino);

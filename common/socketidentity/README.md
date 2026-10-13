@@ -17,10 +17,11 @@ new collector uses the first that attaches:
   below: user inet sockets only (`kern == 0`), the own-cgroup gate, the
   executable key read without a reference and re-validated, `exe_paths` as the
   path cache, and on a miss `bpf_get_task_exe_file` + `bpf_path_d_path` +
-  `bpf_put_file` under a real reference. Verified so far only by the verifier of
-  WSL's 6.18 kernel (2786 instructions processed, 256-byte stack); the hook,
-  kfuncs and exe path were checked on the phone's rebuilt 6.12 kernel by
-  `experimental/ftrace_attach_probe` in the ebpf_sing-box repository.
+  `bpf_put_file` under a real reference. Kernel fields are read with direct
+  BTF loads rather than `BPF_CORE_READ` helper calls. Checked on the phone's
+  rebuilt 6.12 kernel by `experimental/lsmcreatorcheck` (results in its
+  README): snapshot fields equal `/proc`, own-cgroup sockets get none,
+  deleted and too-long executables are flagged.
 - `SourceModule`, `bpf/creator.bpf.c`: `tp_btf/sbo_identity_socket`. The
   `sbo_identity` module (`kernel/sbo_identity`) must already be loaded with
   `capture_all=1` and expose its module BTF.
