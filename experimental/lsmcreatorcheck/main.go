@@ -13,6 +13,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/sagernet/sing-box/common/socketidentity"
 
@@ -559,9 +561,36 @@ func runCgroupQuery(path string) error {
 			}
 			names = append(names, fmt.Sprintf("%d:%s", p.ID, name))
 		}
-		fmt.Printf("  %-32v %v\n", attach, names)
+		fmt.Printf("  %-32v %v flags=%s\n", attach, names, attachFlags(int(f.Fd()), attach))
 	}
 	return nil
+}
+
+// attachFlags returns the cgroup's attach flags for one attach type
+// (BPF_PROG_QUERY attr.query.attach_flags, which cilium's QueryResult does
+// not expose). They decide whether a descendant cgroup may attach the same
+// type: kernel/bpf/cgroup.c hierarchy_allows_attach allows it only below a
+// BPF_F_ALLOW_MULTI or BPF_F_ALLOW_OVERRIDE ancestor.
+func attachFlags(fd int, attach ebpf.AttachType) string {
+	// union bpf_attr, query member: target_fd u32, attach_type u32,
+	// query_flags u32, attach_flags u32 (out), prog_ids u64, prog_cnt u32.
+	var attr [64]byte
+	binary.LittleEndian.PutUint32(attr[0:], uint32(fd))
+	binary.LittleEndian.PutUint32(attr[4:], uint32(attach))
+	_, _, errno := unix.Syscall(unix.SYS_BPF, unix.BPF_PROG_QUERY, uintptr(unsafe.Pointer(&attr[0])), uintptr(len(attr)))
+	if errno != 0 {
+		return "query " + errno.Error()
+	}
+	flags := binary.LittleEndian.Uint32(attr[12:])
+	switch {
+	case flags == 0:
+		return "0 (exclusive: no descendant may attach)"
+	case flags&unix.BPF_F_ALLOW_MULTI != 0:
+		return fmt.Sprintf("%#x ALLOW_MULTI", flags)
+	case flags&unix.BPF_F_ALLOW_OVERRIDE != 0:
+		return fmt.Sprintf("%#x ALLOW_OVERRIDE", flags)
+	}
+	return fmt.Sprintf("%#x", flags)
 }
 
 // runWatch reports how often a running collector's producer fires. It only
