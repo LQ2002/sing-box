@@ -43,6 +43,9 @@ func main() {
 	rounds := flag.Int("rounds", 3, "benchmark rounds per state")
 	cpu := flag.Int("cpu", 4, "CPU the benchmark is pinned to")
 	dir := flag.String("dir", "/data/local/tmp/lsmcheck", "scratch directory for executable copies")
+	selfcount := flag.String("selfcount", "", "read-only: selfcount.bpf.o to count -pid's sockets and map updates for -seconds (with -watch: the producer too)")
+	pid := flag.Int("pid", 0, "process for -selfcount")
+	seconds := flag.Int("seconds", 60, "duration of -selfcount")
 	cgquery := flag.String("cgquery", "", "read-only: list BPF programs attached to this cgroup v2 directory")
 	watch := flag.String("watch", "", "read-only: sample the run count of the producer pinned in this collector directory for 10 s")
 	profile := flag.String("profile", "", "only run the stage-timed object built by profile/build.sh")
@@ -54,6 +57,13 @@ func main() {
 		return
 	case "bench":
 		childBench(*count, *cpu)
+		return
+	}
+	if *selfcount != "" {
+		if err := runSelfCount(*selfcount, *pid, *seconds, *watch); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if *cgquery != "" {
@@ -528,6 +538,116 @@ func profSums(m *ebpf.Map) ([8]uint64, error) {
 		}
 	}
 	return sums, nil
+}
+
+// runSelfCount loads selfcount.bpf.o (selfcount/build.sh) for one process,
+// leaves it attached for the given time, and reports that process's user
+// inet sockets against the whole system, its bpf(BPF_MAP_UPDATE_ELEM) calls
+// with their kernel time, and, from the kernel's BPF statistics, how often
+// and how long the production producer pinned in watchDir ran meanwhile.
+// Everything it loads is unpinned and detached on return.
+func runSelfCount(path string, pid, seconds int, watchDir string) error {
+	spec, err := ebpf.LoadCollectionSpec(path)
+	if err != nil {
+		return err
+	}
+	if err := spec.Variables["target_tgid"].Set(uint32(pid)); err != nil {
+		return err
+	}
+	var objects struct {
+		Socket *ebpf.Program `ebpf:"count_socket"`
+		Enter  *ebpf.Program `ebpf:"enter_bpf"`
+		Exit   *ebpf.Program `ebpf:"exit_bpf"`
+		Counts *ebpf.Map     `ebpf:"counts"`
+	}
+	if err := spec.LoadAndAssign(&objects, nil); err != nil {
+		return err
+	}
+	defer objects.Socket.Close()
+	defer objects.Enter.Close()
+	defer objects.Exit.Close()
+	defer objects.Counts.Close()
+	var producer *ebpf.Program
+	if watchDir != "" {
+		if producer, err = producerProgramIn(watchDir); err != nil {
+			return err
+		}
+		defer producer.Close()
+	}
+	stats, err := ebpf.EnableStats(uint32(unix.BPF_STATS_RUN_TIME))
+	if err != nil {
+		return err
+	}
+	defer stats.Close()
+	var producerBefore runStats
+	if producer != nil {
+		producerBefore, _ = programStats(producer)
+	}
+	links := []link.Link{}
+	defer func() {
+		for _, l := range links {
+			l.Close()
+		}
+	}()
+	l, err := link.AttachLSM(link.LSMOptions{Program: objects.Socket})
+	if err != nil {
+		return err
+	}
+	links = append(links, l)
+	for _, tp := range []struct {
+		name    string
+		program *ebpf.Program
+	}{{"sys_enter_bpf", objects.Enter}, {"sys_exit_bpf", objects.Exit}} {
+		l, err := link.Tracepoint("syscalls", tp.name, tp.program, nil)
+		if err != nil {
+			return err
+		}
+		links = append(links, l)
+	}
+	fmt.Printf("counting pid %d for %d s...\n", pid, seconds)
+	time.Sleep(time.Duration(seconds) * time.Second)
+	sums, err := sumCounts(objects.Counts, 8)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("user inet sockets: all %d, pid %d %d (tcp %d, udp %d, other %d)\n",
+		sums[0], pid, sums[1], sums[2], sums[3], sums[4])
+	fmt.Printf("pid %d bpf(MAP_UPDATE_ELEM): %d calls, %d failed, %.0f ns each in the kernel\n",
+		pid, sums[5], sums[7], float64(sums[6])/float64(max(sums[5], 1)))
+	if producer != nil {
+		after, _ := programStats(producer)
+		runs := after.count - producerBefore.count
+		fmt.Printf("production producer: %d runs, %.0f ns each, %.2f ms total\n",
+			runs, float64(after.ns-producerBefore.ns)/float64(max(runs, 1)), float64(after.ns-producerBefore.ns)/1e6)
+	}
+	return nil
+}
+
+func sumCounts(m *ebpf.Map, n uint32) ([]uint64, error) {
+	sums := make([]uint64, n)
+	for i := uint32(0); i < n; i++ {
+		var perCPU []uint64
+		if err := m.Lookup(&i, &perCPU); err != nil {
+			return nil, err
+		}
+		for _, v := range perCPU {
+			sums[i] += v
+		}
+	}
+	return sums, nil
+}
+
+func producerProgramIn(dir string) (*ebpf.Program, error) {
+	l, err := link.LoadPinnedLink(dir+"/producer", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer l.Close()
+	info, err := l.Info()
+	if err != nil {
+		return nil, err
+	}
+	return ebpf.NewProgramFromID(info.Program)
 }
 
 // runCgroupQuery lists the programs attached directly to one cgroup for the

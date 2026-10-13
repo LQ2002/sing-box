@@ -52,3 +52,25 @@ this kernel. In real use, an hour on the device made 4473 snapshots and
 
 After every run: no pins or cgroups left, `enabled_functions` empty, no
 BPF/ftrace/CFI warnings in dmesg, `tainted` 4096 (unchanged).
+
+## sing-box's own sockets (`-selfcount`, 2026-10-13)
+
+`selfcount/selfcount.bpf.o` (built by `selfcount/build.sh`) counts, for one
+PID, user inet sockets at `lsm/socket_post_create` and
+`bpf(BPF_MAP_UPDATE_ELEM)` calls with their kernel time
+(`syscalls/sys_{enter,exit}_bpf`), next to the production producer's BPF
+statistics. Read-only, unpinned, detached afterwards. Production sing-box
+(rebuilt kernel, LSM source, cgroup `/sing-box`), screen on, normal use,
+CPU frequency not locked:
+
+| window | user inet sockets, all | sing-box's (tcp/udp) | sing-box map updates | producer |
+|---|---|---|---|---|
+| 60 s | 1826 | 25 (16/9) | 25, 6.0 us each | 5177 runs, 378 ns, 1.96 ms |
+| 300 s | 3113 | 147 (89/58) | 147, 8.1 us each | 11644 runs, 502 ns, 5.84 ms |
+
+One self-bypass registration (sing-ebpf `RegisterSocket`, an sk_storage
+update by fd) per sing-box socket, as expected. The 6-8 us include this
+probe's own tracepoint and hash work and an unlocked CPU. Per hour at the
+300 s rate: ~1760 sing-box sockets, ~14 ms of registration and ~3 ms of
+creator snapshots nobody reads (sing-box's cgroup is not named pid_<tgid>,
+so the producer snapshots its sockets; TC bypasses them before any lookup).
