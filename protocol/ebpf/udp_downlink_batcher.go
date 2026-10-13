@@ -196,6 +196,11 @@ func (b *downlinkBatcher) write(buffers []*buf.Buffer, sources []M.Socksaddr) er
 // HTTP/3 download on the daily phone (2026-10-13, symbolized profile:
 // runtime.ready <- sync.Cond in WritePacket and drain).
 //
+// Device A/B (2026-10-14, rebuilt kernel, HTTP/3 downloads of 2 x 9 MB,
+// alternating builds with verified switches, 3 rounds x 2 runs): sing-box
+// CPU ticks per run 48-54 (mean 51.8) with the queue vs 15-43 (mean 30.2)
+// with this path, rates 87-104 vs 92-108 Mbit/s, no slow runs in either.
+//
 // Sources that cannot read batches keep using WritePacket and the queue.
 // Should a session ever mix the two, a batch goes through the queue while it
 // holds data or a drain goroutine exists, so order is kept.
