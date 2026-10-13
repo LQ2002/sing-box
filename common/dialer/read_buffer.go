@@ -57,7 +57,13 @@ type readBufferedConn struct {
 	hook *ReadFlushHook
 }
 
-const readBufferSize = 32 * 1024
+// 64 KiB, the largest size sing's buffer pool serves (common/buf alloc.go,
+// 1<<16). With 32 KiB, 47% of the reads during a 50 MB TCP download filled
+// the buffer (kprobe on tcp_recvmsg, 2026-10-13); 64 KiB cut reads per 50 MB
+// from ~2490 to ~1670 at ~22 MB/s (alternating A/B, 3 vs 2 full-speed runs).
+// ACKs and CPU ticks did not change measurably: most ACKs come from backlog
+// processing, not from the end of each read.
+const readBufferSize = 64 * 1024
 
 func newReadBufferedConn(conn net.Conn, hook *ReadFlushHook) net.Conn {
 	if hook != nil {
