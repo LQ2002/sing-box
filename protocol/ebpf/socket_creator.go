@@ -94,12 +94,12 @@ func (i *Inbound) startSocketCreator() error {
 	// The source is fixed when the pins are created: the BPF LSM where the
 	// kernel runs BPF trampolines, else the sbo_identity module.
 	if skipped := collector.SkippedSources(); skipped != nil {
-		i.logger.Info("eBPF socket creator uses the ", collector.Source(), " source (", skipped, ")")
+		i.logger.Info("eBPF socket creator uses the ", string(collector.Source()), " source (", skipped, ")")
 	}
 	if collector.Source() == socketidentity.SourceLSM && socketidentity.ModuleCapturing() {
 		i.logger.Warn("eBPF socket creator uses the BPF LSM, but the sbo_identity module is still loaded with capture_all=1: it keeps doing per-socket work nobody reads; unload it")
 	}
-	i.logger.Debug("eBPF socket creator collector opened at ", i.socketCreatorPinPath, " (source ", collector.Source(), ")")
+	i.logger.Debug("eBPF socket creator collector opened at ", i.socketCreatorPinPath, " (source ", string(collector.Source()), ")")
 	return nil
 }
 
