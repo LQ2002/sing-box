@@ -44,7 +44,8 @@ func main() {
 	cpu := flag.Int("cpu", 4, "CPU the benchmark is pinned to")
 	dir := flag.String("dir", "/data/local/tmp/lsmcheck", "scratch directory for executable copies")
 	selfcount := flag.String("selfcount", "", "read-only: selfcount.bpf.o to count -pid's sockets and map updates for -seconds (with -watch: the producer too)")
-	pid := flag.Int("pid", 0, "process for -selfcount")
+	pid := flag.Int("pid", 0, "process for -selfcount and -peek")
+	peek := flag.Bool("peek", false, "read-only: count -pid's inet sockets with a snapshot in the collector at -watch")
 	seconds := flag.Int("seconds", 60, "duration of -selfcount")
 	cgquery := flag.String("cgquery", "", "read-only: list BPF programs attached to this cgroup v2 directory")
 	watch := flag.String("watch", "", "read-only: sample the run count of the producer pinned in this collector directory for 10 s")
@@ -57,6 +58,13 @@ func main() {
 		return
 	case "bench":
 		childBench(*count, *cpu)
+		return
+	}
+	if *peek {
+		if err := runPeek(*pid, *watch); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if *selfcount != "" {
@@ -648,6 +656,55 @@ func producerProgramIn(dir string) (*ebpf.Program, error) {
 		return nil, err
 	}
 	return ebpf.NewProgramFromID(info.Program)
+}
+
+// runPeek counts which inet sockets of a running process have a creator
+// snapshot in the collector pinned in dir. Each socket fd is duplicated with
+// pidfd_getfd only to key the sk_storage lookup and closed right away.
+func runPeek(pid int, dir string) error {
+	creators, err := ebpf.LoadPinnedMap(dir+"/creators", &ebpf.LoadPinOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer creators.Close()
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(pidfd)
+	entries, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
+	if err != nil {
+		return err
+	}
+	var with, without, skipped int
+	for _, entry := range entries {
+		target, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%s", pid, entry.Name()))
+		if err != nil || !strings.HasPrefix(target, "socket:") {
+			continue
+		}
+		remote, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		fd, err := unix.PidfdGetfd(pidfd, remote, 0)
+		if err != nil {
+			skipped++
+			continue
+		}
+		domain, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_DOMAIN)
+		if err != nil || (domain != unix.AF_INET && domain != unix.AF_INET6) {
+			unix.Close(fd)
+			continue
+		}
+		if _, err := lookup(creators, fd); err == nil {
+			with++
+		} else {
+			without++
+		}
+		unix.Close(fd)
+	}
+	fmt.Printf("pid %d inet sockets: %d with a creator snapshot, %d without (%d not duplicated)\n", pid, with, without, skipped)
+	return nil
 }
 
 // runCgroupQuery lists the programs attached directly to one cgroup for the
