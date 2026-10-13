@@ -119,7 +119,7 @@ Android 厂商的 netd hook 可能造成挂载冲突。sing-box 优先尝试多�
     "data_plane": "tc",
     "socket_creator": {
       "enabled": true,
-      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v3"
+      "pin_path": "/sys/fs/bpf/sing-box/socket-creator-v4"
     }
   }
 }
@@ -127,9 +127,20 @@ Android 厂商的 netd hook 可能造成挂载冲突。sing-box 优先尝试多�
 
 `pin_path` 可省略，默认如上；必须是 bpffs 上 root 拥有、权限 `0700` 的专用绝对目录。
 父目录均须属于 root；可写父目录须设置 sticky bit，兼容 Android 常见的 `01777`
-bpffs 挂载目录，不接受符号链接。启用前需由管理员加载
-与运行内核匹配的 `sbo_identity` 模块（`kernel/sbo_identity`），并设置 `capture_all=1`。sing-box 不会
-自动加载模块或修改开关。创建者就是其 Android cgroup（`…/uid_X/pid_<pid>`）所对应进程的
+bpffs 挂载目录，不接受符号链接。
+
+采集器在 socket 创建现场记录，有两种来源，新建采集器时按顺序选第一个可用的：
+
+1. BPF LSM `socket_post_create`，不需要内核模块。要求内核能运行 BPF trampoline
+   （arm64 需要 `FUNCTION_TRACER` 与 `DYNAMIC_FTRACE_WITH_DIRECT_CALLS`），且
+   `/sys/kernel/security/lsm` 含 `bpf`。Android 16 6.12 原厂 GKI 不满足，挂载会以
+   “not supported” 失败。
+2. `sbo_identity` 模块（`kernel/sbo_identity`）的 tracepoint：需由管理员加载与运行内核匹配的
+   模块并设置 `capture_all=1`；sing-box 不会自动加载模块或修改开关。
+
+两者写入相同的记录。来源在创建时固定写进持久元数据，重启沿用，不会自行切换；要换来源，
+先用下文的命令移除再启动。用 LSM 时若模块仍以 `capture_all=1` 加载，日志会警告：模块
+仍对每个 socket 做无人读取的工作，应卸载。创建者就是其 Android cgroup（`…/uid_X/pid_<pid>`）所对应进程的
 socket 不建记录：TC 记录的 socket cgroup 即可定位该进程，名称与可执行文件取自 `/proc`。
 其余 socket 由采集器在创建时记录 PID、线程 ID、创建者 UID、进程出生时间、截断的 comm、
 argv[0] 哈希，以及内核在创建现场解析出的可执行文件路径，由现有 TC 交付；创建者退出后
@@ -145,10 +156,12 @@ argv[0] 哈希，以及内核在创建现场解析出的可执行文件路径，
 不会删除已持久化的采集器。需要彻底移除时，先停止所有使用该目录的 sing-box 实例，再运行：
 
 ```shell
-sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v3
+sing-box tools socket-creator-remove --pin-path /sys/fs/bpf/sing-box/socket-creator-v4
 ```
 
-该命令不卸载桥接模块。采集器仍有活跃使用者时拒绝删除；升级导致对象不兼容时应先用
+该命令不卸载 `sbo_identity` 模块。由不带 LSM 来源的旧版本（`socket-creator-v3`）建立的
+采集器会使新版拒绝启动，须先用旧版本的同一命令加 `--pin-path /sys/fs/bpf/sing-box/socket-creator-v3`
+移除。采集器仍有活跃使用者时拒绝删除；升级导致对象不兼容时应先用
 旧版本命令移除旧采集器，再启动新版。移除会丢失已有 socket 的创建快照，无法事后补采。
 
 ### local.dns_mode

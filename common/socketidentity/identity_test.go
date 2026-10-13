@@ -8,20 +8,33 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/btf"
 )
 
 func validMetadata() (metadata, [16]byte) {
+	return validMetadataFor(moduleSource)
+}
+
+func validMetadataFor(source *producerSource) (metadata, [16]byte) {
 	boot := [16]byte{1, 2, 3}
 	return metadata{
 		Magic: metadataMagic, Version: abiVersion, ValueSize: ValueSize,
-		BootID: boot, ProducerSHA: producerSHA, TraceSHA: traceSHA,
+		BootID: boot, ProducerSHA: source.sha, TraceSHA: source.target,
 		MapID: 10, LinkID: 11, ProgramID: 12, ProgramTag: [8]byte{13}, PathMapID: 14,
 	}, boot
 }
 
 func TestCreatorABIEqualsEmbeddedObject(t *testing.T) {
-	spec, err := loadSpec()
+	for _, source := range producerSources {
+		t.Run(string(source.source), func(t *testing.T) {
+			testCreatorABIEqualsEmbeddedObject(t, source)
+		})
+	}
+}
+
+func testCreatorABIEqualsEmbeddedObject(t *testing.T, source *producerSource) {
+	spec, err := loadSpec(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +57,7 @@ func TestCreatorABIEqualsEmbeddedObject(t *testing.T) {
 			t.Errorf("C/Go ABI mismatch for %s: BTF=%+v Go=%+v size=%d error=%v", field.c, member, goField, size, err)
 		}
 	}
-	object, err := elf.NewFile(bytes.NewReader(producerObject))
+	object, err := elf.NewFile(bytes.NewReader(source.object))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,9 +86,38 @@ func TestCreatorRejectsIncompleteIdentityButAllowsRoot(t *testing.T) {
 	}
 }
 
+// Both producers share the map layout; only the program, its hook and the
+// metadata source differ, and a source's metadata never validates the
+// other's object.
+func TestProducerSourcesDiffer(t *testing.T) {
+	if lsmSource.sha == moduleSource.sha || lsmSource.target == moduleSource.target {
+		t.Fatal("producer sources must have distinct objects and targets")
+	}
+	lsm, err := loadSpec(lsmSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program := lsm.Programs["capture_creator"]
+	if program.Type != ebpf.LSM || program.AttachType != ebpf.AttachLSMMac || program.AttachTo != "socket_post_create" || program.Name != programName {
+		t.Fatalf("LSM producer program: %+v", program)
+	}
+	for _, source := range producerSources {
+		meta, boot := validMetadataFor(source)
+		got, err := meta.validate(boot)
+		if err != nil || got != source {
+			t.Fatalf("%s metadata: source %v err %v", source.source, got, err)
+		}
+	}
+	mixed, boot := validMetadataFor(lsmSource)
+	mixed.ProducerSHA = moduleSource.sha
+	if _, err := mixed.validate(boot); err == nil {
+		t.Fatal("accepted the module object under LSM metadata")
+	}
+}
+
 func TestMetadataRejectsStaleOrForeignIdentity(t *testing.T) {
 	meta, boot := validMetadata()
-	if err := meta.validate(boot); err != nil {
+	if _, err := meta.validate(boot); err != nil {
 		t.Fatal(err)
 	}
 	tests := map[string]func(*metadata){
@@ -90,7 +132,7 @@ func TestMetadataRejectsStaleOrForeignIdentity(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			changed := meta
 			mutate(&changed)
-			if err := changed.validate(boot); err == nil {
+			if _, err := changed.validate(boot); err == nil {
 				t.Fatal("accepted stale or foreign metadata")
 			}
 		})

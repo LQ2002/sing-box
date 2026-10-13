@@ -153,8 +153,11 @@ func requireDeviceCollectorPath(t *testing.T) string {
 			t.Fatalf("dedicated bpffs contains unrelated entry %q", entry.Name())
 		}
 	}
-	if err := checkModule(); err != nil {
-		t.Fatal(err)
+	// Either source: the LSM on a kernel with BPF trampolines, else the module.
+	if lsmEnabled() != nil {
+		if err := checkModule(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return pinPath
 }

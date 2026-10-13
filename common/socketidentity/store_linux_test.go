@@ -26,8 +26,29 @@ func TestPinnedObjectsMustReferenceTheSameStorage(t *testing.T) {
 		PathMapID: meta.PathMapID, PathMapShape: true,
 		ReferencedMaps: []uint32{meta.MapID, meta.PathMapID, 77}, TraceTarget: traceName,
 	}
-	if err := validateKernelObjects(meta, actual); err != nil {
+	if err := validateKernelObjects(meta, actual, moduleSource); err != nil {
 		t.Fatal(err)
+	}
+	// The same objects as an LSM producer: other program type and target.
+	lsmMeta, _ := validMetadataFor(lsmSource)
+	lsmActual := actual
+	lsmActual.ProgramType, lsmActual.TraceTarget = ebpf.LSM, "bpf_lsm_socket_post_create"
+	if err := validateKernelObjects(lsmMeta, lsmActual, lsmSource); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*kernelObjects){
+		"tracing program": func(k *kernelObjects) { k.ProgramType = ebpf.Tracing },
+		"other hook":      func(k *kernelObjects) { k.TraceTarget = "bpf_lsm_socket_create" },
+		"module target":   func(k *kernelObjects) { k.TraceTarget = traceName },
+	} {
+		changed := lsmActual
+		mutate(&changed)
+		if err := validateKernelObjects(lsmMeta, changed, lsmSource); err == nil {
+			t.Fatalf("LSM source accepted %s", name)
+		}
+	}
+	if err := validateKernelObjects(meta, lsmActual, moduleSource); err == nil {
+		t.Fatal("module source accepted an LSM producer")
 	}
 	tests := map[string]func(*kernelObjects){
 		"different map":      func(k *kernelObjects) { k.ReferencedMaps = []uint32{meta.MapID + 1, meta.PathMapID, 77} },
@@ -52,7 +73,7 @@ func TestPinnedObjectsMustReferenceTheSameStorage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			changed := actual
 			mutate(&changed)
-			if err := validateKernelObjects(meta, changed); err == nil {
+			if err := validateKernelObjects(meta, changed, moduleSource); err == nil {
 				t.Fatal("accepted a mismatched kernel object set")
 			}
 		})
