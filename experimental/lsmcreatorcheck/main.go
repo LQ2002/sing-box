@@ -41,6 +41,7 @@ func main() {
 	rounds := flag.Int("rounds", 3, "benchmark rounds per state")
 	cpu := flag.Int("cpu", 4, "CPU the benchmark is pinned to")
 	dir := flag.String("dir", "/data/local/tmp/lsmcheck", "scratch directory for executable copies")
+	cgquery := flag.String("cgquery", "", "read-only: list BPF programs attached to this cgroup v2 directory")
 	watch := flag.String("watch", "", "read-only: sample the run count of the producer pinned in this collector directory for 10 s")
 	profile := flag.String("profile", "", "only run the stage-timed object built by profile/build.sh")
 	ab := flag.Bool("ab", true, "also time socket()+close() attached vs detached (noisy without a locked frequency)")
@@ -51,6 +52,13 @@ func main() {
 		return
 	case "bench":
 		childBench(*count, *cpu)
+		return
+	}
+	if *cgquery != "" {
+		if err := runCgroupQuery(*cgquery); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if *watch != "" {
@@ -518,6 +526,42 @@ func profSums(m *ebpf.Map) ([8]uint64, error) {
 		}
 	}
 	return sums, nil
+}
+
+// runCgroupQuery lists the programs attached directly to one cgroup for the
+// attach types sing-ebpf's self-bypass and data plane use, e.g. to see which
+// self-bypass mode sing-box chose in its own cgroup.
+func runCgroupQuery(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for _, attach := range []ebpf.AttachType{
+		ebpf.AttachCGroupInetSockCreate, ebpf.AttachCgroupInetSockRelease,
+		ebpf.AttachCGroupInet4Connect, ebpf.AttachCGroupInet6Connect,
+		ebpf.AttachCGroupUDP4Sendmsg, ebpf.AttachCGroupUDP6Sendmsg,
+		ebpf.AttachCGroupInetEgress, ebpf.AttachCGroupInetIngress,
+	} {
+		result, err := link.QueryPrograms(link.QueryOptions{Target: int(f.Fd()), Attach: attach})
+		if err != nil {
+			fmt.Printf("  %-32v query: %v\n", attach, err)
+			continue
+		}
+		names := []string{}
+		for _, p := range result.Programs {
+			name := "?"
+			if program, err := ebpf.NewProgramFromID(p.ID); err == nil {
+				if info, err := program.Info(); err == nil {
+					name = info.Name
+				}
+				program.Close()
+			}
+			names = append(names, fmt.Sprintf("%d:%s", p.ID, name))
+		}
+		fmt.Printf("  %-32v %v\n", attach, names)
+	}
+	return nil
 }
 
 // runWatch reports how often a running collector's producer fires. It only
