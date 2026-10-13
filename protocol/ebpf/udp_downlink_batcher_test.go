@@ -8,11 +8,13 @@ import (
 	"net/netip"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
@@ -83,6 +85,12 @@ func waitDrained(t *testing.T, b *downlinkBatcher) {
 	t.Fatal("batcher did not drain")
 }
 
+// bufioCreatePacketBatchWriter is what sing's copy loop calls on the
+// destination; going through it checks the interface wiring.
+func bufioCreatePacketBatchWriter(writer N.PacketWriter) (N.PacketBatchWriter, bool) {
+	return bufio.CreatePacketBatchWriter(writer)
+}
+
 var (
 	sourceA = M.SocksaddrFromNetIP(netip.MustParseAddrPort("203.0.113.1:443"))
 	sourceB = M.SocksaddrFromNetIP(netip.MustParseAddrPort("203.0.113.2:443"))
@@ -119,6 +127,77 @@ func TestDownlinkBatcherBatchesWhileWriteInFlight(t *testing.T) {
 				t.Fatalf("calls = %v, want %v", got, want)
 			}
 		}
+	}
+}
+
+// A copy that reads batches writes each batch through CreatePacketBatchWriter
+// on its own goroutine: no drain goroutine starts, and the batch is split
+// only where the reply source changes.
+func TestDownlinkDirectBatchWriterWritesOnCaller(t *testing.T) {
+	writer := &fakeDownlinkWriter{}
+	b := newDownlinkBatcher(writer)
+	batchWriter, created := bufioCreatePacketBatchWriter(b)
+	if !created {
+		t.Fatal("no batch writer")
+	}
+	buffers := []*buf.Buffer{packet("0"), packet("1"), packet("2"), packet("3")}
+	sources := []M.Socksaddr{sourceA, sourceA, sourceB, sourceA}
+	if err := batchWriter.WritePacketBatch(buffers, sources); err != nil {
+		t.Fatal(err)
+	}
+	b.access.Lock()
+	running := b.running
+	b.access.Unlock()
+	if running {
+		t.Fatal("direct batch write started the drain goroutine")
+	}
+	got := writer.snapshot()
+	want := [][]string{{"0", "1"}, {"2"}, {"3"}}
+	if len(got) != len(want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	for index := range want {
+		if strings.Join(got[index], ",") != strings.Join(want[index], ",") {
+			t.Fatalf("calls = %v, want %v", got, want)
+		}
+	}
+}
+
+// If single datagrams were queued before, a batch goes through the queue too,
+// behind them.
+func TestDownlinkDirectBatchWriterKeepsQueueOrder(t *testing.T) {
+	writer := &fakeDownlinkWriter{gate: make(chan struct{}), entered: make(chan struct{})}
+	b := newDownlinkBatcher(writer)
+	if err := b.WritePacket(packet("0"), sourceA); err != nil {
+		t.Fatal(err)
+	}
+	<-writer.entered
+	batchWriter, _ := b.CreatePacketBatchWriter()
+	if err := batchWriter.WritePacketBatch([]*buf.Buffer{packet("1"), packet("2")}, []M.Socksaddr{sourceA, sourceA}); err != nil {
+		t.Fatal(err)
+	}
+	close(writer.gate)
+	waitDrained(t, b)
+	var flat []string
+	for _, call := range writer.snapshot() {
+		flat = append(flat, call...)
+	}
+	if strings.Join(flat, ",") != "0,1,2" {
+		t.Fatalf("order = %v", flat)
+	}
+}
+
+// After close a batch is refused and its buffers released.
+func TestDownlinkDirectBatchWriterAfterClose(t *testing.T) {
+	writer := &fakeDownlinkWriter{}
+	b := newDownlinkBatcher(writer)
+	b.close()
+	batchWriter, _ := b.CreatePacketBatchWriter()
+	if err := batchWriter.WritePacketBatch([]*buf.Buffer{packet("0")}, []M.Socksaddr{sourceA}); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("err = %v", err)
+	}
+	if got := writer.snapshot(); len(got) != 0 {
+		t.Fatalf("calls after close = %v", got)
 	}
 }
 

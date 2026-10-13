@@ -4,6 +4,7 @@ package ebpf
 
 import (
 	"net"
+	"os"
 	"sync"
 
 	"github.com/sagernet/sing/common/buf"
@@ -182,6 +183,59 @@ func (b *downlinkBatcher) write(buffers []*buf.Buffer, sources []M.Socksaddr) er
 	return firstErr
 }
 
+// CreatePacketBatchWriter serves copies that already read in batches.
+//
+// sing's packet copy takes its single-goroutine batch loop
+// (bufio copyPacketBatchWaitWithPool) only when the source can read batches
+// and the destination can write them; udpNATConn asks this batcher for the
+// latter. With an SS2022 outbound that reads with recvmmsg
+// (LQ2002/sing-shadowsocks2 packet_batch_read.go), each batch the copy
+// goroutine read is written here at once, on that goroutine: no queue, no
+// drain goroutine, no wakeups. Those hand-offs (hasData.Signal per datagram,
+// notFull.Broadcast per drained batch) were ~9% of sing-box CPU in an
+// HTTP/3 download on the daily phone (2026-10-13, symbolized profile:
+// runtime.ready <- sync.Cond in WritePacket and drain).
+//
+// Sources that cannot read batches keep using WritePacket and the queue.
+// Should a session ever mix the two, a batch goes through the queue while it
+// holds data or a drain goroutine exists, so order is kept.
+func (b *downlinkBatcher) CreatePacketBatchWriter() (N.PacketBatchWriter, bool) {
+	return (*downlinkDirectBatchWriter)(b), true
+}
+
+type downlinkDirectBatchWriter downlinkBatcher
+
+func (w *downlinkDirectBatchWriter) WritePacketBatch(buffers []*buf.Buffer, sources []M.Socksaddr) error {
+	b := (*downlinkBatcher)(w)
+	if len(buffers) != len(sources) {
+		buf.ReleaseMulti(buffers)
+		return os.ErrInvalid
+	}
+	b.access.Lock()
+	if b.closed || b.err != nil {
+		err := b.err
+		b.access.Unlock()
+		buf.ReleaseMulti(buffers)
+		if err == nil {
+			err = net.ErrClosed
+		}
+		return err
+	}
+	queued := b.running || len(b.buffers) > 0
+	b.access.Unlock()
+	if queued {
+		for index, buffer := range buffers {
+			if err := b.WritePacket(buffer, sources[index]); err != nil {
+				buf.ReleaseMulti(buffers[index+1:])
+				return err
+			}
+		}
+		return nil
+	}
+	// write splits the batch into runs of one reply source, as the drain does.
+	return b.write(buffers, sources)
+}
+
 // close drops whatever has not been handed to the kernel yet. A batch the
 // drain goroutine already took finishes on its own; the tcPacketWriter fails
 // harmlessly if the session state is already gone.
@@ -198,4 +252,7 @@ func (b *downlinkBatcher) close() {
 
 // M.Socksaddr (netip.Addr, port, FQDN) is comparable, so write splits runs
 // with ==; reply sources here are always IP addresses.
-var _ N.PacketWriter = (*downlinkBatcher)(nil)
+var (
+	_ N.PacketWriter            = (*downlinkBatcher)(nil)
+	_ N.PacketBatchWriteCreator = (*downlinkBatcher)(nil)
+)
