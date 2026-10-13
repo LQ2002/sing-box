@@ -211,6 +211,9 @@ type Inbound struct {
 	interfaceWarnings interfaceWarningLimiters
 	diagnostics       tcOutcomeHistory
 	counters          ebpfCounters
+	tcAssignmentSweepScanned  atomic.Uint64
+	tcAssignmentSweepRemoved  atomic.Uint64
+	tcAssignmentSweepComplete atomic.Bool
 	// diagnosticsAPICache is request-driven only. API polling can be frequent,
 	// so native per-CPU counter reads are coalesced for a short
 	// window without adding a timer or background wakeup.
