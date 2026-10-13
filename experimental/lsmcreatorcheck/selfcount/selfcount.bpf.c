@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Read-only measurement for lsmcreatorcheck -selfcount: how many user inet
 // sockets one process (sing-box, target_tgid) creates compared with the
-// whole system, and how many BPF_MAP_UPDATE_ELEM calls it makes and how
-// long they take in the kernel (its self-bypass registration is one such
-// call per outbound socket, sing-ebpf SelfBypass.RegisterSocket). Nothing
+// whole system, and every bpf(2) call it makes, per command, with the time
+// spent in the kernel. Its self-bypass registration is one MAP_UPDATE_ELEM
+// per outbound socket (sing-ebpf SelfBypass.RegisterSocket); assignment
+// reads are MAP_LOOKUP_ELEM, and the UDP session cleanup
+// (TCBackend.RemoveAssignmentIfMatch) is a lookup plus a MAP_DELETE_ELEM. Nothing
 // here changes a socket or a decision; the LSM program always returns 0.
 #include <linux/bpf.h>
 #include <bpf_helpers.h>
@@ -23,10 +25,27 @@ enum {
     C_SELF_TCP,
     C_SELF_UDP,
     C_SELF_OTHER,
-    C_UPDATE_CALLS,  // bpf(BPF_MAP_UPDATE_ELEM) by target_tgid, completed
-    C_UPDATE_NS,     // their summed kernel time
-    C_UPDATE_FAIL,   // ... that returned an error
     C_MAX,
+};
+
+#define CMD_MAX 40 // bpf commands 0..39 (enum bpf_cmd)
+
+struct cmd_stat {
+    __u64 calls;
+    __u64 ns;
+    __u64 fails;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, CMD_MAX);
+    __type(key, __u32);
+    __type(value, struct cmd_stat);
+} cmds SEC(".maps");
+
+struct call {
+    __u64 start;
+    __u64 cmd;
 };
 
 struct {
@@ -36,12 +55,12 @@ struct {
     __type(value, __u64);
 } counts SEC(".maps");
 
-// sys_enter time per thread of target_tgid inside an update call.
+// sys_enter time and command per thread of target_tgid inside bpf(2).
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
     __type(key, __u32);
-    __type(value, __u64);
+    __type(value, struct call);
 } inflight SEC(".maps");
 
 static __always_inline void add(__u32 index, __u64 value)
@@ -95,11 +114,11 @@ SEC("tracepoint/syscalls/sys_enter_bpf")
 int enter_bpf(struct sys_enter_args *ctx)
 {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
-    if ((pid_tgid >> 32) != target_tgid || ctx->args[0] != BPF_MAP_UPDATE_ELEM)
+    if ((pid_tgid >> 32) != target_tgid || ctx->args[0] >= CMD_MAX)
         return 0;
     __u32 tid = (__u32)pid_tgid;
-    __u64 now = bpf_ktime_get_ns();
-    bpf_map_update_elem(&inflight, &tid, &now, BPF_ANY);
+    struct call call = {.start = bpf_ktime_get_ns(), .cmd = ctx->args[0]};
+    bpf_map_update_elem(&inflight, &tid, &call, BPF_ANY);
     return 0;
 }
 
@@ -110,13 +129,17 @@ int exit_bpf(struct sys_exit_args *ctx)
     if ((pid_tgid >> 32) != target_tgid)
         return 0;
     __u32 tid = (__u32)pid_tgid;
-    __u64 *start = bpf_map_lookup_elem(&inflight, &tid);
-    if (!start)
+    struct call *call = bpf_map_lookup_elem(&inflight, &tid);
+    if (!call)
         return 0;
-    add(C_UPDATE_CALLS, 1);
-    add(C_UPDATE_NS, bpf_ktime_get_ns() - *start);
-    if (ctx->ret < 0)
-        add(C_UPDATE_FAIL, 1);
+    __u32 cmd = call->cmd;
+    struct cmd_stat *stat = bpf_map_lookup_elem(&cmds, &cmd);
+    if (stat) {
+        stat->calls++;
+        stat->ns += bpf_ktime_get_ns() - call->start;
+        if (ctx->ret < 0)
+            stat->fails++;
+    }
     bpf_map_delete_elem(&inflight, &tid);
     return 0;
 }

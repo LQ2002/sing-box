@@ -74,3 +74,14 @@ probe's own tracepoint and hash work and an unlocked CPU. Per hour at the
 300 s rate: ~1760 sing-box sockets, ~14 ms of registration and ~3 ms of
 creator snapshots nobody reads (sing-box's cgroup is not named pid_<tgid>,
 so the producer snapshots its sockets; TC bypasses them before any lookup).
+
+Per bpf(2) command (same probe, extended; 300 s, screen dozing for part of
+it, sing-box in `/sing-box/pid_<tgid>`): 84 sing-box sockets of 2480;
+MAP_LOOKUP_ELEM 233 x 7.0 us = 1.64 ms, MAP_UPDATE_ELEM 84 x 4.6 us =
+0.39 ms (self-bypass registration, one per socket), MAP_DELETE_ELEM 121 x
+2.4 us = 0.29 ms (UDP session cleanup, RemoveAssignmentIfMatch; its
+preceding lookup is among the 233), OBJ_GET_INFO_BY_FD 10 x 7.4 us. All
+bpf(2) calls together: 2.4 ms in 5 min, ~29 ms/h; the UDP cleanup (delete
+plus its lookup) at most ~14 ms/h. Probe overhead and an unlocked CPU are
+included in the per-call times. Producer meanwhile: 8039 runs, 547 ns,
+4.40 ms.

@@ -567,6 +567,7 @@ func runSelfCount(path string, pid, seconds int, watchDir string) error {
 		Enter  *ebpf.Program `ebpf:"enter_bpf"`
 		Exit   *ebpf.Program `ebpf:"exit_bpf"`
 		Counts *ebpf.Map     `ebpf:"counts"`
+		Cmds   *ebpf.Map     `ebpf:"cmds"`
 	}
 	if err := spec.LoadAndAssign(&objects, nil); err != nil {
 		return err
@@ -575,6 +576,7 @@ func runSelfCount(path string, pid, seconds int, watchDir string) error {
 	defer objects.Enter.Close()
 	defer objects.Exit.Close()
 	defer objects.Counts.Close()
+	defer objects.Cmds.Close()
 	var producer *ebpf.Program
 	if watchDir != "" {
 		if producer, err = producerProgramIn(watchDir); err != nil {
@@ -614,14 +616,28 @@ func runSelfCount(path string, pid, seconds int, watchDir string) error {
 	}
 	fmt.Printf("counting pid %d for %d s...\n", pid, seconds)
 	time.Sleep(time.Duration(seconds) * time.Second)
-	sums, err := sumCounts(objects.Counts, 8)
+	sums, err := sumCounts(objects.Counts, 5)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("user inet sockets: all %d, pid %d %d (tcp %d, udp %d, other %d)\n",
 		sums[0], pid, sums[1], sums[2], sums[3], sums[4])
-	fmt.Printf("pid %d bpf(MAP_UPDATE_ELEM): %d calls, %d failed, %.0f ns each in the kernel\n",
-		pid, sums[5], sums[7], float64(sums[6])/float64(max(sums[5], 1)))
+	fmt.Printf("pid %d bpf(2) calls by command (kernel time):\n", pid)
+	for cmd := uint32(0); cmd < 40; cmd++ {
+		var perCPU []struct{ Calls, Ns, Fails uint64 }
+		if err := objects.Cmds.Lookup(&cmd, &perCPU); err != nil {
+			return err
+		}
+		var calls, ns, fails uint64
+		for _, v := range perCPU {
+			calls, ns, fails = calls+v.Calls, ns+v.Ns, fails+v.Fails
+		}
+		if calls == 0 {
+			continue
+		}
+		fmt.Printf("  %-20s %7d calls, %5d failed, %6.0f ns each, %.2f ms total\n",
+			bpfCmdName(cmd), calls, fails, float64(ns)/float64(calls), float64(ns)/1e6)
+	}
 	if producer != nil {
 		after, _ := programStats(producer)
 		runs := after.count - producerBefore.count
@@ -629,6 +645,17 @@ func runSelfCount(path string, pid, seconds int, watchDir string) error {
 			runs, float64(after.ns-producerBefore.ns)/float64(max(runs, 1)), float64(after.ns-producerBefore.ns)/1e6)
 	}
 	return nil
+}
+
+func bpfCmdName(cmd uint32) string {
+	names := []string{"MAP_CREATE", "MAP_LOOKUP_ELEM", "MAP_UPDATE_ELEM", "MAP_DELETE_ELEM",
+		"MAP_GET_NEXT_KEY", "PROG_LOAD", "OBJ_PIN", "OBJ_GET", "PROG_ATTACH", "PROG_DETACH",
+		"PROG_TEST_RUN", "PROG_GET_NEXT_ID", "MAP_GET_NEXT_ID", "PROG_GET_FD_BY_ID",
+		"MAP_GET_FD_BY_ID", "OBJ_GET_INFO_BY_FD", "PROG_QUERY"}
+	if int(cmd) < len(names) {
+		return names[cmd]
+	}
+	return fmt.Sprintf("cmd %d", cmd)
 }
 
 func sumCounts(m *ebpf.Map, n uint32) ([]uint64, error) {
