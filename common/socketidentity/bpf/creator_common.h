@@ -116,13 +116,11 @@ struct {
 //
 // Device probe (experimental/creator_v2_probe): 865/865 events matched /proc
 // cmdline with zero read failures.
-static __always_inline void record_process_name(struct task_struct *task, struct socket_creator *creator)
+//
+// The caller reads mm->arg_start/arg_end: the module producer with
+// BPF_CORE_READ, the LSM producer with direct BTF loads (see there why).
+static __always_inline void record_process_name(__u64 arg_start, __u64 arg_end, struct socket_creator *creator)
 {
-    struct mm_struct *mm = BPF_CORE_READ(task, mm);
-    if (!mm)
-        return; // kernel thread
-    __u64 arg_start = BPF_CORE_READ(mm, arg_start);
-    __u64 arg_end = BPF_CORE_READ(mm, arg_end);
     char name[ARGV_MAX] = {}; // variable-offset reads below need initialized stack
     long read = bpf_probe_read_user_str(name, sizeof(name), (const void *)arg_start);
     if (read > 1) {
@@ -156,17 +154,17 @@ static __always_inline __u64 exe_key(__u32 dev, __u32 generation, __u64 inode)
     return hash;
 }
 
-// The identity part of a snapshot: cookie, leader birth time, TGID, TID,
-// UID and comm. Returns 0 when any of them is missing; the socket then stays
-// without a snapshot (userspace reports it unknown).
-static __always_inline int fill_creator(struct sock *sk, struct task_struct *task, struct socket_creator *creator)
+// The identity part of a snapshot: cookie, leader birth time (read by the
+// caller), TGID, TID, UID and comm. Returns 0 when any of them is missing;
+// the socket then stays without a snapshot (userspace reports it unknown).
+static __always_inline int fill_creator(struct sock *sk, __u64 start_time_ns, struct socket_creator *creator)
 {
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     creator->cookie = bpf_get_socket_cookie(sk);
     creator->process_id = pid_tgid >> 32;
     creator->thread_id = (__u32)pid_tgid;
     creator->user_id = (__u32)bpf_get_current_uid_gid();
-    creator->start_time_ns = BPF_CORE_READ(task, group_leader, start_boottime);
+    creator->start_time_ns = start_time_ns;
     if (!creator->cookie || !creator->start_time_ns || !creator->process_id || !creator->thread_id)
         return 0;
     if (bpf_get_current_comm(creator->comm, sizeof(creator->comm)))

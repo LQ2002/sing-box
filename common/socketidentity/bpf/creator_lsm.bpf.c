@@ -29,8 +29,18 @@
 //     mm->exe_file re-read: it must still be the same file. This program is
 //     not sleepable, so it runs inside rcu_read_lock (the trampoline's
 //     __bpf_prog_enter); struct file is SLAB_TYPESAFE_BY_RCU and inodes are
-//     RCU-freed, as the module's comment explains. Reads use
-//     bpf_probe_read_kernel (BPF_CORE_READ), which cannot fault.
+//     RCU-freed, as the module's comment explains.
+//
+// Kernel memory is read with direct BTF loads (task->mm->...), not
+// BPF_CORE_READ: the task from bpf_get_current_task_btf is a trusted BTF
+// pointer, so the verifier lets the program walk it, and the JIT emits one
+// load with an exception-table entry per field (a bad address reads 0)
+// instead of a bpf_probe_read_kernel helper call. On the device with CPU 4
+// locked at 2.36 GHz, BPF stats measured 1.5-1.9 us per snapshot and
+// 150-235 ns per gated socket with BPF_CORE_READ (about 22 and 7 helper
+// calls), and 1.1-1.5 us / 95-153 ns with direct loads. A stage-timed copy
+// put 850-1070 ns of a snapshot in bpf_sk_storage_get creating the storage,
+// which the module's producer calls the same way (experimental/lsmcreatorcheck).
 //  5. Path cache: exe_paths itself (LRU, pinned, shared by every CPU) - a
 //     key already stored needs no d_path. The module kept 4 per-CPU slots.
 //  6. Miss: bpf_get_task_exe_file takes a real reference (get_task_exe_file),
@@ -105,7 +115,9 @@ extern int bpf_path_d_path(struct path *path, char *buf, __u64 buf__sz) __ksym;
 // cgroup directories.
 static __always_inline int in_own_process_cgroup(struct task_struct___lsm *task, __u32 tgid)
 {
-    const char *name = BPF_CORE_READ(task, cgroups, dfl_cgrp, kn, name);
+    // The string itself still needs a helper: a char pointer is not a BTF
+    // object the program may load from.
+    const char *name = task->cgroups->dfl_cgrp->kn->name;
     char buf[16] = {};
     if (!name || bpf_probe_read_kernel_str(buf, sizeof(buf), name) < 6)
         return 0;
@@ -138,9 +150,10 @@ static __always_inline __u32 resolve_slow(struct task_struct *task, __u64 *key)
     struct file *exe = bpf_get_task_exe_file(task);
     if (!exe)
         return 0;
-    __u32 dev = BPF_CORE_READ(exe, f_inode, i_sb, s_dev);
-    __u64 inode = BPF_CORE_READ(exe, f_inode, i_ino);
-    __u32 generation = BPF_CORE_READ(exe, f_inode, i_generation);
+    struct inode *exe_inode = exe->f_inode;
+    __u32 dev = exe_inode->i_sb->s_dev;
+    __u64 inode = exe_inode->i_ino;
+    __u32 generation = exe_inode->i_generation;
     int length = bpf_path_d_path(&exe->f_path, value->path, sizeof(value->path));
     bpf_put_file(exe);
 
@@ -178,15 +191,16 @@ static __always_inline __u32 resolve_slow(struct task_struct *task, __u64 *key)
 // The executable's key, from the path map when it is already there.
 static __always_inline __u32 record_executable(struct task_struct *task, __u64 *key)
 {
-    struct mm_struct___exe *mm = (void *)BPF_CORE_READ(task, mm);
-    struct file *exe = BPF_CORE_READ(mm, exe_file);
-    struct inode *inode = exe ? BPF_CORE_READ(exe, f_inode) : 0;
+    struct mm_struct___exe *mm = (void *)task->mm;
+    struct file *exe = mm->exe_file;
+    struct inode *inode = exe ? exe->f_inode : 0;
     if (inode) {
-        __u32 dev = BPF_CORE_READ(inode, i_sb, s_dev);
-        __u64 ino = BPF_CORE_READ(inode, i_ino);
-        __u32 generation = BPF_CORE_READ(inode, i_generation);
-        // Only a key whose file is still the mm's executable may hit.
-        if (BPF_CORE_READ(mm, exe_file) == exe) {
+        __u32 dev = inode->i_sb->s_dev;
+        __u64 ino = inode->i_ino;
+        __u32 generation = inode->i_generation;
+        // Only a key whose file is still the mm's executable may hit. The
+        // re-read must not be merged with the first one.
+        if (*(struct file *volatile *)&mm->exe_file == exe) {
             *key = exe_key(dev, generation, ino);
             struct exe_path *stored = bpf_map_lookup_elem(&exe_paths, key);
             if (stored)
@@ -207,17 +221,18 @@ int BPF_PROG(capture_creator, struct socket *sock, int family, int type, int pro
 
     struct task_struct *task = bpf_get_current_task_btf();
     struct task_struct___lsm *t = (void *)task;
-    int kernel = !BPF_CORE_READ(t, mm) || (BPF_CORE_READ(t, flags) & PF_KTHREAD);
+    struct mm_struct *mm = t->mm;
+    int kernel = !mm || (t->flags & PF_KTHREAD);
     if (!kernel && in_own_process_cgroup(t, bpf_get_current_pid_tgid() >> 32))
         return 0;
 
     struct socket_creator creator = {};
-    if (!fill_creator(sk, task, &creator))
+    if (!fill_creator(sk, task->group_leader->start_boottime, &creator))
         return 0;
     if (kernel) {
         creator.flags |= CREATOR_KERNEL;
     } else {
-        record_process_name(task, &creator);
+        record_process_name(mm->arg_start, mm->arg_end, &creator);
         __u64 key = 0;
         __u32 flags = record_executable(task, &key);
         if (flags) {
