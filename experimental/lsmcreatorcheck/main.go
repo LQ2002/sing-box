@@ -41,6 +41,7 @@ func main() {
 	rounds := flag.Int("rounds", 3, "benchmark rounds per state")
 	cpu := flag.Int("cpu", 4, "CPU the benchmark is pinned to")
 	dir := flag.String("dir", "/data/local/tmp/lsmcheck", "scratch directory for executable copies")
+	watch := flag.String("watch", "", "read-only: sample the run count of the producer pinned in this collector directory for 10 s")
 	profile := flag.String("profile", "", "only run the stage-timed object built by profile/build.sh")
 	ab := flag.Bool("ab", true, "also time socket()+close() attached vs detached (noisy without a locked frequency)")
 	flag.Parse()
@@ -50,6 +51,13 @@ func main() {
 		return
 	case "bench":
 		childBench(*count, *cpu)
+		return
+	}
+	if *watch != "" {
+		if err := runWatch(*watch); err != nil {
+			fmt.Println("FAIL:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if *profile != "" {
@@ -510,6 +518,47 @@ func profSums(m *ebpf.Map) ([8]uint64, error) {
 		}
 	}
 	return sums, nil
+}
+
+// runWatch reports how often a running collector's producer fires. It only
+// opens the pinned link and program; BPF statistics are on while the fd from
+// EnableStats is held (10 s) and off again afterwards.
+func runWatch(dir string) error {
+	l, err := link.LoadPinnedLink(dir+"/producer", nil)
+	if err != nil {
+		return err
+	}
+	defer l.Close()
+	info, err := l.Info()
+	if err != nil {
+		return err
+	}
+	program, err := ebpf.NewProgramFromID(info.Program)
+	if err != nil {
+		return err
+	}
+	defer program.Close()
+	programInfo, err := program.Info()
+	if err != nil {
+		return err
+	}
+	stats, err := ebpf.EnableStats(uint32(unix.BPF_STATS_RUN_TIME))
+	if err != nil {
+		return err
+	}
+	defer stats.Close()
+	before, err := programStats(program)
+	if err != nil {
+		return err
+	}
+	time.Sleep(10 * time.Second)
+	after, err := programStats(program)
+	if err != nil {
+		return err
+	}
+	runs := after.count - before.count
+	fmt.Printf("program %s type %s: %d runs in 10 s, %.0f ns each\n", programInfo.Name, programInfo.Type, runs, float64(after.ns-before.ns)/float64(max(runs, 1)))
+	return nil
 }
 
 // producerProgram opens the program behind the pinned producer link (the
