@@ -561,7 +561,11 @@ func runCgroupQuery(path string) error {
 			}
 			names = append(names, fmt.Sprintf("%d:%s", p.ID, name))
 		}
-		fmt.Printf("  %-32v %v flags=%s\n", attach, names, attachFlags(int(f.Fd()), attach))
+		flags := "-" // nothing attached here: the flags are meaningless
+		if len(names) > 0 {
+			flags = attachFlags(int(f.Fd()), attach)
+		}
+		fmt.Printf("  %-32v %v flags=%s\n", attach, names, flags)
 	}
 	return nil
 }
