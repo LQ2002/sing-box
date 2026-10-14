@@ -218,4 +218,4 @@ require (
 	zombiezen.com/go/capnproto2 v2.18.2+incompatible // indirect
 )
 
-replace github.com/sagernet/sing-shadowsocks2 => github.com/LQ2002/sing-shadowsocks2 v0.2.2-0.20261014014914-dc4b52675127
+replace github.com/sagernet/sing-shadowsocks2 => github.com/LQ2002/sing-shadowsocks2 v0.2.2-0.20261013144010-ad2beca4a781
