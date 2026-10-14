@@ -213,6 +213,9 @@ func (i *Inbound) startInbound() error {
 			return err
 		}
 	}
+	if backend != nil && !i.sharedRewriteEnabled() {
+		i.startTCAssignmentJanitor()
+	}
 	if backend != nil || i.cgroupBackendInstance() != nil || i.sharedRewriteInstance() != nil {
 		if err = i.startTCInterfaceMonitor(); err != nil {
 			return err
@@ -584,6 +587,7 @@ func (i *Inbound) closeResources() error {
 	// First, so no UID update races the backend being taken apart.
 	i.stopAndroidUIDUpdater()
 	i.stopProcessIndex()
+	i.stopTCAssignmentJanitor()
 	monitorErr := i.stopTCInterfaceMonitor()
 	i.stopBypassRuleSets()
 	sharedRewriteErr := error(nil)
