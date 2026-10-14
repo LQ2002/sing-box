@@ -33,6 +33,7 @@ func (i *Inbound) newTCConnection(
 	source := M.SocksaddrFromNet(conn.RemoteAddr()).AddrPort()
 	destination := M.SocksaddrFromNet(conn.LocalAddr()).AddrPort()
 	assignment, err := backend.LookupAssignment(commonEBPF.ProtocolTCP, source, destination, 0, true)
+	i.requestTCAssignmentMaintenance()
 	if err != nil {
 		i.counters.assignmentLookupFailures.Add(1)
 		i.tcpWarnings.errorContext(i.logger, ctx, "lookup TC eBPF TCP assignment: ", err)
