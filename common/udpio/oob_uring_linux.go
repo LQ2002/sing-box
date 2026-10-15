@@ -45,6 +45,17 @@ import (
 
 var EnableUDPIOUring = os.Getenv("SB_UDP_IOURING") == "1"
 
+// Wait variants (experiment), as in sing-shadowsocks2's reader.
+// SB_UDP_IOURING_WAIT=netpoll: no locked thread and no blocking
+// io_uring_enter; the ring fd goes to the Go netpoller and the goroutine
+// parks there. The receive task_work runs on whichever thread armed the
+// multishot receive, which the kernel wakes for every batch.
+// SB_UDP_IOURING_COOP=1 adds IORING_SETUP_COOP_TASKRUN.
+var (
+	udpIOUringNetpoll = os.Getenv("SB_UDP_IOURING_WAIT") == "netpoll"
+	udpIOUringCoop    = os.Getenv("SB_UDP_IOURING_COOP") == "1"
+)
+
 const (
 	uringOOBRecvTag     = 1
 	uringOOBCancelTag   = 2
@@ -59,6 +70,8 @@ const (
 	sysIOURingEnter     = 426
 	sysIOURingRegister  = 427
 	uringSetupCQSize    = 1 << 3
+	uringSetupCoop      = 1 << 8
+	uringSQCQOverflow   = 1 << 1
 	uringFeatSingleMmap = 1 << 0
 	uringEnterGetEvents = 1 << 0
 	uringOpRecvMsg      = 10
@@ -160,11 +173,15 @@ type uringOOBReadWaiter struct {
 	cqTail  *uint32
 	cqMask  uint32
 	cqes    unsafe.Pointer
+	sqFlags *uint32
 	bufTail uint16
 	msghdr  unix.Msghdr
-	armed   bool
-	locked  bool
-	eof     bool
+	// netpoll variant: the ring fd as an *os.File in the Go netpoller
+	ringFile *os.File
+	ringRaw  syscall.RawConn
+	armed    bool
+	locked   bool
+	eof      bool
 
 	pending        []*buf.Buffer
 	pendingSources []M.Socksaddr
@@ -218,12 +235,28 @@ func (w *uringOOBReadWaiter) Shutdown() {
 func (w *uringOOBReadWaiter) setup() error {
 	var params uringParams
 	params.flags = uringSetupCQSize
+	if udpIOUringCoop {
+		params.flags |= uringSetupCoop
+	}
 	params.cqEntries = uringCQEntries
 	ringFD, _, errno := unix.RawSyscall(sysIOURingSetup, uringSQEntries, uintptr(unsafe.Pointer(&params)), 0)
 	if errno != 0 {
 		return os.NewSyscallError("io_uring_setup", errno)
 	}
 	w.ringFD = int(ringFD)
+	if udpIOUringNetpoll {
+		if err := unix.SetNonblock(w.ringFD, true); err != nil {
+			return E.Cause(err, "set io_uring fd non-blocking")
+		}
+		// os.File owns the fd from here on; release closes it through the
+		// file so the netpoller lets go of it first.
+		w.ringFile = os.NewFile(uintptr(w.ringFD), "io_uring")
+		ringRaw, err := w.ringFile.SyscallConn()
+		if err != nil {
+			return E.Cause(err, "io_uring fd raw conn")
+		}
+		w.ringRaw = ringRaw
+	}
 	if params.features&uringFeatSingleMmap == 0 {
 		return E.New("io_uring without SINGLE_MMAP")
 	}
@@ -248,6 +281,7 @@ func (w *uringOOBReadWaiter) setup() error {
 	w.cqTail = (*uint32)(unsafe.Add(base, params.cqOff.tail))
 	w.cqMask = *(*uint32)(unsafe.Add(base, params.cqOff.ringMask))
 	w.cqes = unsafe.Add(base, params.cqOff.cqes)
+	w.sqFlags = (*uint32)(unsafe.Add(base, params.sqOff.flags))
 
 	bufRing, err := unix.Mmap(-1, 0, uringOOBBufferCount*int(unsafe.Sizeof(uringBuf{})), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANONYMOUS)
 	if err != nil {
@@ -311,6 +345,9 @@ func (w *uringOOBReadWaiter) arm() {
 
 func (w *uringOOBReadWaiter) enter() error {
 	toSubmit := atomic.LoadUint32(w.sqTail) - atomic.LoadUint32(w.sqHead)
+	if w.ringRaw != nil {
+		return w.enterNetpoll(toSubmit)
+	}
 	for {
 		ringFD := w.ringFD
 		w.inEnter = true
@@ -331,6 +368,45 @@ func (w *uringOOBReadWaiter) enter() error {
 			return os.NewSyscallError("io_uring_enter", errno)
 		}
 	}
+}
+
+// enterNetpoll is enter for the netpoll variant: submit without waiting,
+// then park in the Go netpoller until the ring fd reports completions.
+func (w *uringOOBReadWaiter) enterNetpoll(toSubmit uint32) error {
+	for toSubmit > 0 {
+		_, _, errno := unix.Syscall6(sysIOURingEnter, uintptr(w.ringFD), uintptr(toSubmit), 0, 0, 0, 0)
+		if errno == unix.EINTR {
+			continue
+		}
+		if errno != 0 && errno != unix.EAGAIN && errno != unix.EBUSY {
+			return os.NewSyscallError("io_uring_enter", errno)
+		}
+		break
+	}
+	ringFD := w.ringFD
+	w.inEnter = true
+	w.access.Unlock()
+	err := w.ringRaw.Read(func(uintptr) bool {
+		if atomic.LoadUint32(w.cqHead) != atomic.LoadUint32(w.cqTail) {
+			return true
+		}
+		// Completions that did not fit the CQ wait in the kernel's
+		// overflow list until an io_uring_enter(GETEVENTS) flushes them.
+		if atomic.LoadUint32(w.sqFlags)&uringSQCQOverflow != 0 {
+			_, _, _ = unix.Syscall6(sysIOURingEnter, uintptr(ringFD), 0, 0, uringEnterGetEvents, 0, 0)
+			return atomic.LoadUint32(w.cqHead) != atomic.LoadUint32(w.cqTail)
+		}
+		return false
+	})
+	w.access.Lock()
+	w.inEnter = false
+	if w.ringFD < 0 {
+		return io.EOF
+	}
+	if err != nil {
+		return E.Cause(err, "wait io_uring completions")
+	}
+	return nil
 }
 
 func (w *uringOOBReadWaiter) reap() error {
@@ -416,8 +492,12 @@ func (w *uringOOBReadWaiter) WaitReadOOBPackets() (buffers []*buf.Buffer, oobs [
 			w.unlockThread()
 			return nil, nil, nil, net.ErrClosed
 		}
-		runtime.LockOSThread()
-		w.locked = true
+		// The receive task_work runs on the thread that armed it; the
+		// blocking variant keeps the reader on that thread.
+		if !udpIOUringNetpoll {
+			runtime.LockOSThread()
+			w.locked = true
+		}
 		if err = w.setup(); err != nil {
 			w.closeLocked()
 			return nil, nil, nil, err
@@ -480,7 +560,12 @@ func (w *uringOOBReadWaiter) unlockThread() {
 }
 
 func (w *uringOOBReadWaiter) release() {
-	if w.ringFD >= 0 {
+	if w.ringFile != nil {
+		_ = w.ringFile.Close()
+		w.ringFile = nil
+		w.ringRaw = nil
+		w.ringFD = -1
+	} else if w.ringFD >= 0 {
 		_ = unix.Close(w.ringFD)
 		w.ringFD = -1
 	}

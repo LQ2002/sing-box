@@ -155,3 +155,23 @@ func TestUringOOBBurst(t *testing.T) {
 	}
 	reader.Shutdown()
 }
+
+// The netpoll wait variant (with and without COOP_TASKRUN) must pass the
+// same tests.
+func TestUringOOBNetpollVariants(t *testing.T) {
+	for _, variant := range []struct {
+		name string
+		coop bool
+	}{{"netpoll", false}, {"netpoll-coop", true}} {
+		t.Run(variant.name, func(t *testing.T) {
+			oldNetpoll, oldCoop := udpIOUringNetpoll, udpIOUringCoop
+			udpIOUringNetpoll, udpIOUringCoop = true, variant.coop
+			defer func() { udpIOUringNetpoll, udpIOUringCoop = oldNetpoll, oldCoop }()
+			t.Run("ipv4", TestUringOOBReadWriteIPv4)
+			t.Run("ipv6", TestUringOOBReadWriteIPv6)
+			t.Run("shutdown-blocked", TestUringOOBShutdownWakesBlockedReader)
+			t.Run("shutdown-idle", TestUringOOBShutdownWhileIdleReleasesRing)
+			t.Run("burst", TestUringOOBBurst)
+		})
+	}
+}
