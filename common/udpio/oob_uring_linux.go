@@ -188,11 +188,14 @@ type uringOOBReadWaiter struct {
 	pendingOOB     [][]byte
 	oobArena       []byte
 	returnedOOB    [][]byte
+	// fallback is the recvmmsg reader used after the ring could not be set
+	// up; only the reading goroutine touches it.
+	fallback OOBPacketBatchReadWaiter
 }
 
 // newUringOOBReadWaiter returns nil unless SB_UDP_IOURING=1.
 func newUringOOBReadWaiter(conn *net.UDPConn, oobSize int) OOBPacketBatchReadWaiter {
-	if !EnableUDPIOUring || conn == nil || oobSize <= 0 || uringRecvOutSize+uringOOBNameLen+oobSize >= uringOOBBufferSize {
+	if !EnableUDPIOUring || conn == nil || oobSize <= 0 || uringRecvOutSize+uringOOBNameLen+oobSize >= uringOOBBufferSize || !uringAvailable() {
 		return nil
 	}
 	rawConn, err := conn.SyscallConn()
@@ -233,6 +236,9 @@ func (w *uringOOBReadWaiter) Shutdown() {
 }
 
 func (w *uringOOBReadWaiter) setup() error {
+	if uringSetupFault != nil {
+		return uringSetupFault
+	}
 	var params uringParams
 	params.flags = uringSetupCQSize
 	if udpIOUringCoop {
@@ -485,12 +491,29 @@ func (w *uringOOBReadWaiter) takeDatagram(bid uint16, res int) {
 }
 
 func (w *uringOOBReadWaiter) WaitReadOOBPackets() (buffers []*buf.Buffer, oobs [][]byte, sources []M.Socksaddr, err error) {
+	for {
+		if w.fallback != nil {
+			// outside access: Shutdown must not wait for a netpoller read
+			return w.fallback.WaitReadOOBPackets()
+		}
+		var retry bool
+		buffers, oobs, sources, err, retry = w.waitRing()
+		if !retry {
+			return
+		}
+	}
+}
+
+// waitRing is WaitReadOOBPackets on the ring. When the ring cannot be set
+// up it switches the reader to the recvmmsg reader and asks for a retry
+// (the listener keeps working without io_uring).
+func (w *uringOOBReadWaiter) waitRing() (buffers []*buf.Buffer, oobs [][]byte, sources []M.Socksaddr, err error, retry bool) {
 	w.access.Lock()
 	defer w.access.Unlock()
 	if w.ringFD < 0 {
 		if w.closed.Load() {
 			w.unlockThread()
-			return nil, nil, nil, net.ErrClosed
+			return nil, nil, nil, net.ErrClosed, false
 		}
 		// The receive task_work runs on the thread that armed it; the
 		// blocking variant keeps the reader on that thread.
@@ -499,8 +522,15 @@ func (w *uringOOBReadWaiter) WaitReadOOBPackets() (buffers []*buf.Buffer, oobs [
 			w.locked = true
 		}
 		if err = w.setup(); err != nil {
+			closed := w.closed.Load()
 			w.closeLocked()
-			return nil, nil, nil, err
+			if !closed {
+				fallback := &oobPacketBatchReadWaiter{rawConn: w.rawConn, oobSize: w.oobSize}
+				fallback.InitializeReadWaiter(w.options)
+				w.fallback = fallback
+				return nil, nil, nil, nil, true
+			}
+			return nil, nil, nil, err, false
 		}
 	}
 	// The control bytes handed out last time stay valid until this call.
@@ -509,7 +539,7 @@ func (w *uringOOBReadWaiter) WaitReadOOBPackets() (buffers []*buf.Buffer, oobs [
 	for {
 		if err = w.reap(); err != nil {
 			w.closeLocked()
-			return nil, nil, nil, err
+			return nil, nil, nil, err, false
 		}
 		if len(w.pending) > 0 {
 			// pendingOOB slices point into oobArena as it was when appended;
@@ -520,19 +550,19 @@ func (w *uringOOBReadWaiter) WaitReadOOBPackets() (buffers []*buf.Buffer, oobs [
 			sources = w.pendingSources
 			w.pending = nil
 			w.pendingSources = nil
-			return buffers, oobs, sources, nil
+			return buffers, oobs, sources, nil, false
 		}
 		if w.eof || w.closed.Load() {
 			w.closeLocked()
 			// Shutdown is the listener closing; report it as such.
-			return nil, nil, nil, net.ErrClosed
+			return nil, nil, nil, net.ErrClosed, false
 		}
 		if !w.armed {
 			w.arm()
 		}
 		if err = w.enter(); err != nil {
 			w.closeLocked()
-			return nil, nil, nil, err
+			return nil, nil, nil, err, false
 		}
 	}
 }
