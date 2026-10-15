@@ -3,6 +3,7 @@
 package udpio
 
 import (
+	"errors"
 	"bytes"
 	"net"
 	"testing"
@@ -27,6 +28,17 @@ func uringSendPayload(i int) []byte {
 }
 
 func testUringSend(t *testing.T, connected bool) {
+	testUringSendWith(t, connected, false)
+}
+
+// A ring that cannot be set up leaves the reply socket on sing's sendmmsg
+// writer: every datagram still arrives.
+func TestUringSendFallsBackWhenSetupFails(t *testing.T) {
+	t.Run("unconnected", func(t *testing.T) { testUringSendWith(t, false, true) })
+	t.Run("connected", func(t *testing.T) { testUringSendWith(t, true, true) })
+}
+
+func testUringSendWith(t *testing.T, connected bool, failSetup bool) {
 	EnableUDPIOUringSend = true
 	defer func() { EnableUDPIOUringSend = false }()
 	receiver, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -50,6 +62,10 @@ func testUringSend(t *testing.T, connected bool) {
 		t.Skip("io_uring writer unavailable")
 	}
 	defer writer.Close()
+	if failSetup {
+		uringSetupFault = errors.New("injected io_uring setup failure")
+		defer func() { uringSetupFault = nil }()
+	}
 	const count = 400
 	destination := M.SocksaddrFromNet(receiver.LocalAddr())
 	for start := 0; start < count; start += 40 {

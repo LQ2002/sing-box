@@ -175,3 +175,42 @@ func TestUringOOBNetpollVariants(t *testing.T) {
 		})
 	}
 }
+
+// A ring that cannot be set up leaves the listener on the recvmmsg reader
+// instead of failing it; Shutdown and close still end it.
+func TestUringOOBFallsBackWhenSetupFails(t *testing.T) {
+	receiver, sender, reader := newUringOOBTestReader(t)
+	defer sender.Close()
+	uringSetupFault = errors.New("injected io_uring setup failure")
+	defer func() { uringSetupFault = nil }()
+	for i := 0; i < 5; i++ {
+		if _, err := sender.WriteTo([]byte{byte(i), 1, 2, 3}, receiver.LocalAddr()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	got := 0
+	for got < 5 {
+		_ = receiver.SetReadDeadline(time.Now().Add(3 * time.Second))
+		buffers, oobs, sources, err := reader.WaitReadOOBPackets()
+		if err != nil {
+			t.Fatalf("read after %d packets: %v", got, err)
+		}
+		if len(oobs) != len(buffers) || len(sources) != len(buffers) {
+			t.Fatalf("%d buffers, %d oobs, %d sources", len(buffers), len(oobs), len(sources))
+		}
+		got += len(buffers)
+		buf.ReleaseMulti(buffers)
+	}
+	if _, isRecvmmsg := reader.fallback.(*oobPacketBatchReadWaiter); !isRecvmmsg {
+		t.Fatalf("fallback %T, want the recvmmsg reader", reader.fallback)
+	}
+	if reader.ringFD >= 0 {
+		t.Fatal("ring left open after the failed setup")
+	}
+	reader.Shutdown()
+	_ = receiver.Close()
+	if _, _, _, err := reader.WaitReadOOBPackets(); err == nil {
+		t.Fatal("read after close succeeded")
+	}
+}

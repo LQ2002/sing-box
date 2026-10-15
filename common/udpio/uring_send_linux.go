@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -75,11 +76,14 @@ type UringPacketBatchWriter struct {
 	controls [][24]byte
 	runs     [][2]int
 	results  []int32
+	// fallback is sing's sendmmsg writer, used after the ring could not be
+	// set up
+	fallback N.PacketBatchWriter
 }
 
 // NewUringPacketBatchWriter returns nil unless SB_UDP_IOURING_SEND=1.
 func NewUringPacketBatchWriter(conn *net.UDPConn) *UringPacketBatchWriter {
-	if !EnableUDPIOUringSend || conn == nil {
+	if !EnableUDPIOUringSend || conn == nil || !uringAvailable() {
 		return nil
 	}
 	rawConn, err := conn.SyscallConn()
@@ -101,6 +105,9 @@ func NewUringPacketBatchWriter(conn *net.UDPConn) *UringPacketBatchWriter {
 }
 
 func (w *UringPacketBatchWriter) setup() error {
+	if uringSetupFault != nil {
+		return uringSetupFault
+	}
 	var params uringParams
 	params.flags = uringSetupCQSize
 	params.cqEntries = uringSendCQEntries
@@ -176,16 +183,32 @@ func (w *UringPacketBatchWriter) submitAndWait(count int) error {
 // connected socket.
 func (w *UringPacketBatchWriter) WritePacketBatch(buffers []*buf.Buffer, destinations []M.Socksaddr) error {
 	w.access.Lock()
+	if w.fallback == nil && !w.closed && w.ringFD < 0 {
+		if err := w.setup(); err != nil {
+			// keep the reply socket working without io_uring
+			w.release()
+			w.fallback = bufio.NewPacketBatchWriter(bufio.NewPacketConn(w.conn))
+		}
+	}
+	if fallback := w.fallback; fallback != nil && !w.closed {
+		w.access.Unlock()
+		if destinations == nil {
+			// connected socket (not used by the eBPF reply sockets): one
+			// write per datagram
+			defer buf.ReleaseMulti(buffers)
+			for _, buffer := range buffers {
+				if _, err := w.conn.Write(buffer.Bytes()); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		return fallback.WritePacketBatch(buffers, destinations)
+	}
 	defer w.access.Unlock()
 	defer buf.ReleaseMulti(buffers)
 	if w.closed {
 		return net.ErrClosed
-	}
-	if w.ringFD < 0 {
-		if err := w.setup(); err != nil {
-			w.release()
-			return err
-		}
 	}
 	count := len(buffers)
 	w.names = growSlice(w.names, count)
