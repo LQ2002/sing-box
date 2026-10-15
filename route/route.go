@@ -348,7 +348,7 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 		return err
 	}
 	for _, buffer := range slices.Backward(packetBuffers) {
-		conn = bufio.NewCachedPacketConn(conn, buffer.Buffer, buffer.Destination)
+		conn = newCachedPacketConn(conn, buffer.Buffer, buffer.Destination)
 		N.PutPacketBuffer(buffer)
 	}
 	if selectedRule != nil {

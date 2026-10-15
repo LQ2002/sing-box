@@ -290,7 +290,7 @@ func (m *ConnectionManager) splicePacketConnection(ctx context.Context, conn N.P
 		for _, counter := range spliceSource.readCounters {
 			counter(int64(packet.Buffer.Len()))
 		}
-		source = bufio.NewCachedPacketConn(source, packet.Buffer, packet.Destination)
+		source = newCachedPacketConn(source, packet.Buffer, packet.Destination)
 		N.PutPacketBuffer(packet)
 	}
 	if isFakeIP {
