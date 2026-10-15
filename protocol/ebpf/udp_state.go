@@ -12,6 +12,7 @@ import (
 	"time"
 
 	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
+	"github.com/sagernet/sing-box/common/udpio"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
 
@@ -447,11 +448,13 @@ type udpReplySocketShard struct {
 }
 
 type udpReplySocketEntry struct {
-	conn     *net.UDPConn
-	writer   N.PacketBatchWriter
-	cleanup  func()
-	lastUsed atomic.Int64 // UnixNano, updated on every get()
-	inUse    atomic.Int32 // active senders; eviction skips entries > 0
+	// closeWriter releases the io_uring writer's ring, when one is used.
+	closeWriter func()
+	conn        *net.UDPConn
+	writer      N.PacketBatchWriter
+	cleanup     func()
+	lastUsed    atomic.Int64 // UnixNano, updated on every get()
+	inUse       atomic.Int32 // active senders; eviction skips entries > 0
 }
 
 // udpReplySocketPoolStats exposes current usage, its high-water mark, and how
@@ -531,6 +534,11 @@ func (p *udpReplySocketPool) get(
 		writer:  bufio.NewPacketBatchWriter(bufio.NewPacketConn(socket)),
 		cleanup: cleanup,
 	}
+	// io_uring sendmsg instead of sendmmsg, opt-in (common/udpio/uring_send_linux.go)
+	if uringWriter := udpio.NewUringPacketBatchWriter(socket); uringWriter != nil {
+		entry.writer = uringWriter
+		entry.closeWriter = uringWriter.Close
+	}
 	entry.lastUsed.Store(time.Now().UnixNano())
 	entry.inUse.Store(1)
 	if p.closed.Load() {
@@ -606,6 +614,9 @@ func (p *udpReplySocketPool) evictOldestIdle() bool {
 		}
 		if selectedEntry.cleanup != nil {
 			selectedEntry.cleanup()
+		}
+		if selectedEntry.closeWriter != nil {
+			selectedEntry.closeWriter()
 		}
 		_ = selectedEntry.conn.Close()
 		delete(shard.sockets, selectedSource)
@@ -755,6 +766,9 @@ func (p *udpReplySocketPool) sweepIdleAt(now time.Time, idleTimeout time.Duratio
 			if entry.cleanup != nil {
 				entry.cleanup()
 			}
+			if entry.closeWriter != nil {
+				entry.closeWriter()
+			}
 			_ = entry.conn.Close()
 			delete(shard.sockets, source)
 			p.stats.count.Add(-1)
@@ -791,6 +805,9 @@ func (p *udpReplySocketPool) closeSockets() error {
 		for source, entry := range shard.sockets {
 			if entry.cleanup != nil {
 				entry.cleanup()
+			}
+			if entry.closeWriter != nil {
+				entry.closeWriter()
 			}
 			closeErr = errors.Join(closeErr, entry.conn.Close())
 			delete(shard.sockets, source)
