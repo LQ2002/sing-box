@@ -30,7 +30,21 @@ func TestMMsgHdrABI(t *testing.T) {
 	}
 }
 
+// useURing selects the listener read and reply write paths for one test
+// (both io_uring by default) and restores the previous choice after it.
+func useURing(t *testing.T, read, send bool) {
+	t.Helper()
+	oldRead, oldSend := EnableUDPIOUring, EnableUDPIOUringSend
+	EnableUDPIOUring, EnableUDPIOUringSend = read, send
+	t.Cleanup(func() { EnableUDPIOUring, EnableUDPIOUringSend = oldRead, oldSend })
+}
+
 func TestOOBPacketBatchReadWriteIPv4(t *testing.T) {
+	useURing(t, false, false)
+	testOOBPacketBatchReadWriteIPv4(t)
+}
+
+func testOOBPacketBatchReadWriteIPv4(t *testing.T) {
 	receiver, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +121,11 @@ func TestOOBPacketBatchReadWriteIPv4(t *testing.T) {
 }
 
 func TestOOBPacketBatchReadWriteIPv6(t *testing.T) {
+	useURing(t, false, false)
+	testOOBPacketBatchReadWriteIPv6(t)
+}
+
+func testOOBPacketBatchReadWriteIPv6(t *testing.T) {
 	receiver, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback})
 	if err != nil {
 		t.Skipf("IPv6 loopback is unavailable: %v", err)
@@ -227,8 +246,9 @@ func containsPacketInfo(oob []byte, level int, messageType int) bool {
 
 // The blocking-ppoll control variant must read the same way.
 func TestOOBPacketBatchBlockingVariant(t *testing.T) {
+	useURing(t, false, false)
 	udpBlockingRead = true
 	defer func() { udpBlockingRead = false }()
-	t.Run("ipv4", TestOOBPacketBatchReadWriteIPv4)
-	t.Run("ipv6", TestOOBPacketBatchReadWriteIPv6)
+	t.Run("ipv4", testOOBPacketBatchReadWriteIPv4)
+	t.Run("ipv6", testOOBPacketBatchReadWriteIPv6)
 }

@@ -16,6 +16,7 @@ import (
 // with the reader, across a read and across a wait on an empty socket, and
 // a reused buffer returns exactly the new payload.
 func TestOOBPacketBatchReadReusesBuffers(t *testing.T) {
+	useURing(t, false, false)
 	receiver, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)

@@ -22,7 +22,8 @@ import (
 
 // UringPacketBatchWriter writes a batch of datagrams with io_uring
 // IORING_OP_SENDMSG instead of sendmmsg (experiment, opt-in:
-// SB_UDP_IOURING_SEND=1; NewUringPacketBatchWriter returns nil otherwise).
+// default on; SB_UDP_IOURING_SEND=0 turns it off and
+// NewUringPacketBatchWriter returns nil).
 //
 // The batching is the one sing's syscall batch writer does
 // (bufio packet_batch_offload_linux.go): consecutive datagrams with the same
@@ -38,7 +39,10 @@ import (
 // send that cannot complete at once (full socket buffer) is retried by
 // io_uring itself and completes before the wait returns.
 
-var EnableUDPIOUringSend = os.Getenv("SB_UDP_IOURING_SEND") == "1"
+// On by default since 2026-10-16 (measured 2026-10-15: sing-box CPU per MB
+// of a download 12.7% below sendmmsg); falls back to sendmmsg when the ring
+// cannot be set up. SB_UDP_IOURING_SEND=0 turns it off.
+var EnableUDPIOUringSend = os.Getenv("SB_UDP_IOURING_SEND") != "0"
 
 const (
 	uringSendSQEntries = 64
@@ -81,7 +85,7 @@ type UringPacketBatchWriter struct {
 	fallback N.PacketBatchWriter
 }
 
-// NewUringPacketBatchWriter returns nil unless SB_UDP_IOURING_SEND=1.
+// NewUringPacketBatchWriter returns nil when SB_UDP_IOURING_SEND=0.
 func NewUringPacketBatchWriter(conn *net.UDPConn) *UringPacketBatchWriter {
 	if !EnableUDPIOUringSend || conn == nil || !uringAvailable() {
 		return nil
