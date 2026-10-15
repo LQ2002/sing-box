@@ -21,7 +21,7 @@ import (
 )
 
 // uringOOBReadWaiter is an io_uring alternative to oobPacketBatchReadWaiter
-// (experiment, opt-in: SB_UDP_IOURING=1), for listener sockets that need the
+// (default on; SB_UDP_IOURING=0 turns it off), for listener sockets that need the
 // source address and ancillary data of every datagram (the eBPF inbound's
 // UDP listener).
 //
@@ -43,7 +43,13 @@ import (
 // Shutdown must be called before the socket closes: io_uring holds its own
 // file reference, so a closed fd would not end the armed receive.
 
-var EnableUDPIOUring = os.Getenv("SB_UDP_IOURING") == "1"
+// On by default since 2026-10-16: on the phone (HTTP/3 download, 4 rounds
+// each on WiFi and LTE) io_uring here, in the reply writer and in
+// sing-shadowsocks2's client reader (with UDP_GRO) took sing-box CPU per MB
+// 62% (WiFi) / 63% (LTE) below the recvmmsg/sendmmsg build. When io_uring cannot be set up the recvmmsg
+// reader is used instead (uringAvailable, per-reader fallback).
+// SB_UDP_IOURING=0 turns it off.
+var EnableUDPIOUring = os.Getenv("SB_UDP_IOURING") != "0"
 
 // Wait variants (experiment), as in sing-shadowsocks2's reader.
 // SB_UDP_IOURING_WAIT=netpoll: no locked thread and no blocking
@@ -193,7 +199,7 @@ type uringOOBReadWaiter struct {
 	fallback OOBPacketBatchReadWaiter
 }
 
-// newUringOOBReadWaiter returns nil unless SB_UDP_IOURING=1.
+// newUringOOBReadWaiter returns nil when SB_UDP_IOURING=0.
 func newUringOOBReadWaiter(conn *net.UDPConn, oobSize int) OOBPacketBatchReadWaiter {
 	if !EnableUDPIOUring || conn == nil || oobSize <= 0 || uringRecvOutSize+uringOOBNameLen+oobSize >= uringOOBBufferSize || !uringAvailable() {
 		return nil

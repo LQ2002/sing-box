@@ -39,8 +39,7 @@ func TestUringSendFallsBackWhenSetupFails(t *testing.T) {
 }
 
 func testUringSendWith(t *testing.T, connected bool, failSetup bool) {
-	EnableUDPIOUringSend = true
-	defer func() { EnableUDPIOUringSend = false }()
+	useURing(t, false, true)
 	receiver, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)

@@ -14,21 +14,18 @@ import (
 
 // The recvmmsg reader's tests, run against the io_uring reader.
 func TestUringOOBReadWriteIPv4(t *testing.T) {
-	EnableUDPIOUring = true
-	defer func() { EnableUDPIOUring = false }()
-	TestOOBPacketBatchReadWriteIPv4(t)
+	useURing(t, true, false)
+	testOOBPacketBatchReadWriteIPv4(t)
 }
 
 func TestUringOOBReadWriteIPv6(t *testing.T) {
-	EnableUDPIOUring = true
-	defer func() { EnableUDPIOUring = false }()
-	TestOOBPacketBatchReadWriteIPv6(t)
+	useURing(t, true, false)
+	testOOBPacketBatchReadWriteIPv6(t)
 }
 
 func newUringOOBTestReader(t *testing.T) (*net.UDPConn, *net.UDPConn, *uringOOBReadWaiter) {
 	t.Helper()
-	EnableUDPIOUring = true
-	t.Cleanup(func() { EnableUDPIOUring = false })
+	useURing(t, true, false)
 	receiver, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
