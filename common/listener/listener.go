@@ -47,6 +47,9 @@ type Listener struct {
 	packetOutbound       chan *N.PacketBuffer
 	packetOutboundClosed chan struct{}
 	shutdown             atomic.Bool
+	// udpReadShutdown wakes a UDP batch reader that must be stopped before
+	// the socket closes (the io_uring reader, common/udpio/oob_uring_linux.go).
+	udpReadShutdown atomic.Pointer[func()]
 }
 
 type Options struct {
@@ -132,6 +135,9 @@ func (l *Listener) Start() error {
 
 func (l *Listener) Close() error {
 	l.shutdown.Store(true)
+	if shutdown := l.udpReadShutdown.Load(); shutdown != nil {
+		(*shutdown)()
+	}
 	var err error
 	if l.systemProxy != nil {
 		if l.systemProxy.IsEnabled() {
