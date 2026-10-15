@@ -45,6 +45,10 @@ func newOOBPacketBatchReadWaiter(conn *net.UDPConn, oobSize int) (OOBPacketBatch
 	if conn == nil || oobSize <= 0 {
 		return nil, false
 	}
+	// io_uring multishot receive, opt-in (oob_uring_linux.go)
+	if waiter := newUringOOBReadWaiter(conn, oobSize); waiter != nil {
+		return waiter, true
+	}
 	rawConn, err := conn.SyscallConn()
 	if err != nil {
 		return nil, false

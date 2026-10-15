@@ -118,6 +118,13 @@ func (l *Listener) loopUDPIn() {
 	if l.oobPacketHandler != nil {
 		if batchHandler, isBatchHandler := l.oobPacketHandler.(oobPacketBatchHandler); isBatchHandler {
 			if readWaiter, created := udpio.NewOOBPacketBatchReadWaiter(l.udpConn, 1024); created {
+				if stopper, isStopper := readWaiter.(interface{ Shutdown() }); isStopper {
+					shutdown := stopper.Shutdown
+					l.udpReadShutdown.Store(&shutdown)
+					if l.shutdown.Load() {
+						shutdown()
+					}
+				}
 				readWaiter.InitializeReadWaiter(N.ReadWaitOptions{BatchSize: sBufio.DefaultPacketReadBatchSize})
 				l.loopUDPInOOBBatch(batchHandler, readWaiter)
 				return
