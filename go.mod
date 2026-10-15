@@ -4,11 +4,11 @@ go 1.25.5
 
 replace github.com/sagernet/tailscale => github.com/LQ2002/tailscale v0.0.0-20260918084915-8f35b78440d7
 
-replace github.com/CHIZI-0618/sing-ebpf => github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261013065126-0e238af895f1
+replace github.com/CHIZI-0618/sing-ebpf => github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261015003938-0d2ca2984c0e
 
 require (
 	filippo.io/age v1.3.1
-	github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.11.0.20261006150015-27de53a4729d
+	github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.12
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/caddyserver/certmagic v0.25.3-0.20260421143802-60d9d8b415d6
 	github.com/caddyserver/zerossl v0.1.5
