@@ -25,6 +25,16 @@ type mmsghdr struct {
 	msgLen uint32
 }
 
+// SB_UDP_BLOCKING=1 (experiment, the control for the io_uring reader): the
+// reading goroutine is locked to its thread and, when recvmmsg finds the
+// socket empty, waits in a blocking ppoll instead of the Go netpoller, so an
+// arriving datagram wakes this thread directly. After blockingPollTimeout
+// without data it falls back to the netpoller (idle sockets cost no periodic
+// wakeups; Close, which wakes netpoller waiters only, is seen within it).
+var udpBlockingRead = os.Getenv("SB_UDP_BLOCKING") == "1"
+
+const blockingPollTimeout = 500 // milliseconds
+
 type oobPacketBatchReadWaiter struct {
 	rawConn  syscall.RawConn
 	readErr  error
@@ -39,6 +49,7 @@ type oobPacketBatchReadWaiter struct {
 	iovecs   []unix.Iovec
 	messages []mmsghdr
 	options  N.ReadWaitOptions
+	locked   bool
 }
 
 func newOOBPacketBatchReadWaiter(conn *net.UDPConn, oobSize int) (OOBPacketBatchReadWaiter, bool) {
@@ -105,6 +116,13 @@ func (w *oobPacketBatchReadWaiter) InitializeReadWaiter(options N.ReadWaitOption
 			case syscall.EINTR:
 				continue
 			case syscall.EAGAIN:
+				if udpBlockingRead {
+					fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+					n, pollErr := unix.Ppoll(fds, &unix.Timespec{Nsec: blockingPollTimeout * 1e6}, nil)
+					if pollErr == nil && n > 0 && fds[0].Revents&unix.POLLIN != 0 {
+						continue
+					}
+				}
 				return false
 			default:
 				if errno == syscall.EWOULDBLOCK {
@@ -139,13 +157,19 @@ func (w *oobPacketBatchReadWaiter) WaitReadOOBPackets() (buffers []*buf.Buffer, 
 	if w.readFunc == nil {
 		return nil, nil, nil, os.ErrInvalid
 	}
+	if udpBlockingRead && !w.locked {
+		runtime.LockOSThread()
+		w.locked = true
+	}
 	err = w.rawConn.Read(w.readFunc)
 	if err != nil {
 		w.releaseBuffers()
+		w.unlockThread()
 		return
 	}
 	if w.readErr != nil {
 		w.releaseBuffers()
+		w.unlockThread()
 		if w.readErr == io.EOF {
 			return nil, nil, nil, io.EOF
 		}
@@ -162,6 +186,13 @@ func (w *oobPacketBatchReadWaiter) WaitReadOOBPackets() (buffers []*buf.Buffer, 
 	oobs = w.oobs[:w.readN]
 	w.readN = 0
 	return
+}
+
+func (w *oobPacketBatchReadWaiter) unlockThread() {
+	if w.locked {
+		w.locked = false
+		runtime.UnlockOSThread()
+	}
 }
 
 func (w *oobPacketBatchReadWaiter) releaseBuffers() {

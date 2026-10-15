@@ -224,3 +224,11 @@ func containsPacketInfo(oob []byte, level int, messageType int) bool {
 	}
 	return false
 }
+
+// The blocking-ppoll control variant must read the same way.
+func TestOOBPacketBatchBlockingVariant(t *testing.T) {
+	udpBlockingRead = true
+	defer func() { udpBlockingRead = false }()
+	t.Run("ipv4", TestOOBPacketBatchReadWriteIPv4)
+	t.Run("ipv6", TestOOBPacketBatchReadWriteIPv6)
+}
