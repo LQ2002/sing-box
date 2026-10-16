@@ -313,7 +313,25 @@ func (m *ConnectionManager) NewPacketConnection(ctx context.Context, this N.Dial
 	}
 	destination := bufio.NewPacketConn(remotePacketConn)
 	var done atomic.Bool
-	go m.packetConnectionCopy(ctx, conn, destination, false, &done, onClose)
+	pushed := m.pushPacketUpload(ctx, conn, destination, func(err error) {
+		// Same exit sequence as packetConnectionCopy for the upload side.
+		if err == nil {
+			m.logger.DebugContext(ctx, "packet upload finished")
+		} else if E.IsClosedOrCanceled(err) {
+			m.logger.TraceContext(ctx, "packet upload closed")
+		} else {
+			m.logger.DebugContext(ctx, "packet upload closed: ", err)
+		}
+		if !done.Swap(true) {
+			if onClose != nil {
+				onClose(err)
+			}
+		}
+		common.Close(conn, destination)
+	})
+	if !pushed {
+		go m.packetConnectionCopy(ctx, conn, destination, false, &done, onClose)
+	}
 	go m.packetConnectionCopy(ctx, destination, conn, true, &done, onClose)
 }
 

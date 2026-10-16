@@ -85,11 +85,13 @@ func (i *Inbound) NewOOBPacketBatch(buffers []*buf.Buffer, oobs [][]byte, source
 		buf.ReleaseMulti(buffers)
 		return
 	}
+	i.udpNat.beginPushBatch()
 	for index, buffer := range buffers {
 		if !i.handlePacket(buffer, oobs[index], sources[index], true) {
 			buffer.Release()
 		}
 	}
+	i.udpNat.endPushBatch()
 }
 
 func (i *Inbound) newCgroupPacket(buffer *buf.Buffer, oob []byte, source M.Socksaddr, takeOwnership bool) bool {
