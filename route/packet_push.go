@@ -249,20 +249,39 @@ func (u *packetPushUpload) FlushPushedPackets() {
 
 // Close is called by the source when the session closes. It ends the upload
 // direction the way the copy goroutine's read of a closed session did
-// (io.ErrClosedPipe).
+// (io.ErrClosedPipe). finish closes the source again, so it runs on its own
+// goroutine: the source may still be inside its own close path here.
 func (u *packetPushUpload) Close() error {
-	u.closeWith(io.ErrClosedPipe)
+	u.closeWithAsync(io.ErrClosedPipe)
 	return nil
 }
 
-func (u *packetPushUpload) closeWith(err error) {
-	if !u.closed.CompareAndSwap(false, true) {
+func (u *packetPushUpload) closeWithAsync(err error) {
+	if !u.release() {
 		return
+	}
+	go u.finish(err)
+}
+
+// closeWith ends the upload after a write error, on the reader goroutine
+// (not inside the source's close path).
+func (u *packetPushUpload) closeWith(err error) {
+	if !u.release() {
+		return
+	}
+	u.finish(err)
+}
+
+// release marks the upload closed and drops what is still pending; it reports
+// whether this call did it.
+func (u *packetPushUpload) release() bool {
+	if !u.closed.CompareAndSwap(false, true) {
+		return false
 	}
 	u.pendingAccess.Lock()
 	buffers := u.pending
 	u.pending, u.destinations = nil, nil
 	u.pendingAccess.Unlock()
 	buf.ReleaseMulti(buffers)
-	u.finish(err)
+	return true
 }

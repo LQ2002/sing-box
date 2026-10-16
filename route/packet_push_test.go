@@ -125,8 +125,8 @@ func TestPacketPushUploadReplaysCachedThenPushesBatches(t *testing.T) {
 	var finished atomic.Int32
 	var finishErr error
 	pushed := newPushTestManager().pushPacketUpload(context.Background(), conn, sink, func(err error) {
-		finished.Add(1)
 		finishErr = err
+		finished.Add(1)
 	})
 	require.True(t, pushed)
 	require.Equal(t, []string{"sniff1", "sniff2", "queued"}, sink.payloads)
@@ -147,7 +147,8 @@ func TestPacketPushUploadReplaysCachedThenPushesBatches(t *testing.T) {
 
 	source.push("c", app)
 	require.NoError(t, source.Close())
-	require.Equal(t, int32(1), finished.Load())
+	// finish runs off the source's close path.
+	require.Eventually(t, func() bool { return finished.Load() == 1 }, 2*time.Second, time.Millisecond)
 	require.ErrorIs(t, finishErr, io.ErrClosedPipe)
 	require.Len(t, sink.payloads, 5, "packets pending at close are released, not sent")
 	source.push("late", app)
@@ -181,6 +182,7 @@ func TestPacketPushUploadSingleWriteAndFailure(t *testing.T) {
 	require.Equal(t, int32(1), finished.Load())
 	require.ErrorContains(t, finishErr, "boom")
 	require.NoError(t, source.Close())
+	time.Sleep(20 * time.Millisecond)
 	require.Equal(t, int32(1), finished.Load(), "finish runs once")
 }
 

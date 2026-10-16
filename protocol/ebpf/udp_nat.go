@@ -601,6 +601,7 @@ func (c *udpNATConn) Close() error {
 }
 
 func (c *udpNATConn) close() {
+	var handler N.UDPHandlerEx
 	c.closeOnce.Do(func() {
 		c.service.unregisterReleaseConnection(c)
 		c.handlerAccess.Lock()
@@ -611,15 +612,20 @@ func (c *udpNATConn) close() {
 				packet.Buffer.Release()
 				N.PutPacketBuffer(packet)
 			default:
-				handler := c.handler
+				handler = c.handler
 				close(c.doneChan)
 				c.packetAccess.Unlock()
 				c.handlerAccess.Unlock()
-				_ = common.Close(handler)
 				return
 			}
 		}
 	})
+	// Outside closeOnce: a handler may close this connection from its own
+	// Close (route's packet push upload ends the session that way), and a
+	// nested closeOnce.Do would block forever. On 2026-10-17 that deadlock
+	// hung session cleanup and sing-box shutdown, and each killed instance
+	// leaked its TC routing mark rule until no mark was left to start with.
+	_ = common.Close(handler)
 }
 
 func (c *udpNATConn) closeFromCache() {
