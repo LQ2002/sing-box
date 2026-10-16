@@ -48,6 +48,55 @@ type udpNATService struct {
 	pendingReleaseCapacityRejected atomic.Uint64
 	closed                         atomic.Bool
 	closeOnce                      sync.Once
+	// Push handlers (route's packet push upload) collect datagrams while an
+	// inbound read batch is being dispatched and are flushed once at its end,
+	// so the outbound keeps batch writes. See pushPacketFlusher.
+	pushBatchDepth atomic.Int32
+	pushAccess     sync.Mutex
+	pushPending    []pushPacketFlusher
+}
+
+// pushPacketFlusher is implemented by push handlers that hold datagrams until
+// the end of the inbound read batch that delivered them.
+type pushPacketFlusher interface {
+	FlushPushedPackets()
+}
+
+// beginPushBatch and endPushBatch bracket the dispatch of one inbound read
+// batch. Datagrams pushed outside any batch are flushed immediately.
+func (s *udpNATService) beginPushBatch() {
+	s.pushBatchDepth.Add(1)
+}
+
+func (s *udpNATService) endPushBatch() {
+	s.pushBatchDepth.Add(-1)
+	s.pushAccess.Lock()
+	pending := s.pushPending
+	s.pushPending = nil
+	s.pushAccess.Unlock()
+	for _, flusher := range pending {
+		flusher.FlushPushedPackets()
+	}
+}
+
+func (s *udpNATService) notePushed(handler N.UDPHandlerEx) {
+	flusher, isFlusher := handler.(pushPacketFlusher)
+	if !isFlusher {
+		return
+	}
+	if s.pushBatchDepth.Load() == 0 {
+		flusher.FlushPushedPackets()
+		return
+	}
+	s.pushAccess.Lock()
+	for _, pending := range s.pushPending {
+		if pending == flusher {
+			s.pushAccess.Unlock()
+			return
+		}
+	}
+	s.pushPending = append(s.pushPending, flusher)
+	s.pushAccess.Unlock()
 }
 
 func newUDPNATService(
@@ -203,6 +252,7 @@ func (c *udpNATConn) newPacket(bufferSlices [][]byte, destination M.Socksaddr) {
 			return
 		}
 		handler.NewPacketEx(buffer, destination)
+		c.service.notePushed(handler)
 		return
 	}
 	c.packetAccess.RLock()
@@ -230,6 +280,7 @@ func (c *udpNATConn) newPacketBuffer(buffer *buf.Buffer, destination M.Socksaddr
 			return
 		}
 		handler.NewPacketEx(buffer, destination)
+		c.service.notePushed(handler)
 		return
 	}
 	c.packetAccess.RLock()
@@ -506,6 +557,18 @@ func (c *udpNATConn) SetHandler(handler N.UDPHandlerEx) {
 			return
 		}
 	}
+}
+
+// SetPacketPushHandler switches the session to push delivery (route's packet
+// push upload): queued datagrams are handed to handler before it returns and
+// later ones are delivered from the inbound reader. It reports false when the
+// session is already closed (the handler has then been closed).
+func (c *udpNATConn) SetPacketPushHandler(handler N.UDPHandlerEx) bool {
+	c.SetHandler(handler)
+	if flusher, isFlusher := handler.(pushPacketFlusher); isFlusher {
+		flusher.FlushPushedPackets()
+	}
+	return !c.isClosed()
 }
 
 func (c *udpNATConn) Timeout() time.Duration {
