@@ -125,3 +125,46 @@ func TestUDPNATPushRefusedAfterClose(t *testing.T) {
 		t.Fatal("refused push handler was not closed")
 	}
 }
+
+// udpNATSelfClosingPushHandler closes its session from Close, as route's
+// packet push upload does through its finish callback.
+type udpNATSelfClosingPushHandler struct {
+	conn *udpNATConn
+}
+
+func (h *udpNATSelfClosingPushHandler) NewPacketEx(buffer *buf.Buffer, _ M.Socksaddr) {
+	buffer.Release()
+}
+
+func (h *udpNATSelfClosingPushHandler) Close() error {
+	return h.conn.Close()
+}
+
+// Regression for the 2026-10-17 shutdown hang: closing the handler inside
+// closeOnce deadlocked when the handler closed the connection again.
+func TestUDPNATPushHandlerMayCloseSessionFromClose(t *testing.T) {
+	service, key, source, destination, connections := newUDPNATPushTest(t)
+	service.NewPacketBuffer(key, pushTestPacket("x"), source, destination, nil)
+	natConn := receiveUDPNATTestConnection(t, connections).conn.(*udpNATConn)
+	natConn.SetPacketPushHandler(&udpNATSelfClosingPushHandler{conn: natConn})
+	done := make(chan struct{})
+	go func() {
+		_ = natConn.Close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("session close deadlocked on a handler that closes the session")
+	}
+	closed := make(chan struct{})
+	go func() {
+		_ = service.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("service close deadlocked")
+	}
+}
