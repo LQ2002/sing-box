@@ -127,9 +127,13 @@ func TestCachedPacketConnKeepsBatchPath(t *testing.T) {
 	require.Equal(t, bufio.DefaultPacketReadBatchSize, source.batchSize)
 }
 
-func TestBufioCachedPacketConnLosesBatchPath(t *testing.T) {
-	// The behaviour cachedPacketConn exists for: with sing's own wrapper the
-	// copy takes the per-packet path for the whole session.
+func TestBufioCachedPacketConnKeepsBatchPath(t *testing.T) {
+	// cachedPacketConn was written because sing's own wrapper used to send the
+	// whole session down the per-packet path (one ReadPacket and one WritePacket
+	// per datagram). reF1nd/sing d4dda9140 ("cached packet read waiters",
+	// sing-box f4c1dd68b) gives bufio.CachedPacketConn batch read waiters too,
+	// so both wrappers now keep the batch path. cachedPacketConn is kept until a
+	// device A/B shows the upstream wrapper costs no more on the hot path.
 	source := &batchSourceConn{payloads: []string{"c", "d"}}
 	sink := &batchSinkConn{}
 	var conn N.PacketConn = source
@@ -137,8 +141,8 @@ func TestBufioCachedPacketConnLosesBatchPath(t *testing.T) {
 	_, err := bufio.CopyPacket(sink, fakeIPWrapped(conn))
 	require.ErrorIs(t, err, io.EOF)
 	require.Equal(t, []string{"a", "c", "d"}, sink.written)
-	require.Equal(t, 3, sink.singles)
-	require.Zero(t, sink.batches)
+	require.Zero(t, sink.singles)
+	require.NotZero(t, sink.batches)
 }
 
 func TestCachedPacketConnReadCachedPacket(t *testing.T) {

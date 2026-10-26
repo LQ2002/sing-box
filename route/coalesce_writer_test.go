@@ -200,7 +200,7 @@ func TestConnectionCopyCoalescesDownload(t *testing.T) {
 
 	clientSide, appSide := net.Pipe()
 	counted := &countingWriteConn{Conn: clientSide}
-	manager := NewConnectionManager(log.NewNOPFactory().NewLogger("test"))
+	manager := NewConnectionManager(context.Background(), log.NewNOPFactory().NewLogger("test"))
 	var done atomic.Bool
 	copyDone := make(chan struct{})
 	go func() {

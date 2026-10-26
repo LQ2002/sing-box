@@ -6,6 +6,10 @@ filippo.io/edwards25519 v1.2.0/go.mod h1:xzAOLCNug/yB62zG1bQ8uziwrIqIuxhctzJT18Q
 github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 h1:UQHMgLO+TxOElx5B5HZ4hJQsoJ/PvUvKRhJHDQXO8P8=
 github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1/go.mod h1:xomTg63KZ2rFqZQzSB4Vz2SUXa1BpHTVz9L5PTmPC4E=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
+github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.12 h1:zC6S+yecPTM66gKKCwzLxxxWOv/THJNCtrvDenpMvmM=
+github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.12/go.mod h1:oSoJNXBL46MKyiUJ2qCgyKSPsRWGE8k1mMCq8W3mjh8=
+github.com/LQ2002/tailscale v0.0.0-20261026005526-4db33c57e6b6 h1:lh3lkPqgE6HAh1Bki0/NVtQUfHdJKpfcqZp0YUgo1Os=
+github.com/LQ2002/tailscale v0.0.0-20261026005526-4db33c57e6b6/go.mod h1:Z8Eql5l0q6mQ+etunojfaZxNJVhEkpbKGS/nnx9ZQpE=
 github.com/Microsoft/go-winio v0.6.1 h1:9/kr64B9VUZrLm5YYwbGtUJnMgqWVOdUAXu6Migciow=
 github.com/Microsoft/go-winio v0.6.1/go.mod h1:LRdKpFKfdobln8UmuiYcKPot9D2v6svN5+sAH+4kjUM=
 github.com/RyuaNerin/go-krypto v1.3.0 h1:smavTzSMAx8iuVlGb4pEwl9MD2qicqMzuXR2QWp2/Pg=
@@ -267,8 +271,6 @@ github.com/reF1nd/sing-snell v0.0.0-20261023074937-e056cb336137 h1:1oUFNxxYNV4XX
 github.com/reF1nd/sing-snell v0.0.0-20261023074937-e056cb336137/go.mod h1:et8Lws4f5QbOrY65DmjevHGup3mijJkhswkto6cwciM=
 github.com/reF1nd/sing-tun v0.9.7-0.20261023142205-68a8ad81087d h1:2EsaqPGHPjiwIPeAE4a+ntAxPvTKMw7KjEO2ebbh0oM=
 github.com/reF1nd/sing-tun v0.9.7-0.20261023142205-68a8ad81087d/go.mod h1:liMb9HPIWcFWqF6VJ/ttIY8fTSRPdRltBeSeEcXt1Dk=
-github.com/reF1nd/tailscale v1.102.1-sing-box-1.14-mod.5.0.20261023130017-22d26a5ce74c h1:Q+Ugci1xbqPt+1pAFIwrVUrdV4H7TFv9ozN958xCEwQ=
-github.com/reF1nd/tailscale v1.102.1-sing-box-1.14-mod.5.0.20261023130017-22d26a5ce74c/go.mod h1:Z8Eql5l0q6mQ+etunojfaZxNJVhEkpbKGS/nnx9ZQpE=
 github.com/reF1nd/wireguard-go v0.0.8-0.20261025115602-efd86415af1a h1:Y4yhvRzbHBGjtZBAwUiXLz/n7OI4vVmmRcuhN49m8ZU=
 github.com/reF1nd/wireguard-go v0.0.8-0.20261025115602-efd86415af1a/go.mod h1:er10sELpmzLXq7S7Pbc1Zsbyapcr+/gxNAHKTo6fzVA=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
@@ -641,5 +643,3 @@ software.sslmate.com/src/go-pkcs12 v0.4.0 h1:H2g08FrTvSFKUj+D309j1DPfk5APnIdAQAB
 software.sslmate.com/src/go-pkcs12 v0.4.0/go.mod h1:Qiz0EyvDRJjjxGyUQa2cCNZn/wMyzrRJ/qcDXOQazLI=
 zombiezen.com/go/capnproto2 v2.18.2+incompatible h1:v3BD1zbruvffn7zjJUU5Pn8nZAB11bhZSQC4W+YnnKo=
 zombiezen.com/go/capnproto2 v2.18.2+incompatible/go.mod h1:XO5Pr2SbXgqZwn0m0Ru54QBqpOf4K5AYBO+8LAOBQEQ=
-github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.11.0.20261006150015-27de53a4729d h1:OZ3MR0VL9SyeORraR1eN8JiAF0YFs6n/ZEH7yKv/EeI=
-github.com/CHIZI-0618/sing-ebpf v0.1.0-alpha.11.0.20261006150015-27de53a4729d/go.mod h1:oSoJNXBL46MKyiUJ2qCgyKSPsRWGE8k1mMCq8W3mjh8=

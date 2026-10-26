@@ -14,8 +14,8 @@ github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261016235834-427a5acfb5fc h1:HyP
 github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261016235834-427a5acfb5fc/go.mod h1:oSoJNXBL46MKyiUJ2qCgyKSPsRWGE8k1mMCq8W3mjh8=
 github.com/LQ2002/sing-shadowsocks2 v0.2.2-0.20261017021340-edb8a1f2cf86 h1:8ifrv17iZ0T/QF1sWnGzCUJHMmhV5bjXR6wP1L7e79A=
 github.com/LQ2002/sing-shadowsocks2 v0.2.2-0.20261017021340-edb8a1f2cf86/go.mod h1:EU8qqTU+gMvkzVapt+6WFv7fhEsgwHjQh7zKNzLBHOk=
-github.com/LQ2002/tailscale v0.0.0-20260918084915-8f35b78440d7 h1:I8tMtnQ8dA1tK0tv3z7bXluQzE0atuHn/kjl30ECx6w=
-github.com/LQ2002/tailscale v0.0.0-20260918084915-8f35b78440d7/go.mod h1:xGiEZax5sZ6gHJcwQxp0GmJVtDHGUXPXTgr6Ksm+yIc=
+github.com/LQ2002/tailscale v0.0.0-20261026005526-4db33c57e6b6 h1:lh3lkPqgE6HAh1Bki0/NVtQUfHdJKpfcqZp0YUgo1Os=
+github.com/LQ2002/tailscale v0.0.0-20261026005526-4db33c57e6b6/go.mod h1:Z8Eql5l0q6mQ+etunojfaZxNJVhEkpbKGS/nnx9ZQpE=
 github.com/RyuaNerin/go-krypto v1.3.0 h1:smavTzSMAx8iuVlGb4pEwl9MD2qicqMzuXR2QWp2/Pg=
 github.com/RyuaNerin/go-krypto v1.3.0/go.mod h1:9R9TU936laAIqAmjcHo/LsaXYOZlymudOAxjaBf62UM=
 github.com/RyuaNerin/testingutil v0.1.0 h1:IYT6JL57RV3U2ml3dLHZsVtPOP6yNK7WUVdzzlpNrss=
@@ -259,8 +259,6 @@ github.com/reF1nd/sing-snell v0.0.0-20261023074937-e056cb336137 h1:1oUFNxxYNV4XX
 github.com/reF1nd/sing-snell v0.0.0-20261023074937-e056cb336137/go.mod h1:et8Lws4f5QbOrY65DmjevHGup3mijJkhswkto6cwciM=
 github.com/reF1nd/sing-tun v0.9.7-0.20261023142205-68a8ad81087d h1:2EsaqPGHPjiwIPeAE4a+ntAxPvTKMw7KjEO2ebbh0oM=
 github.com/reF1nd/sing-tun v0.9.7-0.20261023142205-68a8ad81087d/go.mod h1:liMb9HPIWcFWqF6VJ/ttIY8fTSRPdRltBeSeEcXt1Dk=
-github.com/reF1nd/tailscale v1.102.1-sing-box-1.14-mod.5.0.20261023130017-22d26a5ce74c h1:Q+Ugci1xbqPt+1pAFIwrVUrdV4H7TFv9ozN958xCEwQ=
-github.com/reF1nd/tailscale v1.102.1-sing-box-1.14-mod.5.0.20261023130017-22d26a5ce74c/go.mod h1:Z8Eql5l0q6mQ+etunojfaZxNJVhEkpbKGS/nnx9ZQpE=
 github.com/reF1nd/wireguard-go v0.0.8-0.20261025115602-efd86415af1a h1:Y4yhvRzbHBGjtZBAwUiXLz/n7OI4vVmmRcuhN49m8ZU=
 github.com/reF1nd/wireguard-go v0.0.8-0.20261025115602-efd86415af1a/go.mod h1:er10sELpmzLXq7S7Pbc1Zsbyapcr+/gxNAHKTo6fzVA=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
