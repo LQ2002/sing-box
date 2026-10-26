@@ -10,8 +10,8 @@ filippo.io/edwards25519 v1.2.0/go.mod h1:xzAOLCNug/yB62zG1bQ8uziwrIqIuxhctzJT18Q
 filippo.io/hpke v0.4.0 h1:p575VVQ6ted4pL+it6M00V/f2qTZITO0zgmdKCkd5+A=
 filippo.io/hpke v0.4.0/go.mod h1:EmAN849/P3qdeK+PCMkDpDm83vRHM5cDipBJ8xbQLVY=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261016235834-427a5acfb5fc h1:HyPJ5DOLuUQWAX7n84AlXcMqm0/Rc0AHmGjFjcW33/g=
-github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261016235834-427a5acfb5fc/go.mod h1:oSoJNXBL46MKyiUJ2qCgyKSPsRWGE8k1mMCq8W3mjh8=
+github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261026064428-8fd5c4e4c66a h1:NHD+3A7yiCxHHEC6zAwGhSCE7Vfh+iLOKbu6+Lw4T6Y=
+github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261026064428-8fd5c4e4c66a/go.mod h1:oSoJNXBL46MKyiUJ2qCgyKSPsRWGE8k1mMCq8W3mjh8=
 github.com/LQ2002/sing-shadowsocks2 v0.2.2-0.20261017021340-edb8a1f2cf86 h1:8ifrv17iZ0T/QF1sWnGzCUJHMmhV5bjXR6wP1L7e79A=
 github.com/LQ2002/sing-shadowsocks2 v0.2.2-0.20261017021340-edb8a1f2cf86/go.mod h1:EU8qqTU+gMvkzVapt+6WFv7fhEsgwHjQh7zKNzLBHOk=
 github.com/LQ2002/tailscale v0.0.0-20261026005526-4db33c57e6b6 h1:lh3lkPqgE6HAh1Bki0/NVtQUfHdJKpfcqZp0YUgo1Os=

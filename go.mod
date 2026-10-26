@@ -2,7 +2,7 @@ module github.com/sagernet/sing-box
 
 go 1.25.5
 
-replace github.com/CHIZI-0618/sing-ebpf => github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261016235834-427a5acfb5fc
+replace github.com/CHIZI-0618/sing-ebpf => github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261026064428-8fd5c4e4c66a
 
 require (
 	filippo.io/age v1.3.1
