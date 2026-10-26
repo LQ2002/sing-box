@@ -53,20 +53,13 @@ interface name:
 | Path | Data plane | Use |
 | --- | --- | --- |
 | local | `cgroup` (default) | Intercepts this host's sockets in a cgroup v2 hierarchy without following an interface. |
-| local | `socket_assign` | Intercepts this host's packets on the current default interface. |
+| local | `tc` | Intercepts this host's packets on the current default interface. |
 | shared | `packet_rewrite` (default) | Rewrites packets on Ethernet-framed downstream interfaces and restores replies. |
 | shared | `socket_assign` | Assigns packets to transparent listeners; also supports raw-IP, PPP and tunnel links. |
 
 Use the defaults unless the target kernel or link type requires another path.
 See [eBPF kernel requirements](/manual/misc/ebpf-kernel-requirements/) for the
 exact capability and interface differences.
-
-For standard Linux and OpenWrt, the runtime needs a matching kernel BPF/TC
-configuration and root or equivalent capabilities; OpenWrt kernel modules must
-be built for the exact target kernel. For root Android, SELinux policy, cgroup2,
-bpffs/netd coexistence, and vendor interface framing are additional constraints.
-The binary does not require `bpftool`, `tc`, `ip`, libbpf, or clang at runtime,
-and a successful non-attaching probe does not replace a real startup test.
 
 ## Fields
 
@@ -96,27 +89,7 @@ custom priority uses `clsact` so numeric ordering remains meaningful.
 
 The reply only proves that this host answered; it does not measure the mapped
 destination. Local `cgroup` has no packet hook and cannot answer local ICMP.
-Local `socket_assign` and either shared data plane can answer traffic on their own paths.
-
-### Independent mechanism selection
-
-`cgroup` and `packet_rewrite` are compatibility-oriented.
-`socket_assign` is experimental and requires more kernel capabilities; it
-preserves TCP **and** UDP tuples in a private namespace. Migrate the old local
-name `tc` to `socket_assign`; it is not an alias.
-
-| Local | Shared | Mechanisms |
-| --- | --- | --- |
-| cgroup | packet_rewrite | Socket-address + Ethernet packet rewrite; no assignment namespace |
-| cgroup | socket_assign | cgroup hooks + independent shared assignment namespace |
-| socket_assign | packet_rewrite | Local assignment namespace + independent shared rewrite |
-| socket_assign | socket_assign | One assignment engine/namespace, independent scope policies |
-
-Either scope can run alone. TCP/UDP selection applies to enabled scopes;
-IPv6 is independent per scope. Disabled paths cannot enable another path's
-IPv6 listener or change its policy. Optional cgroup self-bypass/process
-tracking is not a mandatory dependency of socket assignment. Missing
-capabilities fail startup explicitly; no mechanism silently changes.
+Local `tc` and either shared data plane can answer traffic on their own paths.
 
 ## local
 
@@ -128,7 +101,7 @@ Once either field is explicit, omitted paths are disabled.
 
 ### local.data_plane
 
-`cgroup` (default) or `socket_assign`. The TC path follows the current default interface;
+`cgroup` (default) or `tc`. The TC path follows the current default interface;
 the cgroup path follows the selected cgroup v2 subtree.
 
 ### local.cgroup_path
@@ -138,7 +111,7 @@ visible cgroup v2 root and its descendants are intercepted.
 
 On Android, a vendor netd cgroup hook can conflict with attachment. sing-box
 prefers multi-program attachment and falls back to legacy exclusive attachment
-only for compatible errors. Use local `socket_assign` if the device cannot safely share
+only for compatible errors. Use local `tc` if the device cannot safely share
 the root cgroup hook.
 
 ### local.dns_mode
@@ -182,9 +155,10 @@ even when `local.bypass_private_address`, `local.bypass_port`, or another
 bypass rule would otherwise pass them in kernel. The kernel checks the
 force-intercept prefix before all bypass checks.
 
-Multiple IPv4 and IPv6 prefixes are supported. Local and shared sets are
-independent, and can coexist with FakeIP prefixes. Duplicate prefixes are
-normalized; a local force prefix never forces the shared path.
+At most one IPv4 and one IPv6 prefix is accepted (the backend keeps a single
+force-intercept prefix per address family). A prefix that overlaps the DNS
+fake-ip range is rejected at startup because fake-ip already occupies that
+slot; use `redir-host` DNS mode when you need bypass_exclude.
 
 Typical use: keep a VPN/CGNAT range such as Tailscale's `100.64.0.0/10` (and
 IPv6 `fd7a:115c:a1e0::/48`) intercepted so tailnet traffic can reach a
@@ -242,44 +216,11 @@ Destination port ranges to bypass, in inclusive `start:end` form.
 
 Enables interception of traffic arriving from configured downstream interfaces.
 
-### shared.default_interface
-
-Allows a configured shared interface to remain attached while it is also the
-current default upstream interface. Disabled by default.
-
-Enable this for a single-interface gateway where clients and the upstream
-router share one interface and clients use this host as their gateway and DNS
-server. The shared path still handles only packets arriving from other devices;
-local traffic remains governed by `local`. When local and shared
-`socket_assign` use the same interface, the runtime combines their egress and
-ingress roles in one attachment. Shared `packet_rewrite` instead uses
-independently owned TC filters. Both combinations retain independent local and
-shared policies.
-
-This option does not enable IP forwarding, same-interface firewall forwarding,
-NAT, DHCP, IPv6 router advertisements, or hotspot services. In particular,
-bypassed IPv4 traffic normally needs SNAT/masquerade in this setup so its
-reply returns through this host and the client is not redirected to the upstream
-router. The Wi-Fi access point must also allow communication between clients.
-
-An Android device that reuses `wlan0` for a hotspot while Wi-Fi client mode is
-off usually does not need this option: its default upstream is then a cellular
-interface and `wlan0` is an ordinary downstream interface. Newer devices that
-use `wlan2`, `wlan3`, or another dedicated hotspot interface do not need it
-either.
-
 ### shared.data_plane
 
 `packet_rewrite` (default) or `socket_assign`. `packet_rewrite` requires
 Ethernet framing; use `socket_assign` for raw-IP, PPP/PPPoE and supported tunnel
 links. Local and shared data planes are selected independently.
-
-Local and shared `socket_assign` use a private network namespace for **both TCP
-and UDP**, including transparent UDP reply sockets. Neither protocol rewrites
-IP addresses or ports. Proxy outbound dialing, local cgroup listeners and
-`packet_rewrite` stay on their existing paths. This isolates listeners from
-host NAT state and occupied host ports. It requires netns/veth support and
-permission to create and enter a namespace; see [kernel requirements](../../manual/misc/ebpf-kernel-requirements.md).
 
 ### shared.dns_mode
 
@@ -292,8 +233,8 @@ and MAC selection before intercepting port 53.
 
 Downstream interfaces where client traffic enters. Multiple names are allowed.
 Missing interfaces are retried; an interface is excluded while it is the current
-default upstream and restored when it becomes downstream again, unless
-`shared.default_interface` is enabled. Loopback is not accepted.
+default upstream and restored when it becomes downstream again. Loopback is not
+accepted.
 
 ### shared.ipv6
 
@@ -370,7 +311,7 @@ any matching exclude selector takes precedence.
   fallback. It requires the
   [sing-box API service](/configuration/service/api/).
 
-For local socket assignment and shared `socket_assign`, the response also reports the effective
+For local TC and shared `socket_assign`, the response also reports the effective
 TCX/clsact attachment mode, SOCKMAP/direct listener lookup, delivery interface,
 policy-routing values, active/retired resource counts, health/reconcile times,
 and a network generation that increments at managed handover boundaries.

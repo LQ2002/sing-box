@@ -33,7 +33,7 @@ func TestNormalizeFakeIPICMP(t *testing.T) {
 // TestValidateFakeIPICMP covers every branch of the eBPF-only half of the
 // fakeip_icmp=reply requirement: it needs a FakeIP prefix to answer for, and
 // it needs to land on a data plane that actually has an attachment for it to
-// ride — local.data_plane=socket_assign or either shared.data_plane. Only
+// ride — local.data_plane=tc or either shared.data_plane. Only
 // local.data_plane=cgroup has no attachment at all to answer from (its
 // connect()/sendmsg() hooks never see a packet), and is refused by name so a
 // caller fixing the configuration sees why.
@@ -59,17 +59,17 @@ func TestValidateFakeIPICMP(t *testing.T) {
 		},
 		{
 			name: "reply without any FakeIP prefix", enabled: true, fakeIPIPv4: noPrefix,
-			localEnabled: true, localDataPlane: localDataPlaneSocketAssign,
+			localEnabled: true, localDataPlane: localDataPlaneTC,
 			wantErr: true, wantErrContains: "requires a FakeIP range",
 		},
 		{
 			name: "reply on local TC", enabled: true, fakeIPIPv4: fakeIPv4,
-			localEnabled: true, localDataPlane: localDataPlaneSocketAssign,
+			localEnabled: true, localDataPlane: localDataPlaneTC,
 			wantErr: false,
 		},
 		{
 			name: "reply on local TC plus shared packet_rewrite covers both", enabled: true, fakeIPIPv4: fakeIPv4,
-			localEnabled: true, localDataPlane: localDataPlaneSocketAssign,
+			localEnabled: true, localDataPlane: localDataPlaneTC,
 			sharedEnabled: true, sharedDataPlane: sharedDataPlanePacketRewrite,
 			wantErr: false,
 		},
@@ -102,7 +102,7 @@ func TestValidateFakeIPICMP(t *testing.T) {
 		},
 		{
 			name: "reply with nothing enabled at all", enabled: true, fakeIPIPv4: fakeIPv4,
-			wantErr: true, wantErrContains: "requires local.data_plane=socket_assign or shared interception",
+			wantErr: true, wantErrContains: "requires local.data_plane=tc or shared interception",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

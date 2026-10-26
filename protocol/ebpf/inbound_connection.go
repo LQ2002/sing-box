@@ -23,7 +23,7 @@ import (
 )
 
 func (i *Inbound) closeListeners() error {
-	return E.Errors(i.listeners.close(), i.tcListeners.close())
+	return i.listeners.close()
 }
 
 func (i *Inbound) NewConnection(

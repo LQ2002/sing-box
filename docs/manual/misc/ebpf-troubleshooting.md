@@ -21,7 +21,7 @@ or resource growth.
 | Device reboots or kernel panics | `/sys/fs/pstore`, kernel release, enabled policy | Kernel verifier/map/driver defect; userspace logs alone are insufficient |
 
 Do not infer the responsible data plane from the word “eBPF” alone. Local
-`cgroup`, local `socket_assign`, shared `socket_assign`, and shared `packet_rewrite` use
+`cgroup`, local `tc`, shared `socket_assign`, and shared `packet_rewrite` use
 different hooks, maps, delivery paths, and cleanup mechanisms.
 
 ## Minimum report
@@ -95,47 +95,26 @@ log that stops before the fault.
 
 ## Logs and runtime state
 
-A successful startup emits a brief Info summary as a JSON event, for example
-`eBPF {"event":"inbound_start","state":"waiting_for_interface",...}`.
-The state is derived
-from live diagnostics (`normal`, `waiting_for_interface`, `recovering`, or
-`needs_attention`); configured paths are not assumed to be active. A missing
-default interface produces one state-transition warning, followed by an Info
-entry when the interface returns, rather than repeated warnings on every
-reconcile pass.
-
-Debug logging includes the detailed `eBPF {"event":"tc_runtime",...}` or
-`eBPF {"event":"cgroup_runtime",...}` JSON event: selected data planes,
-effective paths, listeners, routing state, and delivery interface when
-applicable. Attachment changes are emitted at Info as a
-`{"event":"tc_attachments_changed",...}` event with both the previous and
-current attachment sets and the network generation.
-Each attachment includes its local/shared role and framing. Repair failures
-produce rate-limited warnings. Userspace handoff failures produce rate-limited
-Warn or Error entries. BPF packet return paths do not emit per-packet logs.
-Interface lifecycle handling is event-driven with a low-frequency drift check
-for silent kernel-state changes. Shared `packet_rewrite` runs bounded
-maintenance when flow events, release deadlines, or map pressure require it.
-These tasks do not emit periodic status records.
+A successful startup emits a brief `eBPF inbound started` summary at Debug
+level: enabled paths, each attachment's actual interface and mechanism, any
+path still waiting for an interface, and what `fakeip_icmp` actually covers.
+Debug logging also includes an `eBPF cgroup active` or `eBPF TC active` summary containing the
+selected data planes and their effective runtime paths. TC summaries also include the default interface, attachments,
+internal listeners, routing state, and delivery interface when applicable. Each
+attachment includes its local/shared role and framing. A network event emits a
+Debug entry only when attachments or managed network state are changed; repair
+failures produce rate-limited warnings. Userspace handoff failures produce
+rate-limited Warn or Error entries. BPF packet return paths do not emit
+per-packet logs. Interface lifecycle handling is event-driven with a
+low-frequency drift check for silent kernel-state changes. Shared
+`packet_rewrite` runs bounded maintenance when flow events, release deadlines,
+or map pressure require it. These tasks do not emit periodic status records.
 
 If the log reports an assignment or UDP original-destination failure, retain
 the complete log around the first error and collect the TC attachment state
 described below.
 
 ### Interpreting `sing-box api ebpf`
-
-Schema 18 separates lightweight status from deep inspection. Use
-`sing-box api ebpf --deep` or the dashboard's **Inspect owned maps** action.
-Each inbound has its own `kernelRuntime`; the top-level section is a
-de-duplicated union, not an inbound's health. Deep snapshots are request-driven
-and cached for up to five seconds.
-
-Assignment and return-route occupancy are separate. Unknown/partial usage is
-not zero; the last complete count is historical until another full scan.
-`tcAssignmentSweepFailureMap` identifies the failing map.
-`not_applicable` maps do not contribute pressure. Configured policy capacity
-is not runtime saturation. Return publication failures, conflicting owners
-and missing routes have separate counters; compare deltas, not lifetime totals.
 
 The top-level state is an operational summary:
 
@@ -157,20 +136,15 @@ For local cgroup, also record the effective runtime fields returned by the API:
 `local_udp_time_mode`. These describe the path actually selected after vendor
 kernel and security-policy fallbacks; they are not capability guesses.
 
-When local socket assignment or shared `socket_assign` is enabled, the API also reports `tc_*`
+When local TC or shared `socket_assign` is enabled, the API also reports `tc_*`
 runtime fields: the effective `tcx`/`clsact`/`mixed` attachment mechanism,
 `sockmap`/`direct` TCP listener lookup, delivery interface and ifindex, policy
-the routing mark/table/priority and TC routing slot, active and retired resource counts, health state,
+routing mark/table/priority, active and retired resource counts, health state,
 the last health-check/reconcile times, and the network generation. These are
 live resource snapshots rather than kernel-version guesses. The network
 generation increments at the managed network-change boundary so before/after
 captures can separate handover effects. Reading these fields does not add
 per-packet counters, full map scans, or a new background timer.
-
-When more than one sing-ebpf runtime shares an interface, `attachments[].slot`
-and `tc_routing_slot` identify the instance-owned TC attachment and policy
-routing allocation. Treat these slots as diagnostic identity only; they are
-not stable configuration values and may be reclaimed after a restart.
 
 Counter values are cumulative for the current process or cache lifetime. Take a
 snapshot immediately before and after a small controlled test instead of
@@ -186,14 +160,9 @@ interpreting a single large number:
 - UDP `capacity_evictions`, `queue_drops`, pending-release rejection, and
   release-notification drops are distinct pressure signals. They do not all
   mean that the BPF assignment map is missing;
-- map occupancy is collected only on an explicit diagnostic request. A map with
-  `pressure: not_applicable` has a fixed layout that is not safely iterable;
-  `category: configured_policy` identifies a policy-sized map whose capacity
-  comes from the compiled policy; `pressure: configured` is retained as the
-  corresponding neutral result. `recovery_failed` means key iteration itself
-  failed. Do not
-  interpret any of these states as zero occupancy. A top-level `error` means
-  map enumeration or inspection was denied before all maps could be observed.
+- map occupancy is collected only on an explicit diagnostic request. `UNKNOWN`
+  means the map type cannot be safely iterated or inspection was denied; it is
+  not zero occupancy.
 
 Program/map enumeration uses the `sb_` naming convention and can see another
 visible sing-ebpf process in the same kernel. Per-inbound attachments, policy
@@ -254,7 +223,7 @@ system for the kernel side.
 ## Attachment and interface checks
 
 Local `cgroup` mode follows the selected cgroup v2 hierarchy and has no network
-interface attachment. Local `socket_assign` follows the current default interface. Shared
+interface attachment. Local `tc` follows the current default interface. Shared
 mode follows the configured downstream interfaces and retries interfaces that
 were absent at startup. A configured shared interface is detached while it is
 the current default upstream and restored when it becomes downstream again. Network events also
@@ -270,11 +239,10 @@ tc -details qdisc show
 tc -statistics -details filter show
 ```
 
-Also retain the startup Info state summary and the `tc_runtime` JSON event.
-Do not manually remove the
+Also retain the startup `eBPF TC active` summary. Do not manually remove the
 internal veth or managed TC filters while sing-box is running.
 
-For local `socket_assign` interception, compare the packet counts on the default-interface
+For local `tc` interception, compare the packet counts on the default-interface
 egress filter and the logged delivery-interface ingress filter:
 
 ```sh
@@ -317,7 +285,7 @@ Capture `sing-box api ebpf` immediately before the switch, during the failure,
 and after the expected recovery. Correlate `last_error_at`, `last_recovery_at`,
 `next_retry_at`, attachment ifindex changes, and route/link events.
 
-Local socket assignment follows the current default interface. Shared interfaces are eligible
+Local TC follows the current default interface. Shared interfaces are eligible
 only while downstream; an interface temporarily acting as the default upstream
 is deliberately detached. The last local attachment can remain until a new
 default interface is ready, avoiding an unnecessary gap. This does not recreate

@@ -10,9 +10,7 @@ import (
 
 // OOBPacketBatchReadWaiter receives packet payloads and their associated
 // ancillary data in one operation. Returned buffers belong to the caller;
-// all returned slices remain valid only until the next wait call. Copy the
-// buffer-pointer slice before retaining a batch asynchronously; buffer objects
-// themselves remain owned by the caller until released.
+// ancillary-data slices remain valid only until the next wait call.
 type OOBPacketBatchReadWaiter interface {
 	N.ReadWaitable
 	WaitReadOOBPackets() (buffers []*buf.Buffer, oobs [][]byte, sources []M.Socksaddr, err error)

@@ -6,7 +6,6 @@ import (
 	"net/netip"
 	"slices"
 
-	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 	kernelRuntime "github.com/CHIZI-0618/sing-ebpf/runtime"
 	"github.com/sagernet/sing/common/control"
 )
@@ -31,10 +30,7 @@ func availableLocalTCInterface(enabled bool, interfaceName string) (string, erro
 	return kernelRuntime.AvailableLocalTCInterface(enabled, interfaceName)
 }
 
-func activeSharedInterfaces(configured []string, defaultInterface string, includeDefaultInterface bool) []string {
-	if includeDefaultInterface {
-		return slices.Clone(configured)
-	}
+func activeSharedInterfaces(configured []string, defaultInterface string) []string {
 	return slices.DeleteFunc(slices.Clone(configured), func(interfaceName string) bool {
 		return interfaceName == defaultInterface
 	})
@@ -49,13 +45,13 @@ func (i *Inbound) tcAttachmentStateChanged(localInterface string, sharedInterfac
 	return i.tcDataPlane.AttachmentStateChanged(localInterface, sharedInterfaces)
 }
 
-func (i *Inbound) tcAttachmentDiagnostics() []commonEBPF.AttachmentInfo {
+func (i *Inbound) tcAttachmentDescriptions() []string {
 	i.tcDataPlaneAccess.RLock()
 	defer i.tcDataPlaneAccess.RUnlock()
 	if i.tcDataPlane == nil {
 		return nil
 	}
-	return i.tcDataPlane.AttachmentDiagnostics()
+	return i.tcDataPlane.AttachmentDescriptions()
 }
 
 func (i *Inbound) updateTCHostAddresses(hostAddresses []netip.Addr) error {
