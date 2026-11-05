@@ -14,6 +14,8 @@ github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261026064428-8fd5c4e4c66a h1:NHD
 github.com/LQ2002/sing-ebpf v0.1.0-alpha.10.0.20261026064428-8fd5c4e4c66a/go.mod h1:oSoJNXBL46MKyiUJ2qCgyKSPsRWGE8k1mMCq8W3mjh8=
 github.com/LQ2002/sing-shadowsocks2 v0.2.2-0.20261017021340-edb8a1f2cf86 h1:8ifrv17iZ0T/QF1sWnGzCUJHMmhV5bjXR6wP1L7e79A=
 github.com/LQ2002/sing-shadowsocks2 v0.2.2-0.20261017021340-edb8a1f2cf86/go.mod h1:EU8qqTU+gMvkzVapt+6WFv7fhEsgwHjQh7zKNzLBHOk=
+github.com/LQ2002/sing-shadowsocks2 v0.2.2-0.20261105072817-ec421dd3fd70 h1:2BLN/5EJJNti1Rv1SVi3Ogw7Qm2IV7spq2UIs5lFXqU=
+github.com/LQ2002/sing-shadowsocks2 v0.2.2-0.20261105072817-ec421dd3fd70/go.mod h1:EU8qqTU+gMvkzVapt+6WFv7fhEsgwHjQh7zKNzLBHOk=
 github.com/LQ2002/tailscale v0.0.0-20261026005526-4db33c57e6b6 h1:lh3lkPqgE6HAh1Bki0/NVtQUfHdJKpfcqZp0YUgo1Os=
 github.com/LQ2002/tailscale v0.0.0-20261026005526-4db33c57e6b6/go.mod h1:Z8Eql5l0q6mQ+etunojfaZxNJVhEkpbKGS/nnx9ZQpE=
 github.com/RyuaNerin/go-krypto v1.3.0 h1:smavTzSMAx8iuVlGb4pEwl9MD2qicqMzuXR2QWp2/Pg=

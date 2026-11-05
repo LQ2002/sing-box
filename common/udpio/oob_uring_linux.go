@@ -68,15 +68,19 @@ var (
 // as waiting on storage. On the phone WALT then treats its idle CPU as busy
 // (sched_io_is_busy): with the screen off and about 2% load the little cluster
 // averaged 2267 MHz, 758 MHz while sing-box was stopped (2026-11-05), and I/O
-// PSI read 80%. Waits therefore pass IORING_ENTER_NO_IOWAIT when the kernel has
-// it; SB_UDP_IOURING_IOWAIT=1 keeps the kernel default.
+// PSI read 80%. Passing IORING_ENTER_NO_IOWAIT on every wait fixes that, but
+// first-byte latency rose by about 90 ms because the frequency also stays low
+// for traffic. So a reader keeps the kernel default only within uringActiveWait
+// of a completion and uses NO_IOWAIT after that (screen on: idle little cluster
+// 834 MHz, 1877 before, first byte unchanged). Writers wait for their own sends
+// and always pass NO_IOWAIT. Both need kernel support and fall back.
+// SB_UDP_IOURING_IOWAIT=1 keeps the kernel default, =0 uses NO_IOWAIT always.
 var udpIOUringIOWait = os.Getenv("SB_UDP_IOURING_IOWAIT") == "1"
 
-// SB_UDP_IOURING_IOWAIT=adaptive (experiment): readers keep the kernel default
-// only while datagrams are flowing, so WALT still raises the frequency for
-// traffic. Such a wait has a timeout because a reader already blocked with
-// in_iowait would otherwise keep it for the whole idle period.
-var udpIOUringAdaptive = os.Getenv("SB_UDP_IOURING_IOWAIT") == "adaptive"
+// udpIOUringAdaptive: the wait after a completion has a timeout because a reader
+// already blocked with in_iowait would otherwise keep it for the whole idle
+// period.
+var udpIOUringAdaptive = !udpIOUringIOWait && os.Getenv("SB_UDP_IOURING_IOWAIT") != "0"
 
 const uringActiveWait = time.Second
 
