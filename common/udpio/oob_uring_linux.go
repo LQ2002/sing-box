@@ -62,6 +62,24 @@ var (
 	udpIOUringCoop    = os.Getenv("SB_UDP_IOURING_COOP") == "1"
 )
 
+// A task blocked in io_uring_enter with requests in flight is marked in_iowait,
+// and the armed multishot receive is always in flight, so an idle reader counts
+// as waiting on storage. On the phone WALT then treats its idle CPU as busy
+// (sched_io_is_busy): with the screen off and about 2% load the little cluster
+// averaged 2267 MHz, 758 MHz while sing-box was stopped (2026-11-05), and I/O
+// PSI read 80%. Waits therefore pass IORING_ENTER_NO_IOWAIT when the kernel has
+// it; SB_UDP_IOURING_IOWAIT=1 keeps the kernel default.
+var udpIOUringIOWait = os.Getenv("SB_UDP_IOURING_IOWAIT") == "1"
+
+// uringWaitFlags returns the io_uring_enter flags for a blocking wait on a ring
+// set up with features; kernels without the feature reject the flag with EINVAL.
+func uringWaitFlags(features uint32) uintptr {
+	if !udpIOUringIOWait && features&uringFeatNoIOWait != 0 {
+		return uringEnterGetEvents | uringEnterNoIOWait
+	}
+	return uringEnterGetEvents
+}
+
 const (
 	uringOOBRecvTag     = 1
 	uringOOBCancelTag   = 2
@@ -80,6 +98,8 @@ const (
 	uringSQCQOverflow   = 1 << 1
 	uringFeatSingleMmap = 1 << 0
 	uringEnterGetEvents = 1 << 0
+	uringEnterNoIOWait  = 1 << 7  // IORING_ENTER_NO_IOWAIT
+	uringFeatNoIOWait   = 1 << 17 // IORING_FEAT_NO_IOWAIT
 	uringOpRecvMsg      = 10
 	uringOpAsyncCancel  = 14
 	uringSQEBufSelect   = 1 << 5
@@ -180,8 +200,10 @@ type uringOOBReadWaiter struct {
 	cqMask  uint32
 	cqes    unsafe.Pointer
 	sqFlags *uint32
-	bufTail uint16
-	msghdr  unix.Msghdr
+	// waitFlags: io_uring_enter flags for a blocking wait (uringWaitFlags)
+	waitFlags uintptr
+	bufTail   uint16
+	msghdr    unix.Msghdr
 	// netpoll variant: the ring fd as an *os.File in the Go netpoller
 	ringFile *os.File
 	ringRaw  syscall.RawConn
@@ -269,6 +291,7 @@ func (w *uringOOBReadWaiter) setup() error {
 		}
 		w.ringRaw = ringRaw
 	}
+	w.waitFlags = uringWaitFlags(params.features)
 	if params.features&uringFeatSingleMmap == 0 {
 		return E.New("io_uring without SINGLE_MMAP")
 	}
@@ -364,7 +387,7 @@ func (w *uringOOBReadWaiter) enter() error {
 		ringFD := w.ringFD
 		w.inEnter = true
 		w.access.Unlock()
-		_, _, errno := unix.Syscall6(sysIOURingEnter, uintptr(ringFD), uintptr(toSubmit), 1, uringEnterGetEvents, 0, 0)
+		_, _, errno := unix.Syscall6(sysIOURingEnter, uintptr(ringFD), uintptr(toSubmit), 1, w.waitFlags, 0, 0)
 		w.access.Lock()
 		w.inEnter = false
 		if w.ringFD < 0 {

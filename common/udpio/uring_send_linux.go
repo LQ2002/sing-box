@@ -61,18 +61,19 @@ type UringPacketBatchWriter struct {
 	noGSO   bool
 	closed  bool
 
-	ringFD  int
-	ringMem []byte
-	sqesMem []byte
-	sqHead  *uint32
-	sqTail  *uint32
-	sqMask  uint32
-	sqArray unsafe.Pointer
-	sqes    unsafe.Pointer
-	cqHead  *uint32
-	cqTail  *uint32
-	cqMask  uint32
-	cqes    unsafe.Pointer
+	ringFD    int
+	waitFlags uintptr // uringWaitFlags
+	ringMem   []byte
+	sqesMem   []byte
+	sqHead    *uint32
+	sqTail    *uint32
+	sqMask    uint32
+	sqArray   unsafe.Pointer
+	sqes      unsafe.Pointer
+	cqHead    *uint32
+	cqTail    *uint32
+	cqMask    uint32
+	cqes      unsafe.Pointer
 
 	names    []unix.RawSockaddrAny
 	iovecs   []unix.Iovec
@@ -120,6 +121,7 @@ func (w *UringPacketBatchWriter) setup() error {
 		return os.NewSyscallError("io_uring_setup", errno)
 	}
 	w.ringFD = int(ringFD)
+	w.waitFlags = uringWaitFlags(params.features)
 	if params.features&uringFeatSingleMmap == 0 {
 		return E.New("io_uring without SINGLE_MMAP")
 	}
@@ -162,7 +164,7 @@ func (w *UringPacketBatchWriter) submitAndWait(count int) error {
 	reaped := 0
 	for reaped < count {
 		need := count - reaped
-		_, _, errno := unix.Syscall6(sysIOURingEnter, uintptr(w.ringFD), uintptr(toSubmit), uintptr(need), uringEnterGetEvents, 0, 0)
+		_, _, errno := unix.Syscall6(sysIOURingEnter, uintptr(w.ringFD), uintptr(toSubmit), uintptr(need), w.waitFlags, 0, 0)
 		switch errno {
 		case 0, unix.EINTR, unix.EAGAIN, unix.EBUSY:
 		default:
