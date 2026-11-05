@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/sagernet/sing/common/buf"
@@ -71,6 +72,14 @@ var (
 // it; SB_UDP_IOURING_IOWAIT=1 keeps the kernel default.
 var udpIOUringIOWait = os.Getenv("SB_UDP_IOURING_IOWAIT") == "1"
 
+// SB_UDP_IOURING_IOWAIT=adaptive (experiment): readers keep the kernel default
+// only while datagrams are flowing, so WALT still raises the frequency for
+// traffic. Such a wait has a timeout because a reader already blocked with
+// in_iowait would otherwise keep it for the whole idle period.
+var udpIOUringAdaptive = os.Getenv("SB_UDP_IOURING_IOWAIT") == "adaptive"
+
+const uringActiveWait = time.Second
+
 // uringWaitFlags returns the io_uring_enter flags for a blocking wait on a ring
 // set up with features; kernels without the feature reject the flag with EINVAL.
 func uringWaitFlags(features uint32) uintptr {
@@ -98,7 +107,9 @@ const (
 	uringSQCQOverflow   = 1 << 1
 	uringFeatSingleMmap = 1 << 0
 	uringEnterGetEvents = 1 << 0
-	uringEnterNoIOWait  = 1 << 7  // IORING_ENTER_NO_IOWAIT
+	uringEnterExtArg    = 1 << 3
+	uringEnterNoIOWait  = 1 << 7 // IORING_ENTER_NO_IOWAIT
+	uringFeatExtArg     = 1 << 8
 	uringFeatNoIOWait   = 1 << 17 // IORING_FEAT_NO_IOWAIT
 	uringOpRecvMsg      = 10
 	uringOpAsyncCancel  = 14
@@ -149,6 +160,19 @@ type uringCQE struct {
 	userData uint64
 	res      int32
 	flags    uint32
+}
+
+// struct io_uring_getevents_arg
+type uringGeteventsArg struct {
+	sigmask     uint64
+	sigmaskSize uint32
+	minWaitUsec uint32
+	ts          uint64
+}
+
+// struct __kernel_timespec
+type uringTimespec struct {
+	sec, nsec int64
 }
 
 type uringBufRegister struct {
@@ -202,8 +226,15 @@ type uringOOBReadWaiter struct {
 	sqFlags *uint32
 	// waitFlags: io_uring_enter flags for a blocking wait (uringWaitFlags)
 	waitFlags uintptr
-	bufTail   uint16
-	msghdr    unix.Msghdr
+	// adaptive wait: the next wait has a timeout and keeps in_iowait; waitArg
+	// and waitTS stay in this heap object because the kernel reads them through
+	// a plain address
+	adaptive bool
+	active   bool
+	waitArg  uringGeteventsArg
+	waitTS   uringTimespec
+	bufTail  uint16
+	msghdr   unix.Msghdr
 	// netpoll variant: the ring fd as an *os.File in the Go netpoller
 	ringFile *os.File
 	ringRaw  syscall.RawConn
@@ -292,6 +323,12 @@ func (w *uringOOBReadWaiter) setup() error {
 		w.ringRaw = ringRaw
 	}
 	w.waitFlags = uringWaitFlags(params.features)
+	const adaptiveFeatures = uringFeatExtArg | uringFeatNoIOWait
+	if udpIOUringAdaptive && params.features&adaptiveFeatures == adaptiveFeatures {
+		w.adaptive = true
+		w.waitTS = uringTimespec{sec: int64(uringActiveWait / time.Second)}
+		w.waitArg.ts = uint64(uintptr(unsafe.Pointer(&w.waitTS)))
+	}
 	if params.features&uringFeatSingleMmap == 0 {
 		return E.New("io_uring without SINGLE_MMAP")
 	}
@@ -385,9 +422,13 @@ func (w *uringOOBReadWaiter) enter() error {
 	}
 	for {
 		ringFD := w.ringFD
+		flags, arg, argSize := w.waitFlags, unsafe.Pointer(nil), uintptr(0)
+		if w.adaptive && w.active {
+			flags, arg, argSize = uringEnterGetEvents|uringEnterExtArg, unsafe.Pointer(&w.waitArg), unsafe.Sizeof(w.waitArg)
+		}
 		w.inEnter = true
 		w.access.Unlock()
-		_, _, errno := unix.Syscall6(sysIOURingEnter, uintptr(ringFD), uintptr(toSubmit), 1, w.waitFlags, 0, 0)
+		_, _, errno := unix.Syscall6(sysIOURingEnter, uintptr(ringFD), uintptr(toSubmit), 1, flags, uintptr(arg), argSize)
 		w.access.Lock()
 		w.inEnter = false
 		if w.ringFD < 0 {
@@ -395,8 +436,13 @@ func (w *uringOOBReadWaiter) enter() error {
 		}
 		switch errno {
 		case 0:
+			w.active = true
 			return nil
 		case unix.EINTR, unix.EAGAIN, unix.EBUSY:
+			toSubmit = atomic.LoadUint32(w.sqTail) - atomic.LoadUint32(w.sqHead)
+			continue
+		case unix.ETIME:
+			w.active = false
 			toSubmit = atomic.LoadUint32(w.sqTail) - atomic.LoadUint32(w.sqHead)
 			continue
 		default:
