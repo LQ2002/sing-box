@@ -183,7 +183,8 @@ type tcPacketWriter struct {
 // and the takeover ends at the same listener, so the route decision does not
 // depend on it. A socket takes one peer, the first it talks to.
 func (w *tcPacketWriter) tryUpLane(peer netip.AddrPort) {
-	if !udpio.EnableUDPFastLaneUp || w.key.Scope != udpSessionScopeLocalTC {
+	// A DNS exchange is over before a takeover could pay for itself
+	if !udpio.EnableUDPFastLaneUp || w.key.Scope != udpSessionScopeLocalTC || peer.Port() == 53 {
 		return
 	}
 	w.upLaneAccess.Lock()
@@ -192,13 +193,16 @@ func (w *tcPacketWriter) tryUpLane(peer netip.AddrPort) {
 		return
 	}
 	w.upLaneTried = true
-	owner := w.inbound.lookupProcessInfo(w.inbound.ctx, w.key.SocketCookie)
-	if owner == nil {
+	w.upLaneFlow = upLaneFlow{app: w.key.Source, peer: peer}
+	uid, err := udpio.LaneSocketUID(w.key.Source, peer)
+	if err != nil {
+		w.inbound.logger.Error("sbfl socket uid of ", w.upLaneFlow.app, ": ", err)
 		return
 	}
-	w.upLaneFlow = upLaneFlow{app: w.key.Source, peer: peer}
 	listener := netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), w.inbound.listeners.selectedPort())
-	w.inbound.upLane.attach(w.upLaneFlow, listener, owner.UserId)
+	if err = w.inbound.upLane.attach(w.upLaneFlow, listener, int32(uid)); err != nil {
+		w.inbound.logger.Error("sbfl attach ", w.upLaneFlow.app, " to ", w.upLaneFlow.peer, " listener ", listener, ": ", err)
+	}
 }
 
 // releaseUpLane runs when the session closes. An attached socket must not

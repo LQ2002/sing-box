@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/common/udpio"
+	E "github.com/sagernet/sing/common/exceptions"
 
 	"github.com/cilium/ebpf"
 )
@@ -120,18 +121,21 @@ type upLane struct {
 	running bool
 }
 
-func (l *upLane) attach(flow upLaneFlow, listener netip.AddrPort, uid int32) {
+func (l *upLane) attach(flow upLaneFlow, listener netip.AddrPort, uid int32) error {
 	l.access.Lock()
 	defer l.access.Unlock()
 	if l.policy == nil {
 		policy, err := openNetdPolicy()
 		if err != nil {
-			return
+			return E.Cause(err, "open netd maps")
 		}
 		l.policy = policy
 	}
-	if !l.policy.allowed(uid) || udpio.LaneAttach(flow.app, flow.peer, listener) != nil {
-		return
+	if !l.policy.allowed(uid) {
+		return E.New("uid ", uid, " is restricted or unknown")
+	}
+	if err := udpio.LaneAttach(flow.app, flow.peer, listener); err != nil {
+		return err
 	}
 	if l.flows == nil {
 		l.flows = make(map[upLaneFlow]int32)
@@ -141,6 +145,7 @@ func (l *upLane) attach(flow upLaneFlow, listener netip.AddrPort, uid int32) {
 		l.running = true
 		go l.recheck()
 	}
+	return nil
 }
 
 func (l *upLane) detach(flow upLaneFlow) {

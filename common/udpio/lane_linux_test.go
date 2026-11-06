@@ -50,6 +50,7 @@ func TestSbflABI(t *testing.T) {
 	require.EqualValues(t, 32, unsafe.Sizeof(sbflBatch{}))
 	require.EqualValues(t, 16, unsafe.Sizeof(sbflIOV{}))
 	require.EqualValues(t, 20, unsafe.Sizeof(sbflAttach{}))
+	require.EqualValues(t, 16, unsafe.Sizeof(sbflUID{}))
 }
 
 func TestLaneBatch(t *testing.T) {

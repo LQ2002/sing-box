@@ -38,6 +38,8 @@ const (
 	// SBFL_IOC_ATTACH, SBFL_IOC_DETACH: _IOW(0x53, 2 and 3, struct sbfl_attach), 20 bytes
 	sbflIOCAttach = 0x40145302
 	sbflIOCDetach = 0x40145303
+	// SBFL_IOC_UID: _IOWR(0x53, 4, struct sbfl_uid), 16 bytes
+	sbflIOCUID = 0xC0105304
 )
 
 // Same layout as module/sbfl_abi.h
@@ -66,6 +68,14 @@ type sbflAttach struct {
 	peerPort [2]byte
 	lisPort  [2]byte
 	_        uint16
+}
+
+type sbflUID struct {
+	appAddr  [4]byte
+	peerAddr [4]byte
+	appPort  [2]byte
+	peerPort [2]byte
+	uid      uint32
 }
 
 var (
@@ -124,6 +134,30 @@ func laneAttachRequest(request uintptr, app, peer, listener netip.AddrPort) erro
 		return errno
 	}
 	return nil
+}
+
+// LaneSocketUID returns the uid of the socket that owns app, the one netd
+// matches its rules against.
+func LaneSocketUID(app, peer netip.AddrPort) (uint32, error) {
+	if !EnableUDPFastLaneUp || !laneAvailable() {
+		return 0, unix.ENODEV
+	}
+	app = netip.AddrPortFrom(app.Addr().Unmap(), app.Port())
+	peer = netip.AddrPortFrom(peer.Addr().Unmap(), peer.Port())
+	if !app.Addr().Is4() || !peer.Addr().Is4() {
+		return 0, unix.EAFNOSUPPORT
+	}
+	query := sbflUID{
+		appAddr:  app.Addr().As4(),
+		peerAddr: peer.Addr().As4(),
+		appPort:  beBytes(app.Port()),
+		peerPort: beBytes(peer.Port()),
+	}
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(laneFD), sbflIOCUID, uintptr(unsafe.Pointer(&query)))
+	if errno != 0 {
+		return 0, errno
+	}
+	return query.uid, nil
 }
 
 // LaneAttach takes over the app socket for one peer. listener is the IPv4
