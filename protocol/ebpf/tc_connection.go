@@ -184,6 +184,9 @@ func (w *tcPacketWriter) WritePacket(buffer *buf.Buffer, destination M.Socksaddr
 		return err
 	}
 	defer release()
+	if entry.lane != nil && entry.lane.WriteOne(buffer.Bytes(), w.key.Source) {
+		return nil
+	}
 	_, err = entry.conn.WriteToUDPAddrPort(buffer.Bytes(), w.key.Source)
 	return err
 }

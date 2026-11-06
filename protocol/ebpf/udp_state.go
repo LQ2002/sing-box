@@ -448,6 +448,8 @@ type udpReplySocketShard struct {
 }
 
 type udpReplySocketEntry struct {
+	// lane is the sbfl writer, also in writer, when the module is in use.
+	lane *udpio.LanePacketBatchWriter
 	// closeWriter releases the io_uring writer's ring, when one is used.
 	closeWriter func()
 	conn        *net.UDPConn
@@ -538,6 +540,11 @@ func (p *udpReplySocketPool) get(
 	if uringWriter := udpio.NewUringPacketBatchWriter(socket); uringWriter != nil {
 		entry.writer = uringWriter
 		entry.closeWriter = uringWriter.Close
+	}
+	// direct to the app socket through the sbfl module, opt-in (common/udpio/lane_linux.go)
+	if laneWriter := udpio.NewLanePacketBatchWriter(source, entry.writer); laneWriter != nil {
+		entry.lane = laneWriter
+		entry.writer = laneWriter
 	}
 	entry.lastUsed.Store(time.Now().UnixNano())
 	entry.inUse.Store(1)
