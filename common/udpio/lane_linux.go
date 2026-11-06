@@ -27,10 +27,17 @@ import (
 // socket with a filter, or IPv6.
 var enableUDPFastLane = os.Getenv("SB_UDP_FASTLANE") == "1"
 
+// EnableUDPFastLaneUp also takes over app sockets for the other direction.
+// Opt-in, needs the module too.
+var EnableUDPFastLaneUp = os.Getenv("SB_UDP_FASTLANE_UP") == "1"
+
 const (
 	sbflMaxBatch = 64
 	// SBFL_IOC_DELIVER: _IOWR(0x53, 1, struct sbfl_batch), 32 bytes
 	sbflIOCDeliver = 0xC0205301
+	// SBFL_IOC_ATTACH, SBFL_IOC_DETACH: _IOW(0x53, 2 and 3, struct sbfl_attach), 20 bytes
+	sbflIOCAttach = 0x40145302
+	sbflIOCDetach = 0x40145303
 )
 
 // Same layout as module/sbfl_abi.h
@@ -49,6 +56,16 @@ type sbflBatch struct {
 	daddr     [4]byte
 	sport     [2]byte
 	dport     [2]byte
+}
+
+type sbflAttach struct {
+	appAddr  [4]byte
+	peerAddr [4]byte
+	lisAddr  [4]byte
+	appPort  [2]byte
+	peerPort [2]byte
+	lisPort  [2]byte
+	_        uint16
 }
 
 var (
@@ -80,6 +97,50 @@ func laneAvailable() bool {
 		}
 	})
 	return laneFD >= 0
+}
+
+func beBytes(port uint16) [2]byte {
+	return [2]byte{byte(port >> 8), byte(port)}
+}
+
+func laneAttachRequest(request uintptr, app, peer, listener netip.AddrPort) error {
+	app = netip.AddrPortFrom(app.Addr().Unmap(), app.Port())
+	peer = netip.AddrPortFrom(peer.Addr().Unmap(), peer.Port())
+	if !app.Addr().Is4() || !peer.Addr().Is4() {
+		return unix.EAFNOSUPPORT
+	}
+	attach := sbflAttach{
+		appAddr:  app.Addr().As4(),
+		peerAddr: peer.Addr().As4(),
+		appPort:  beBytes(app.Port()),
+		peerPort: beBytes(peer.Port()),
+	}
+	if listener.IsValid() {
+		attach.lisAddr = listener.Addr().Unmap().As4()
+		attach.lisPort = beBytes(listener.Port())
+	}
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(laneFD), request, uintptr(unsafe.Pointer(&attach)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+// LaneAttach takes over the app socket for one peer. listener is the IPv4
+// address of the sing-box listener that reads what TC delivers.
+func LaneAttach(app, peer, listener netip.AddrPort) error {
+	if !EnableUDPFastLaneUp || !laneAvailable() {
+		return unix.ENODEV
+	}
+	return laneAttachRequest(sbflIOCAttach, app, peer, listener)
+}
+
+// LaneDetach gives the socket back to the normal path.
+func LaneDetach(app, peer netip.AddrPort) error {
+	if laneFD < 0 {
+		return unix.ENODEV
+	}
+	return laneAttachRequest(sbflIOCDetach, app, peer, netip.AddrPort{})
 }
 
 type LanePacketBatchWriter struct {

@@ -8,11 +8,13 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"sync"
 	"syscall"
 
 	commonEBPF "github.com/CHIZI-0618/sing-ebpf"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/listener"
+	"github.com/sagernet/sing-box/common/udpio"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/control"
@@ -125,9 +127,11 @@ func (i *Inbound) prepareTCPacketConnection(
 	clientState := i.udpClientTable.loadOrCreate(key)
 	// The batcher (udp_downlink_batcher.go) is what reaches tcPacketWriter's
 	// batch/GSO path; the downlink copy itself only ever writes one datagram.
-	writer := newDownlinkBatcher(&tcPacketWriter{inbound: i, key: key, clientState: clientState})
+	packetWriter := &tcPacketWriter{inbound: i, key: key, clientState: clientState}
+	writer := newDownlinkBatcher(packetWriter)
 	return true, ctx, writer, func(error) {
 		writer.close()
+		packetWriter.releaseUpLane()
 		cleanup := i.udpClientTable.deleteWithCleanup(key, clientState)
 		i.deleteCgroupUDPRedirects(cleanup.cgroupRedirects)
 		i.deleteTCAssignments(key, cleanup.tcAssignments)
@@ -166,6 +170,44 @@ type tcPacketWriter struct {
 	key            udpSessionKey
 	clientState    *udpClientState
 	newReplySocket func(netip.AddrPort) (*net.UDPConn, func(), error)
+
+	upLaneAccess sync.Mutex
+	upLaneTried  bool
+	upLaneClosed bool
+	upLaneFlow   upLaneFlow
+}
+
+// tryUpLane attaches the app socket once a reply is on its way: the route is
+// settled by then, and a socket takes one peer, the first it talks to.
+func (w *tcPacketWriter) tryUpLane(peer netip.AddrPort) {
+	if !udpio.EnableUDPFastLaneUp || w.key.Scope != udpSessionScopeLocalTC {
+		return
+	}
+	w.upLaneAccess.Lock()
+	defer w.upLaneAccess.Unlock()
+	if w.upLaneTried || w.upLaneClosed {
+		return
+	}
+	w.upLaneTried = true
+	owner := w.inbound.lookupProcessInfo(w.inbound.ctx, w.key.SocketCookie)
+	if owner == nil {
+		return
+	}
+	w.upLaneFlow = upLaneFlow{app: w.key.Source, peer: peer}
+	listener := netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), w.inbound.listeners.selectedPort())
+	w.inbound.upLane.attach(w.upLaneFlow, listener, owner.UserId)
+}
+
+// releaseUpLane runs when the session closes. An attached socket must not
+// keep feeding the listener after that: its next datagram has to take TC,
+// which is what starts a new session.
+func (w *tcPacketWriter) releaseUpLane() {
+	w.upLaneAccess.Lock()
+	defer w.upLaneAccess.Unlock()
+	w.upLaneClosed = true
+	if w.upLaneTried {
+		w.inbound.upLane.detach(w.upLaneFlow)
+	}
 }
 
 func (w *tcPacketWriter) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
@@ -175,6 +217,7 @@ func (w *tcPacketWriter) WritePacket(buffer *buf.Buffer, destination M.Socksaddr
 	if err != nil {
 		return err
 	}
+	w.tryUpLane(destinationAddress)
 	if w.clientState.isCgroupDataPlane() {
 		return w.inbound.listeners.writeUDP(buffer.Bytes(), binding.packetInfo, w.key.Source, binding.redirectAddress)
 	}
@@ -255,6 +298,7 @@ func (w *tcPacketWriter) WritePacketBatch(buffers []*buf.Buffer, destinations []
 		}
 		return w.inbound.listeners.writeUDPBatch(buffers, packetInfos, w.key.Source, sources)
 	}
+	w.tryUpLane(destinations[0].AddrPort())
 	type packetGroup struct {
 		buffers      []*buf.Buffer
 		destinations []M.Socksaddr

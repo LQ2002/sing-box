@@ -205,6 +205,7 @@ type Inbound struct {
 	// assignment generation is unchanged (udp_assignment_cache.go).
 	udpAssignCache                udpAssignmentCache
 	udpReplySockets               udpReplySocketPool
+	upLane                        upLane
 	udpWarnings                   udpWarningLimiters
 	tcpWarnings                   warningLimiter
 	policyWarnings                warningLimiter
