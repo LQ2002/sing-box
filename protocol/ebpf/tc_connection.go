@@ -196,12 +196,13 @@ func (w *tcPacketWriter) tryUpLane(peer netip.AddrPort) {
 	w.upLaneFlow = upLaneFlow{app: w.key.Source, peer: peer}
 	uid, err := udpio.LaneSocketUID(w.key.Source, peer)
 	if err != nil {
-		w.inbound.logger.Error("sbfl socket uid of ", w.upLaneFlow.app, ": ", err)
+		// Usually a socket that closed or is bound to a device: it stays on TC
+		w.inbound.logger.Debug("sbfl socket uid of ", w.upLaneFlow.app, ": ", err)
 		return
 	}
 	listener := netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), w.inbound.listeners.selectedPort())
 	if err = w.inbound.upLane.attach(w.upLaneFlow, listener, int32(uid)); err != nil {
-		w.inbound.logger.Error("sbfl attach ", w.upLaneFlow.app, " to ", w.upLaneFlow.peer, " listener ", listener, ": ", err)
+		w.inbound.logger.Debug("sbfl attach ", w.upLaneFlow.app, " to ", w.upLaneFlow.peer, " listener ", listener, ": ", err)
 	}
 }
 
