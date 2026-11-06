@@ -120,7 +120,7 @@ func (i *Inbound) lookupProcessInfo(ctx context.Context, socketCookie uint64) *a
 
 func (i *Inbound) prepareTCPacketConnection(
 	_ M.Socksaddr,
-	_ M.Socksaddr,
+	destination M.Socksaddr,
 	key udpSessionKey,
 ) (bool, context.Context, N.PacketWriter, N.CloseHandlerFunc) {
 	ctx := log.ContextWithNewID(i.ctx)
@@ -129,6 +129,7 @@ func (i *Inbound) prepareTCPacketConnection(
 	// batch/GSO path; the downlink copy itself only ever writes one datagram.
 	packetWriter := &tcPacketWriter{inbound: i, key: key, clientState: clientState}
 	writer := newDownlinkBatcher(packetWriter)
+	packetWriter.tryUpLane(destination.AddrPort())
 	return true, ctx, writer, func(error) {
 		writer.close()
 		packetWriter.releaseUpLane()
@@ -177,8 +178,10 @@ type tcPacketWriter struct {
 	upLaneFlow   upLaneFlow
 }
 
-// tryUpLane attaches the app socket once a reply is on its way: the route is
-// settled by then, and a socket takes one peer, the first it talks to.
+// tryUpLane attaches the app socket when its session starts, not at the first
+// reply: a flow may never get one. TC has already sent this flow to sing-box
+// and the takeover ends at the same listener, so the route decision does not
+// depend on it. A socket takes one peer, the first it talks to.
 func (w *tcPacketWriter) tryUpLane(peer netip.AddrPort) {
 	if !udpio.EnableUDPFastLaneUp || w.key.Scope != udpSessionScopeLocalTC {
 		return
@@ -217,7 +220,6 @@ func (w *tcPacketWriter) WritePacket(buffer *buf.Buffer, destination M.Socksaddr
 	if err != nil {
 		return err
 	}
-	w.tryUpLane(destinationAddress)
 	if w.clientState.isCgroupDataPlane() {
 		return w.inbound.listeners.writeUDP(buffer.Bytes(), binding.packetInfo, w.key.Source, binding.redirectAddress)
 	}
@@ -298,7 +300,6 @@ func (w *tcPacketWriter) WritePacketBatch(buffers []*buf.Buffer, destinations []
 		}
 		return w.inbound.listeners.writeUDPBatch(buffers, packetInfos, w.key.Source, sources)
 	}
-	w.tryUpLane(destinations[0].AddrPort())
 	type packetGroup struct {
 		buffers      []*buf.Buffer
 		destinations []M.Socksaddr
